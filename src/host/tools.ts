@@ -28,6 +28,7 @@
  * | `orchestrator_worker_message` / `_stop` | **shipped** | — |
  * | `orchestrator_review_verdict` / `_review_failed` (reviewer-side) | **shipped** | — |
  * | `orchestrator_board` | **shipped** | — |
+ * | `orchestrator_run_review` | **shipped** | — |
  * | `orchestrator_worker_start` / `_message` / `_stop` / `_attach_pr` | next | wiring the spawner into a tool |
  * | `orchestrator_board` | next | the issue + worker stores |
  * | `orchestrator_pr_sync` | next | the PR observer |
@@ -45,11 +46,12 @@ import { createIssueForTool, listIssuesForTool, updateIssueForTool } from './iss
 import { messageWorkerForTool, startWorkerForTool, stopWorkerForTool } from './workers-service.ts'
 import type { LiveWorkers } from './handle-registry.ts'
 import { reportForTool } from './reports-service.ts'
-import { reportReviewFailure, submitVerdict } from './reviewer-service.ts'
+import { reportReviewFailure, startReviewPass, submitVerdict } from './reviewer-service.ts'
 import { buildBoard, renderBoard } from './board-service.ts'
 import { OutputKind, ReportState } from '../domain/reports.ts'
 import type { SpawnDeps } from './spawn.ts'
 import { IssuePriority, IssueState } from '../domain/issues.ts'
+import { normalizeWorker } from '../domain/workers.ts'
 import type { Repo } from './repo.ts'
 import type { LazyFactStore } from './store.ts'
 import type { RunCommand } from './worktree.ts'
@@ -321,6 +323,37 @@ export function buildOrchestratorTools(options: {
       outputType: 'string',
       execute: async (args, exec) =>
         reportReviewFailure({ store, spawn, config, ...(live ? { live } : {}) }, args as never, exec?.agent?.session?.id),
+    }) as ToolDescriptor<never, unknown>,
+
+    defineTool({
+      name: 'orchestrator_run_review',
+      description:
+        'Force an extra review pass on a worker\'s current pull-request head, bypassing the ' +
+        '"already reviewed this head" guard and the round cap. Use it when you want a second opinion ' +
+        'on a commit the automated pass has already judged, or on one it gave up on. The run is ' +
+        'recorded as manual, so it does not consume the automatic retry budget.',
+      parameters: {
+        workerId: {
+          type: 'string',
+          required: true,
+          description: 'The worker whose pull request should be reviewed again, e.g. wrk-01J8ZQ….',
+        },
+      },
+      outputType: 'string',
+      execute: async (args) => {
+        const wanted = (args as { workerId?: string }).workerId
+        if (!wanted) return 'A workerId is required.'
+        let stored
+        try {
+          stored = await (await store.get()).workers.get(wanted)
+        } catch (error) {
+          return `The plugin could not open its storage: ${error instanceof Error ? error.message : String(error)}`
+        }
+        if (stored === undefined) return `No worker with id ${JSON.stringify(wanted)}.`
+        return startReviewPass({ store, spawn, config, ...(live ? { live } : {}) }, normalizeWorker(stored), {
+          force: true,
+        })
+      },
     }) as ToolDescriptor<never, unknown>,
 
     defineTool({

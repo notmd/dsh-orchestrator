@@ -387,3 +387,42 @@ test('a store failure is contained, not thrown at the sweep caller', async () =>
   })
   assert.deepEqual(outcome, { scheduled: [], considered: 0 })
 })
+
+
+test('a FORCED pass bypasses the already-judged guard, and is recorded as manual', async () => {
+  // The user-forced path exists so a second opinion is possible on a commit the
+  // automated pass already judged -- or on one it gave up on. Bypassing is the point.
+  const { deps, raw } = await review()
+  await raw.reviewRuns.put('run-1', {
+    ...((await raw.reviewRuns.get('run-1')) as ReviewRun),
+    status: ReviewRunStatus.complete,
+    verdict: ReviewVerdict.approved,
+  })
+
+  // Nothing automatic: the head is approved.
+  const automatic = await sweepReviewPasses(deps)
+  assert.equal(automatic.scheduled.length, 0, 'automation respects the approval')
+
+  const forced = await startReviewPass(deps, (await raw.workers.get('wrk-1')) as never, { force: true })
+  assert.match(forced, /Review scheduled/)
+
+  const runs = (await raw.reviewRuns.list()) as ReviewRun[]
+  const manual = runs.find((run) => run.triggerSource === 'manual')
+  assert.ok(manual, 'the forced run is recorded as manual')
+  assert.equal(manual.headSha, HEAD)
+  assert.equal(manual.status, ReviewRunStatus.running)
+  assert.equal(runs.filter((run) => run.triggerSource === 'auto').length, 1, 'the auto pass is untouched')
+})
+
+test('forcing does NOT bypass ineligibility: a PR with no head is still refused', async () => {
+  // There is no diff to review on a head-less PR, and a forced pass that invented one
+  // would spend a reviewer session reading nothing.
+  const { deps, raw } = await review()
+  const worker = { ...((await raw.workers.get('wrk-1')) as Record<string, unknown>) }
+  worker.pr = { number: 42, url: 'pr/42', headSha: '' }
+  await raw.workers.put('wrk-1', worker)
+  const text = await startReviewPass(deps, worker as never, { force: true })
+  // Refused before the planner is even consulted: there is no commit to pin.
+  assert.match(text, /head commit of acme\/widgets#42 is not known yet/)
+  assert.equal((await raw.reviewRuns.list()).length, 1, 'only the pre-existing run')
+})

@@ -140,7 +140,7 @@ test('the plugin declares the services it cannot function without', () => {
 test('apply registers the orchestrator tools and returns the resolved config', () => {
   const ctx = fakeContext()
   const config = apply(ctx, {})
-  assert.equal(ctx.registered.length, 12)
+  assert.equal(ctx.registered.length, 13)
   assert.equal(ctx.registered[0]!.name, 'orchestrator_config')
   assert.equal(ctx.registered[1]!.name, 'orchestrator_repo_connect')
   assert.equal(config.autoReview, true, 'the requested flow is on by default')
@@ -150,7 +150,7 @@ test('apply owns every registration through ctx.effect, so unload disposes it', 
   const ctx = fakeContext()
   apply(ctx, {})
   assert.deepEqual(ctx.effects, ['dsh-orchestrator: orchestrator tools'])
-  assert.equal(ctx.registered.length, 12)
+  assert.equal(ctx.registered.length, 13)
   ctx.disposeAll()
   assert.deepEqual(ctx.registered, [], 'the tool is removed on disposal')
 })
@@ -222,6 +222,7 @@ test('the tool table stays in step with the tools actually built', () => {
     'orchestrator_worker_stop',
     'orchestrator_review_verdict',
     'orchestrator_review_failed',
+    'orchestrator_run_review',
     'orchestrator_board',
   ])
   // Every registered tool must carry a real schema, because the registry feeds it

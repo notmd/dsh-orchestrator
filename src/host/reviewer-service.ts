@@ -98,7 +98,11 @@ export async function runningRunForSession(
  * planner, because "why did my PR not get reviewed?" is the question this loop
  * generates most often.
  */
-export async function startReviewPass(deps: ReviewerToolDeps, worker: Worker): Promise<string> {
+export async function startReviewPass(
+  deps: ReviewerToolDeps,
+  worker: Worker,
+  options: { force?: boolean } = {},
+): Promise<string> {
   let store: Awaited<ReturnType<LazyFactStore['get']>>
   try {
     store = await deps.store.get()
@@ -150,7 +154,16 @@ export async function startReviewPass(deps: ReviewerToolDeps, worker: Worker): P
   const liveStatus = deps.live?.byWorker(worker.id)?.handle.agent.status
   const activity = liveStatus === 'running' ? 'active' : liveStatus === 'idle' ? 'idle' : 'unknown'
 
-  const decision = evaluateSession({
+  // A forced pass bypasses the guards that exist to stop AUTOMATION from spinning:
+  // the already-judged-this-head rule and the round cap. It does not bypass
+  // ineligibility -- there is no diff to review on a merged or head-less PR -- which
+  // is why the forced path still checks the head, just not the history.
+  //
+  // The run is recorded as `manual` so it does not consume the auto-retry budget
+  // (PRD §7.5).
+  const scheduled = options.force
+    ? { trigger: headSha !== '', reason: 'triggered', headsToReview: headSha === '' ? [] : [headSha] }
+    : evaluateSession({
     session: {
       autoReview: true,
       kind: 'worker',
@@ -167,8 +180,9 @@ export async function startReviewPass(deps: ReviewerToolDeps, worker: Worker): P
       autoReviewFailedRetryLimit: deps.config.autoReviewFailedRetryLimit,
       idleThresholdMs: deps.config.reviewIdleThresholdMs,
     },
-  })
+      })
 
+  const decision = scheduled
   if (!decision.trigger || !decision.headsToReview.includes(headSha)) {
     const why =
       decision.reason === 'not_idle'
@@ -218,7 +232,7 @@ export async function startReviewPass(deps: ReviewerToolDeps, worker: Worker): P
     headSha,
     round,
     status: ReviewRunStatus.running,
-    triggerSource: 'auto',
+    triggerSource: options.force ? 'manual' : 'auto',
     sessionId,
     startedAt: at,
     harness: deps.config.reviewerAgentPreset,
