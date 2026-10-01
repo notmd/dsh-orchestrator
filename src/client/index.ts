@@ -308,9 +308,12 @@ loader.load({
    fact a column actually has. Five percent keeps it a tint -- the cards on top must stay
    the brightest thing on screen, and anything stronger turns four lanes into four blocks
    of colour that fight the status lines. */
-.dsho-lane[data-tone='busy'] { background: color-mix(in srgb, var(--dsw-alias-state-business-primary, #7aaaff) 5%, var(--dsw-alias-bg-layer-1, #232324)); }
-.dsho-lane[data-tone='attention'] { background: color-mix(in srgb, var(--dsw-alias-state-warn-primary, #f59e0b) 5%, var(--dsw-alias-bg-layer-1, #232324)); }
-.dsho-lane[data-tone='success'] { background: color-mix(in srgb, var(--dsw-alias-state-success-primary, #22c55e) 5%, var(--dsw-alias-bg-layer-1, #232324)); }
+.dsho-lane[data-tone='busy'] { background: color-mix(in srgb, var(--dsw-alias-state-business-primary, #7aaaff) 5%, var(--dsw-alias-bg-layer-1, #232324));
+  box-shadow: inset 3px 0 0 0 var(--dsw-alias-state-business-primary, #7aaaff); }
+.dsho-lane[data-tone='attention'] { background: color-mix(in srgb, var(--dsw-alias-state-warn-primary, #f59e0b) 5%, var(--dsw-alias-bg-layer-1, #232324));
+  box-shadow: inset 3px 0 0 0 var(--dsw-alias-state-warn-primary, #f59e0b); }
+.dsho-lane[data-tone='success'] { background: color-mix(in srgb, var(--dsw-alias-state-success-primary, #22c55e) 5%, var(--dsw-alias-bg-layer-1, #232324));
+  box-shadow: inset 3px 0 0 0 var(--dsw-alias-state-success-primary, #22c55e); }
 .dsho-lane__head { display: flex; align-items: center; gap: 8px; }
 /* The reference colours the lane's dot AND its label by the lane's tone, which is what
    makes a four-column board scannable without reading any of it. */
@@ -358,8 +361,8 @@ loader.load({
    the tone, so the card still carries exactly one status colour. */
 .dsho-avatar { flex: none; display: inline-flex; align-items: center; justify-content: center;
   width: 26px; height: 26px; border-radius: 8px;
-  border: 1px solid var(--dsw-alias-border-l2, rgba(127,127,127,0.24));
-  background: var(--dsw-alias-bg-layer-3, rgba(127,127,127,0.12)); }
+  border: 1px solid color-mix(in srgb, currentColor 34%, transparent);
+  background: color-mix(in srgb, currentColor 16%, var(--dsw-alias-bg-layer-2, #2c2c2e)); }
 .dsho-avatar[data-tone='busy'] { color: var(--dsw-alias-state-business-primary, #7aaaff); }
 .dsho-avatar[data-tone='attention'] { color: var(--dsw-alias-state-warn-primary, #f59e0b); }
 .dsho-avatar[data-tone='error'] { color: var(--dsw-alias-state-error-primary, #e5484d); }
@@ -397,9 +400,9 @@ loader.load({
 .dsho-faces { display: flex; align-items: center; gap: 4px; }
 .dsho-face { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px;
   border-radius: 50%; font-size: 0.625rem; font-weight: 700; line-height: 1;
-  border: 1px solid var(--dsw-alias-border-l2, rgba(127,127,127,0.24));
-  background: var(--dsw-alias-button-ghost-active-fill, rgba(127,127,127,0.16));
-  color: var(--dsw-alias-label-primary-dimmed, inherit); }
+  color: var(--dsw-alias-label-primary-dimmed, inherit);
+  border: 1px solid color-mix(in srgb, currentColor 45%, transparent);
+  background: color-mix(in srgb, currentColor 18%, transparent); }
 .dsho-face[data-state='APPROVED'] { color: var(--dsw-alias-state-success-primary, #30a46c); }
 .dsho-face[data-state='CHANGES_REQUESTED'] { color: var(--dsw-alias-state-error-primary, #e5484d); }
 .dsho-face--more { width: auto; padding: 0 5px; border-radius: 999px; font-weight: 600; }
