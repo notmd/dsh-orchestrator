@@ -467,31 +467,23 @@ happened. Read the log after the session closes, or watch the GUI.
 ---
 
 
-## 4. Next — ordered, with the reason for the order
+## 4. Next
 
+**Only genuinely-open items belong here, and this table has repeatedly drifted** — rows stayed
+after their work was done, including R7's check and §12.2, both of which were listed as missing
+after being closed. A "next" table that contradicts the "done" table is worse than no table: the
+reader believes the stale one and re-does finished work. **Prune it whenever §2 grows.**
 
-**Six rows were pruned from this table last, and that is worth explaining**: they (the
-route, the board assembly, the reviewer pass, worktree cleanup, the report restriction)
-were listed as work to do long after §2 recorded them done. **A "next" table that
-contradicts the "done" table is worse than no table** — the reader believes the stale
-one and re-does finished work. Only genuinely-remaining items belong here.
+| Item | State | Why |
+|---|---|---|
+| **M6 hardening** | Optional, not started | Explicitly optional in the PRD: webhook ingress, plan gate, notification badge, `token+fetch` fallback, dedicated agent presets, a reviewer panel. |
+| **§12.2's platform half** | Assumption, not a task | The wiring is verified (fake `agent/created`, four tests). What remains is whether DSH honours `restrict` for a scope — three instruments failed to measure it and the documented contract says it does. Do not add a fourth instrument without proving it can measure the property. |
+| **Spike workspaces** | Housekeeping, needs the registry or the user | `workspace.json` in the web profile still holds workspace entries the spikes registered. Not hand-edited: it is a running service's own state, with the user's real workspaces in the same table. |
+| **A4: a real pull request** | **DECIDED by the user** | Do not open one for now; mock the provider. `test/integration/flow.test.ts` covers the whole flow against a mock `gh` with real git. What a mock cannot cover: whether the real CLI accepts the flags sent. |
 
-
-| Chunk | Work | PRD | Why now |
-|---|---|---|---|
-| — | **A4: DECIDED by the user (2026-10-01)** — do NOT open a real pull request for now; mock the provider instead. Done: `test/integration/flow.test.ts` drives the whole flow against a mock `gh` with real git, so the PR half is exercised rather than merely deferred. What a mock cannot cover: whether the real CLI accepts the flags sent (`gh repo view .` passed every test here and the real CLI rejected it). | A4, M1 | Closed for now by decision, not by work. |
-| — | **§12.2's effect is UNVERIFIED**, and three instruments have each failed to be valid ones. Do not add a fourth without first proving it can measure the property; start from a real `ToolExecutionInput` captured from a live call. | §12.2 | Unproven, and **nothing is unsafe** — the protocol tools validate their caller and refuse. Unproven and unsafe are different. |
-| 24 | **M6 hardening (optional).** Webhook ingress, plan gate, notification badge, token+`fetch` fallback, dedicated agent presets, a reviewer panel. | M6 | Explicitly optional in the PRD. |
-| 25 | **A removal path for the spike workspaces** left in the profile's `workspace.json`. Not hand-edited: that file is a running service's own state, with the user's real workspaces in the same table. | housekeeping | Needs the registry, or the user. |
-| 26 | **Compress §3.** It is ~280 lines and the largest section in this file, which is the thing the handoff asks to keep small. The lessons are all load-bearing; several repeat the same shape and can be merged under one heading with the instances listed. | maintenance | Context cost, not correctness. |
-| 27 | **R-audit the remaining unverified mechanisms**: R7's `git status` check in the repo root before shipping, and R20's sticky-state decay. Traced as present, not read closely — the R14 audit found a HIGH-rated guardrail with NO code at all, so presence of a keyword is not presence of the behaviour. | §15 | The audit found one real gap among twenty-two; the other two are the most likely next. |
-| 27 | **R7's second half is MISSING.** "Verify with `git status` in the repo root before shipping" -- there is no `git status` anywhere in `src/`. The permission preset and the worktree-scoped cwd exist; the post-hoc check does not, so a worker that edited outside its worktree is not detected before it ships. | R7 | The R-audit found R14 (HIGH, absent) and now R7; keyword presence was never the test. |
-
-
-**Recommended next step: A4, and it needs a decision rather than work.** Ask the user
-which repository a worker may push to; everything downstream of a real PR is unexercised
-and is the largest remaining unknown.
-
+**Nothing here is required by the PRD except M6, which the PRD itself marks optional.** The next
+chunk should therefore be chosen by the user rather than assumed: M6, or the two housekeeping
+items, or work outside this repository.
 
 ## 5. Decisions taken while implementing (deltas from the PRD)
 
