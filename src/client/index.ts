@@ -101,6 +101,36 @@ interface SettingsPayload {
   defaults: { autoReview: boolean; workerAgentPreset: string; reviewerAgentPreset: string }
 }
 
+/** One workspace the person already uses, as `/dsho/api/workspaces` serialises it. */
+interface WorkspaceOptionView {
+  id: string
+  title: string
+  path: string
+  /** `owner/name` of the project connected at this path, or `null` when none is. */
+  repository: string | null
+  repoId: string | null
+}
+
+/**
+ * The connect panel's read payload.
+ *
+ * Every field is OPTIONAL in the type because the panel must survive a host that predates
+ * this endpoint: a profile running an older build answers the request with its own shape
+ * or not at all, and "no workspaces" is the honest rendering of that — not a crash inside
+ * a render, which takes the plugin's whole client entry down with it.
+ */
+interface WorkspacesPayload {
+  workspaces?: WorkspaceOptionView[]
+  projects?: ProjectView[]
+}
+
+/** One connect attempt's answer, as `/dsho/api/connect` serialises it. */
+interface ConnectPayload {
+  ok?: boolean
+  message?: string
+  code?: string
+}
+
 /** The board snapshot. Mirrors `BoardSnapshot`. */
 interface BoardSnapshot {
   generatedAt: number
@@ -125,6 +155,19 @@ const BOARD_PATH = '/dsho/api/board'
 const SETTINGS_PATH = '/dsho/api/settings'
 
 /**
+ * The connect panel's endpoints.
+ *
+ * A separate path from the board because it answers a different question: the board
+ * carries projects that ARE connected, and this carries the workspaces that COULD be.
+ * Reading the board could never answer the second -- an unconnected project is absent
+ * from it by definition, which is exactly the circularity this panel exists to break.
+ */
+const WORKSPACES_PATH = '/dsho/api/workspaces'
+
+/** The connect write. One POST per attempt, so the host's refusal is what the user sees. */
+const CONNECT_PATH = '/dsho/api/connect'
+
+/**
  * The English fallback, keyed by the locale namespace.
  *
  * Mirrors `locale/en.json`, and a test asserts the two agree -- so a string cannot be
@@ -136,6 +179,10 @@ const SETTINGS_PATH = '/dsho/api/settings'
  */
 const FALLBACK: Record<string, string> = {
   'orchestrator.title': 'Orchestrator',
+  // The sidebar row's label. It IS translated (through a function label, so the shell
+  // re-resolves it on a locale change), which is why it is in this table rather than only in
+  // `en.json`.
+  'orchestrator.project.label': 'Orchestrator: {repository}',
   'orchestrator.board.workerOne': '1 worker',
   'orchestrator.board.workerMany': '{count} workers',
   'orchestrator.board.needsAttention': '{count} needing attention',
@@ -161,12 +208,23 @@ const FALLBACK: Record<string, string> = {
   'orchestrator.inspector.noFindings': 'No findings recorded for this commit.',
   'orchestrator.inspector.review': 'review {id}',
   'orchestrator.inspector.close': 'Close',
+  'orchestrator.connect.title': 'Orchestrator projects',
+  'orchestrator.connect.sub': 'Connect a checkout to start orchestrating it.',
+  'orchestrator.connect.workspaces': 'Your workspaces',
+  'orchestrator.connect.pathTitle': 'Connect another checkout',
+  'orchestrator.connect.placeholder': '/absolute/path/to/checkout',
+  'orchestrator.connect.action': 'Connect',
+  'orchestrator.connect.connected': 'Connected as {repository}',
+  'orchestrator.connect.loading': 'Loading your workspaces\u2026',
+  'orchestrator.connect.unavailable': 'Your workspaces are unavailable: {message}',
+  'orchestrator.connect.emptyTitle': 'No workspaces to offer',
+  'orchestrator.connect.emptyBody': 'No workspaces are registered in this profile. Type the absolute path to a local checkout instead.',
   'orchestrator.settings.open': 'Project options',
   'orchestrator.settings.menuItem': 'Project settings\u2026',
   'orchestrator.settings.title': 'Project settings',
   'orchestrator.settings.loading': 'Loading project settings\u2026',
   'orchestrator.settings.unavailable': 'Project settings are unavailable: {message}',
-  'orchestrator.settings.noProject': 'No repository is connected yet. Ask a session to connect one, then open this dialog again.',
+  'orchestrator.settings.noProject': 'No repository is connected yet. Open the Orchestrator projects panel to connect one, then open this dialog again.',
   'orchestrator.settings.worktrees': 'Worktrees',
   'orchestrator.settings.issues': 'Issues',
   'orchestrator.settings.pullRequests': 'Pull requests',
@@ -556,9 +614,6 @@ loader.load({
   font-size: 0.875rem; font-weight: 600; }
 .dsho-project__name > svg { flex: none; color: var(--dsw-alias-label-tertiary, inherit); }
 .dsho-project__name > span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.dsho-project__select { font: inherit; font-size: 0.8125rem; padding: 2px 6px; border-radius: var(--dsw-radius-sm, 6px);
-  max-width: 16rem; color: inherit; background: var(--dsw-alias-bg-module-platform, transparent);
-  border: 1px solid var(--dsw-alias-border-l2, rgba(127,127,127,0.24)); }
 .dsho-menu { position: relative; flex: none; }
 .dsho-menu__trigger { display: inline-flex; align-items: center; justify-content: center; padding: 4px 6px;
   border-radius: var(--dsw-radius-md, 6px); cursor: pointer; color: var(--dsw-alias-label-tertiary, inherit);
@@ -711,12 +766,19 @@ loader.load({
     /**
      * Reads the board once, uncached.
      *
+     * `repoId` scopes the read to ONE project (`?repoId=`), which is what each panel wants;
+     * `''` is the whole install, which is what the project list wants. The host filters, not
+     * this side: the lanes, the archive sheet and the counts all derive from the worker set,
+     * and filtering the cards here would leave the header's own count disagreeing with the
+     * board underneath it.
+     *
      * Errors are returned rather than thrown: a throw inside an effect would leave the
      * panel on `loading` forever, which looks exactly like a hung host.
      */
-    async function readBoard(): Promise<View> {
+    async function readBoard(repoId: string): Promise<View> {
+      const path = repoId === '' ? BOARD_PATH : `${BOARD_PATH}?repoId=${encodeURIComponent(repoId)}`
       try {
-        const response = await fetch(BOARD_PATH, { cache: 'no-store' })
+        const response = await fetch(path, { cache: 'no-store' })
         if (!response.ok) {
           let detail = `HTTP ${response.status}`
           try {
@@ -731,6 +793,19 @@ loader.load({
       } catch (error) {
         return { kind: 'error', message: error instanceof Error ? error.message : 'unreachable' }
       }
+    }
+
+    /**
+     * The connected projects, from the same snapshot the panels read.
+     *
+     * A failure answers `undefined` rather than an empty list, and the difference matters: an
+     * empty list would UNREGISTER every row on one dropped request, and a host that is
+     * restarting would take the user's entry points away with it. A failure leaves the
+     * registration exactly as it was.
+     */
+    async function readProjects(): Promise<ProjectView[] | undefined> {
+      const view = await readBoard('')
+      return view.kind === 'ready' ? view.board.projects ?? [] : undefined
     }
 
 
@@ -1943,21 +2018,224 @@ loader.load({
       )
     }
 
-    /** The board panel. */
-    function Board() {
+    /**
+     * The connect panel — the plugin's ONE global surface, and the reason it exists.
+     *
+     * The board's rows are built from the host's **connected project list**, so an install
+     * with nothing connected rendered no rows, no panels and therefore no settings dialog
+     * either. Connecting was only ever reachable from a session, which is circular for a
+     * first run: the plugin looked like it did nothing at all.
+     *
+     * This panel is registered UNCONDITIONALLY, so it is present before anything is
+     * connected and remains as the list of workspaces afterwards.
+     *
+     * Why a global row is right HERE when the board's own docstring rejects one: that
+     * rejection is about answering "which project's board is this?". A connect list has one
+     * answer for every project — it is about the workspaces the person uses, not about a
+     * project's work — so it is genuinely global, and the board rows stay one-per-project
+     * and project-scoped.
+     *
+     * `onConnected` is the panel's only outbound effect. After a successful connect the
+     * host's project list has grown, and refreshing it immediately means the new project's
+     * row and board appear at once instead of up to a poll interval later.
+     */
+    function Connect(props: { onConnected: () => void }) {
+      const style = h('style', null, CSS)
+      type ConnectView =
+        | { kind: 'loading' }
+        | { kind: 'ready'; workspaces: WorkspaceOptionView[] }
+        | { kind: 'error'; message: string }
+      const [view, setView] = React.useState<ConnectView>({ kind: 'loading' })
+      const [typed, setTyped] = React.useState('')
+      const [busy, setBusy] = React.useState(false)
+      const [notice, setNotice] = React.useState<{ tone: 'ok' | 'error'; message: string } | null>(null)
+
+      const read = (): void => {
+        void (async () => {
+          try {
+            const response = await fetch(WORKSPACES_PATH, { cache: 'no-store' })
+            if (!response.ok) {
+              setView({ kind: 'error', message: `HTTP ${response.status}` })
+              return
+            }
+            const payload = (await response.json()) as WorkspacesPayload
+            setView({ kind: 'ready', workspaces: Array.isArray(payload.workspaces) ? payload.workspaces : [] })
+          } catch (error) {
+            setView({ kind: 'error', message: error instanceof Error ? error.message : 'unreachable' })
+          }
+        })()
+      }
+
+      React.useEffect(() => {
+        read()
+      }, [])
+
+      /**
+       * One attempt, one round trip, and the HOST's message is what is shown.
+       *
+       * A refusal is not paraphrased here: `connectRepo` already names the fix ("is not
+       * inside a git work tree", "gh is not authenticated"), and a second explanation in
+       * the client would be one more thing to keep in step with the first.
+       */
+      const connect = (path: string): void => {
+        if (busy) return
+        setBusy(true)
+        setNotice(null)
+        void (async () => {
+          try {
+            const response = await fetch(CONNECT_PATH, {
+              method: 'POST',
+              cache: 'no-store',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ path }),
+            })
+            const payload = (await response.json().catch(() => ({}))) as ConnectPayload
+            const message =
+              typeof payload.message === 'string' && payload.message !== ''
+                ? payload.message
+                : `HTTP ${response.status}`
+            setBusy(false)
+            if (!response.ok || payload.ok !== true) {
+              setNotice({ tone: 'error', message })
+              return
+            }
+            setNotice({ tone: 'ok', message })
+            setTyped('')
+            props.onConnected()
+            read()
+          } catch (error) {
+            setBusy(false)
+            setNotice({ tone: 'error', message: error instanceof Error ? error.message : 'unreachable' })
+          }
+        })()
+      }
+
+      const workspaces = view.kind === 'ready' ? view.workspaces : []
+      const header = h(
+        'header',
+        { className: 'dsho-topbar' },
+        h(PanelIcon, { size: 15, active: true }),
+        h('h2', { className: 'dsho-topbar__title' }, translate('orchestrator.connect.title')),
+        h('span', { className: 'dsho-topbar__spacer' }),
+        h('p', { className: 'dsho-sub', style: { margin: 0 } }, translate('orchestrator.connect.sub')),
+      )
+
+      const manual = h(
+        'div',
+        { className: 'dsho-inline' },
+        h('input', {
+          className: 'dsho-inline__input',
+          type: 'text',
+          value: typed,
+          placeholder: translate('orchestrator.connect.placeholder'),
+          'aria-label': translate('orchestrator.connect.placeholder'),
+          onChange: (event: { target?: { value?: string } }) => setTyped(event?.target?.value ?? ''),
+          onKeyDown: (event: { key?: string; preventDefault?: () => void }) => {
+            if (event?.key !== 'Enter') return
+            event.preventDefault?.()
+            connect(typed)
+          },
+        }),
+        h(
+          'button',
+          {
+            type: 'button',
+            className: 'dsho-btn',
+            disabled: busy || typed.trim() === '',
+            onClick: () => connect(typed),
+          },
+          translate('orchestrator.connect.action'),
+        ),
+      )
+
+      const body =
+        view.kind === 'loading'
+          ? h('p', { className: 'dsho-note' }, translate('orchestrator.connect.loading'))
+          : view.kind === 'error'
+            ? h(
+                'p',
+                { className: 'dsho-note dsho-note--error', role: 'status' },
+                translate('orchestrator.connect.unavailable', { message: view.message }),
+              )
+            : h(
+                'div',
+                { className: 'dsho-section' },
+                h('h3', { className: 'dsho-section__title' }, translate('orchestrator.connect.workspaces')),
+                workspaces.length === 0
+                  ? h(
+                      'div',
+                      { className: 'dsho-empty' },
+                      h('p', { className: 'dsho-empty__title' }, translate('orchestrator.connect.emptyTitle')),
+                      h('p', { className: 'dsho-empty__body' }, translate('orchestrator.connect.emptyBody')),
+                    )
+                  : h('div', null, ...workspaces.map(rowFor)),
+              )
+
+      function rowFor(option: WorkspaceOptionView): unknown {
+        return h(
+          'div',
+          { className: 'dsho-row', key: option.id },
+          h(
+            'div',
+            { className: 'dsho-row__label' },
+            h('span', null, option.title),
+            h('span', { className: 'dsho-row__hint', title: option.path }, option.path),
+          ),
+          h(
+            'div',
+            { className: 'dsho-row__control' },
+            option.repository === null
+              ? h(
+                  'button',
+                  { type: 'button', className: 'dsho-btn', disabled: busy, onClick: () => connect(option.path) },
+                  translate('orchestrator.connect.action'),
+                )
+              : h(
+                  'span',
+                  { className: 'dsho-row__value', title: option.repository },
+                  translate('orchestrator.connect.connected', { repository: option.repository }),
+                ),
+          ),
+        )
+      }
+
+      return h(
+        'div',
+        { className: 'dsho-panel' },
+        style,
+        header,
+        notice === null
+          ? null
+          : h(
+              'p',
+              { className: notice.tone === 'ok' ? 'dsho-note' : 'dsho-note dsho-note--error', role: 'status' },
+              notice.message,
+            ),
+        h(
+          'div',
+          { className: 'dsho-section' },
+          h('h3', { className: 'dsho-section__title' }, translate('orchestrator.connect.pathTitle')),
+          manual,
+        ),
+        body,
+      )
+    }
+
+    /**
+     * The board panel — ONE project's board.
+     *
+     * `repoId` is fixed at registration (there is one panel per project, and the sidebar row
+     * for that project selects it), so the panel has no project picker and no "which project
+     * does this menu act on?" ambiguity: the name in the topbar, the cards beneath it and the
+     * settings dialog behind the "..." menu are the same project by construction.
+     */
+    function Board(props: { repoId: string }) {
       const [view, setView] = React.useState<View>({ kind: 'loading' })
       const [openId, setOpenId] = React.useState<string | undefined>(undefined)
       /** Whether the project settings dialog is open. */
       const [settingsOpen, setSettingsOpen] = React.useState(false)
       /** The "..." trigger that opened it, so closing can put focus back where it was. */
       const settingsOpener = React.useRef<unknown>(null)
-      /**
-       * Which project the "..." menu acts on.
-       *
-       * `''` means "the one the host put first", which is the same project the settings
-       * route chooses on its own. An explicit pick from the topbar's selector overrides it.
-       */
-      const [projectId, setProjectId] = React.useState('')
 
       // Escape closes the inspector. A detail view dismissible only by finding the close
       // button is not keyboard reachable in practice.
@@ -1978,7 +2256,7 @@ loader.load({
       React.useEffect(() => {
         let cancelled = false
         const tick = () => {
-          void readBoard().then((next) => {
+          void readBoard(props.repoId).then((next) => {
             if (!cancelled) setView((previous) => mergeView(previous, next))
           })
         }
@@ -1988,7 +2266,7 @@ loader.load({
           cancelled = true
           clearInterval(timer)
         }
-      }, [])
+      }, [props.repoId])
 
       /**
        * What a card's body click does.
@@ -2010,15 +2288,15 @@ loader.load({
       // panel renders its plain title rather than a broken project row.
       const projects = view.kind === 'ready' ? view.board.projects ?? [] : []
       /**
-       * The project the "..." menu acts on.
+       * The project this panel is FOR — the one it was registered for.
        *
-       * The FIRST project in the snapshot's list, which the host orders so that the
-       * install's configured `defaultRepo` comes first (see `orderProjects`) -- the same
-       * rule the settings route applies when it is asked to choose. The dialog is then
-       * opened with that project's id EXPLICITLY, so the name in the topbar and the
-       * settings being edited can never be different projects.
+       * Not "the first project", which is what this used to be: with one panel per project the
+       * row the user clicked and the board they see are the same project by construction. A
+       * project that has just been disconnected can leave a panel briefly pointing at a project
+       * the host no longer lists; the host's layout prunes such a panel as soon as the key is
+       * gone, and until then the name falls back to nothing rather than to another project.
        */
-      const activeProject = projects.find((project) => project.id === projectId) ?? projects[0]
+      const activeProject = projects.find((project) => project.id === props.repoId)
       const header = h(
         'header',
         { className: 'dsho-topbar' },
@@ -2029,33 +2307,19 @@ loader.load({
           h('path', { d: 'M6 1.5v13M10.5 1.5v13', fill: 'none', stroke: 'currentColor', strokeWidth: 1.4, opacity: 0.55 }),
         ),
         h('h2', { className: 'dsho-topbar__title' }, translate('orchestrator.title')),
-        projects.length === 0
+        activeProject === undefined
           ? null
           : h(
               'div',
               { className: 'dsho-project' },
-              // The name is a SELECT once a second project exists. A plain label would leave
-              // the "..." menu ambiguous about which project it acts on, and a custom
-              // dropdown would be a second listbox implementation for no gain.
-              projects.length > 1
-                ? h(
-                    'select',
-                    {
-                      className: 'dsho-project__select',
-                      'aria-label': translate('orchestrator.settings.repository'),
-                      value: activeProject?.id ?? '',
-                      onChange: (event: { target?: { value?: string } }) => setProjectId(event?.target?.value ?? ''),
-                    },
-                    ...projects.map((project) => h('option', { key: project.id, value: project.id }, project.repository)),
-                  )
-                : h(
-                    'span',
-                    { className: 'dsho-project__name', title: activeProject?.rootPath ?? '' },
-                    h(ProjectIcon, null),
-                    h('span', null, activeProject?.repository ?? ''),
-                  ),
+              h(
+                'span',
+                { className: 'dsho-project__name', title: activeProject.rootPath },
+                h(ProjectIcon, null),
+                h('span', null, activeProject.repository),
+              ),
               h(ProjectMenu, {
-                repository: activeProject?.repository ?? '',
+                repository: activeProject.repository,
                 onOpenSettings: (opener: unknown) => {
                   settingsOpener.current = opener
                   setSettingsOpen(true)
@@ -2169,7 +2433,9 @@ loader.load({
         // token here scoped to this component.
         settingsOpen
           ? h(SettingsDialog, {
-              repoId: activeProject?.id ?? '',
+              // The panel's OWN project, explicitly -- never "the first one", which is how the
+              // dialog and the name above it could previously disagree.
+              repoId: props.repoId,
               restoreFocusTo: settingsOpener.current,
               onClose: () => setSettingsOpen(false),
             })
@@ -2191,6 +2457,61 @@ loader.load({
         h('rect', { x: 1.5, y: 1.5, width: 13, height: 13, rx: 2, fill: 'none', stroke: 'currentColor', strokeWidth: 1.4 }),
         h('path', { d: 'M6 1.5v13M10.5 1.5v13', fill: 'none', stroke: 'currentColor', strokeWidth: 1.4, opacity: 0.55 }),
       )
+    }
+
+    /**
+     * The panel list's order, and the first order a project row may take.
+     *
+     * `sidebar.panellist` is shared with every other plugin's panel row, so the plugin keeps
+     * to one band (20 upwards) rather than ordering itself against rows it does not own. A
+     * project's row and its panel use the SAME id (`orchestrator:<repoId>`) because that is
+     * what makes the row select its own board, and the index keeps the payload's order --
+     * the install's configured project first, then oldest first.
+     */
+    const PANEL_ORDER = 20
+
+    /** One project's two registrations, plus the signature that makes them stale. */
+    interface ProjectEntry {
+      signature: string
+      dispose: () => void
+    }
+
+    /**
+     * The sidebar row id and the main panel key for one project.
+     *
+     * One string addresses both seats, which is the contract `sidebar.panellist` documents:
+     * the row selects the main entry whose `key` matches its `id`. Repo ids are ULIDs
+     * (alphanumerics and dashes), so the prefix cannot collide with a key another plugin
+     * spells, and `orchestrator:` cannot be mistaken for a project id.
+     */
+    function entryIdOf(projectId: string): string {
+      return `orchestrator:${projectId}`
+    }
+
+    /**
+     * The connect panel's row id and main panel key.
+     *
+     * Deliberately NOT `entryIdOf(...)`: that function's value means "the project with this
+     * repository id", and this entry is not a project. Reusing it would make a repository
+     * whose id happened to be `projects` collide with a row that belongs to no project.
+     *
+     * It sits BELOW `PANEL_ORDER` so it leads the plugin's band: it is the entry point that
+     * creates the project rows, and a list of workspaces is not worth reaching past boards
+     * that already exist.
+     */
+    const CONNECT_ID = 'orchestrator:projects'
+    const CONNECT_ORDER = PANEL_ORDER - 1
+
+    /**
+     * Everything that makes a project's registrations stale when it changes.
+     *
+     * The label and the order are fixed at REGISTRATION, and both come from data that can
+     * move: connecting a project shifts every later row's index, and a renamed repository
+     * changes the name on the row. Comparing signatures turns both into a re-registration
+     * instead of a row that quietly says the wrong thing.
+     */
+    function signatureOf(project: ProjectView, index: number): string {
+      return `${index}\u0000${project.repository}\u0000${project.rootPath}`
     }
 
     return {
@@ -2220,25 +2541,190 @@ loader.load({
         // Bound once, at activation, so a render never probes the service.
         const workspaceUi = readUiWorkspace(ctx)
         openSession = workspaceUi === undefined ? undefined : (sessionId) => workspaceUi.openSession(sessionId)
-        ctx.effect(() => {
-          const disposers: Array<() => void> = []
-          // The same id addresses both seats: the panellist row selects the panel
-          // whose `key` matches it.
-          disposers.push(
-            ctx.slots.inject('sidebar.panellist', () =>
+
+        /**
+         * The plan: **one panel per project, and one navigation row for each of those panels.**
+         *
+         * This replaced a single global row. A global row cannot answer "which project's board
+         * is this?" -- the panel it opened showed EVERY project's workers at once, with a
+         * project name in its topbar that only selected what the "..." settings menu acted
+         * on. Now the board is scoped by construction: the host filters the cards by the
+         * project the panel was registered for, and the row, the panel and the settings dialog
+         * are all the same project by construction.
+         *
+         * The cost, stated plainly: **the entry points come from the host's project list**, so
+         * a board is reachable only after a project is connected (`orchestrator_repo_connect`),
+         * and a project with no workers shows an empty board rather than no button.
+         *
+         * Why the list is polled rather than read once: connecting a project is a host-side
+         * action taken by a SESSION, and nothing in the client is told about it. The read is
+         * the board endpoint the panels already use -- the snapshot carries every project, on
+         * a scoped read too -- so this adds no endpoint and no new payload shape.
+         */
+        let projects: ProjectView[] = []
+        /** Registered rows and panels, by project id. */
+        const rows = new Map<string, ProjectEntry>()
+        const panels = new Map<string, ProjectEntry>()
+        /** Whether each seat has been DECLARED yet (`ctx.slots.inject` waits for that). */
+        let rowsSeat = false
+        let panelsSeat = false
+        /** The connect row's disposer, once it has been registered. */
+        let connectRow: (() => void) | undefined
+        /**
+         * Set by the poll effect below, so the connect panel can refresh the project list the
+         * moment a connection lands.
+         *
+         * A no-op until then, which is correct rather than sloppy: the poll effect is
+         * registered during activation, and a click cannot arrive before activation finishes.
+         */
+        let refreshProjects: () => void = () => {}
+
+        function disposeAll(entries: Map<string, ProjectEntry>): void {
+          for (const entry of entries.values()) entry.dispose()
+          entries.clear()
+        }
+
+        /**
+         * Bring one seat in line with `projects`.
+         *
+         * Driven by signatures rather than by diffing project ids, so a label or order that
+         * moved re-registers that one project and leaves the rest alone; ids that are gone are
+         * disposed. A row waits for its PANEL (`requiresPanel`): a row whose main key is missing
+         * would throw on click, because the shell's `selectPanel` refuses a key no one
+         * registered.
+         */
+        function reconcile(
+          entries: Map<string, ProjectEntry>,
+          ready: boolean,
+          create: (project: ProjectView, index: number) => () => void,
+          requiresPanel = false,
+        ): void {
+          if (!ready) return
+          const live = new Set<string>()
+          projects.forEach((project, index) => {
+            if (requiresPanel && !panels.has(project.id)) return
+            live.add(project.id)
+            const signature = signatureOf(project, index)
+            const existing = entries.get(project.id)
+            if (existing !== undefined && existing.signature === signature) return
+            existing?.dispose()
+            entries.set(project.id, { signature, dispose: create(project, index) })
+          })
+          for (const [id, entry] of [...entries]) {
+            if (live.has(id)) continue
+            entry.dispose()
+            entries.delete(id)
+          }
+        }
+
+        /** Reconcile both seats. Panels first, so a row never lands before its panel. */
+        function reconcileAll(): void {
+          reconcile(panels, panelsSeat, (project) =>
+            ctx.slots.register({ name: 'main', key: entryIdOf(project.id) }, () => h(Board, { repoId: project.id })),
+          )
+          reconcile(
+            rows,
+            rowsSeat,
+            (project, index) =>
               ctx.slots.register(
-                { name: 'sidebar.panellist', id: 'orchestrator', order: 20, label: 'Orchestrator' },
+                {
+                  name: 'sidebar.panellist',
+                  id: entryIdOf(project.id),
+                  order: PANEL_ORDER + index,
+                  // A FUNCTION, not a string: the row's label is data (the repository) inside a
+                  // translated sentence, and the shell re-resolves a function label whenever the
+                  // locale or the row list changes. A string would freeze the language it was
+                  // registered in, which is exactly what the locale namespace exists to avoid.
+                  label: () => translate('orchestrator.project.label', { repository: project.repository }),
+                },
                 PanelIcon,
               ),
-            ),
+            true,
           )
-          disposers.push(
-            ctx.slots.inject('main', () => ctx.slots.register({ name: 'main', key: 'orchestrator' }, Board)),
+          reconcileConnectRow()
+        }
+
+        /**
+         * The connect row, registered only once its panel exists.
+         *
+         * The same rule the project rows follow through `requiresPanel`: `selectPanel` THROWS
+         * for a key no one registered, and that throw would land inside the user's click. The
+         * connect panel is registered in the `main` inject and the row in the
+         * `sidebar.panellist` one, and neither seat can be assumed to be declared first — so
+         * the row waits for the panel rather than for a particular seat order.
+         *
+         * It is NOT part of the `rows` map: reconcile disposes that map wholesale on every
+         * poll, and this row's lifetime is the seat's, not a project list's.
+         */
+        function reconcileConnectRow(): void {
+          if (!rowsSeat || !panelsSeat || connectRow !== undefined) return
+          connectRow = ctx.slots.register(
+            {
+              name: 'sidebar.panellist',
+              id: CONNECT_ID,
+              order: CONNECT_ORDER,
+              label: () => translate('orchestrator.connect.title'),
+            },
+            PanelIcon,
           )
+        }
+
+        ctx.effect(() => {
+          const disposeRows = ctx.slots.inject('sidebar.panellist', () => {
+            rowsSeat = true
+            reconcileAll()
+            return () => {
+              rowsSeat = false
+              connectRow?.()
+              connectRow = undefined
+              disposeAll(rows)
+            }
+          })
+          const disposePanels = ctx.slots.inject('main', () => {
+            panelsSeat = true
+            // The connect panel is registered BEFORE the project panels are reconciled, so the
+            // row the user reaches for first can never point at a key that does not exist yet.
+            const disposeConnectPanel = ctx.slots.register({ name: 'main', key: CONNECT_ID }, () =>
+              h(Connect, { onConnected: () => refreshProjects() }),
+            )
+            reconcileAll()
+            return () => {
+              panelsSeat = false
+              disposeConnectPanel()
+              disposeAll(panels)
+            }
+          })
           return () => {
-            for (const dispose of disposers) dispose()
+            disposeRows()
+            disposePanels()
           }
-        }, 'dsho: board panel')
+        }, 'dsho: project rows and panels')
+
+        /**
+         * Keep the project list current.
+         *
+         * A failed read leaves the registrations EXACTLY as they were: the entry points are the
+         * only way to reach a board, so a host that is restarting must not take them away and
+         * put them back. The interval matches the panels' own poll.
+         */
+        ctx.effect(() => {
+          let cancelled = false
+          const refresh = () => {
+            void readProjects().then((next) => {
+              if (cancelled || next === undefined) return
+              projects = next
+              reconcileAll()
+            })
+          }
+          refresh()
+          refreshProjects = refresh
+          const timer = setInterval(refresh, POLL_MS)
+          return () => {
+            cancelled = true
+            clearInterval(timer)
+            refreshProjects = () => {}
+          }
+        }, 'dsho: project list')
       },
     }
   },

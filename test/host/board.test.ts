@@ -764,3 +764,98 @@ test('an ACTIVE worker is not archived -- the fix did not archive everything', a
   assert.equal(board.lenses.archive.length, 0, 'none of these are finished')
   assert.equal(board.counts.total, 3)
 })
+
+// ---------------------------------------------------------------------------
+// buildBoard — the project scope
+// ---------------------------------------------------------------------------
+
+/** A store with one project per worker, plus a worker whose issue is missing. */
+async function twoProjects() {
+  const store = createMemoryFactStore()
+  for (const [id, name] of [['repo-1', 'widgets'], ['repo-2', 'gadgets']] as const) {
+    await store.repos.put(id, { id, owner: 'acme', name, rootPath: `/code/${name}` })
+  }
+  for (const [index, repoId] of [['0', 'repo-1'], ['1', 'repo-2']] as const) {
+    await store.issues.put(`iss-${index}`, {
+      id: `iss-${index}`, number: Number(index) + 1, repoId, title: `Task ${index}`, state: 'in_progress',
+      workerId: `wrk-${index}`, createdAt: 1, updatedAt: 1,
+    })
+    await store.workers.put(`wrk-${index}`, { id: `wrk-${index}`, issueId: `iss-${index}`, updatedAt: 5, lastSignalAt: NOW - 1 })
+  }
+  // An orphan: no issue record at all, so no project it can honestly be attributed to.
+  await store.workers.put('wrk-orphan', { id: 'wrk-orphan', issueId: 'iss-gone', updatedAt: 5, lastSignalAt: NOW - 1 })
+  const deps: BoardDeps = { store: lazyFactStore(async () => store), config: CONFIG, now: () => NOW }
+  return deps
+}
+
+test('a scoped board carries ONE project cards, and every project on the list', async () => {
+  const deps = await twoProjects()
+  const scoped = await buildBoard(deps, { repoId: 'repo-1' })
+
+  assert.equal(scoped.counts.total, 1)
+  assert.deepEqual(scoped.lenses.lanes[KanbanColumn.building]!.map((card) => card.id), ['wrk-0'])
+  assert.deepEqual(
+    scoped.projects.map((project) => project.id),
+    ['repo-1', 'repo-2'],
+    'the list stays whole: it is what tells the page which rows should exist',
+  )
+})
+
+test('the counts and the lanes are scoped together, so the header cannot disagree with the board', async () => {
+  const deps = await twoProjects()
+  const scoped = await buildBoard(deps, { repoId: 'repo-2' })
+  assert.equal(scoped.counts.total, 1)
+  assert.equal(scoped.counts.byLane[KanbanColumn.building], 1)
+  assert.equal(
+    Object.values(scoped.lenses.lanes).flat().length + scoped.lenses.archive.length,
+    scoped.counts.total,
+    'every card on screen is counted, and nothing else is',
+  )
+})
+
+test('no scope still means every project, including the orphan', async () => {
+  const deps = await twoProjects()
+  const whole = await buildBoard(deps)
+  assert.equal(whole.counts.total, 3)
+  // `''` and an absent scope are the same read: the tool and the project list both use it.
+  assert.deepEqual((await buildBoard(deps, { repoId: '' })).counts, whole.counts)
+})
+
+test('an unknown project is an EMPTY board, not the whole install', async () => {
+  // The failure this prevents: a project that was disconnected leaving its panel showing every
+  // other project's workers, which reads as "these are mine".
+  const deps = await twoProjects()
+  const scoped = await buildBoard(deps, { repoId: 'repo-gone' })
+  assert.equal(scoped.counts.total, 0)
+  assert.deepEqual(scoped.lenses.archive, [])
+  assert.equal(scoped.projects.length, 2)
+})
+
+test('a worker whose issue is missing is attributed to no project, not guessed into one', async () => {
+  const deps = await twoProjects()
+  const scoped = await buildBoard(deps, { repoId: 'repo-1' })
+  assert.deepEqual(scoped.lenses.lanes[KanbanColumn.building]!.map((card) => card.id), ['wrk-0'])
+})
+
+test('the route reads the scope from the query string the client writes', async () => {
+  const deps = await twoProjects()
+  const route = createBoardRoute(deps)
+  const response = fakeResponse()
+  await route.handler({ url: `${BOARD_ROUTE_PATH}?repoId=repo-2` }, response)
+
+  const body = JSON.parse(response.record.body ?? '{}') as { counts: { total: number }; projects: unknown[] }
+  assert.equal(response.record.status, 200)
+  assert.equal(body.counts.total, 1)
+  assert.equal(body.projects.length, 2)
+})
+
+test('a board read with no query string is the whole install', async () => {
+  // The routes answer a request object that may carry no URL at all, and the unscoped board is
+  // a real answer: a malformed request must not become a panel that can only say 500.
+  const deps = await twoProjects()
+  const response = fakeResponse()
+  await createBoardRoute(deps).handler({}, response)
+  const body = JSON.parse(response.record.body ?? '{}') as { counts: { total: number } }
+  assert.equal(response.record.status, 200)
+  assert.equal(body.counts.total, 3)
+})

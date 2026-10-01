@@ -22,7 +22,7 @@ DSH already ships two of the hardest primitives, and neither is enabled by defau
 1. `@deepseek-ai/dsh-webhook` + `@deepseek-ai/dsh-webhook-github` — signed GitHub ingress that creates agent sessions, with a documented opt-in overlay.
 2. An **unoccupied** full-page panel seat (`main`, keyed, root-scoped) plus `sidebar.panellist` for the navigation row that selects it.
 
-So this is not "port a Go daemon". It is: spawn one resumable DSH root session per issue in its own git worktree, drive it through a staged pipeline with a small worker-protocol toolset, observe the resulting PR with `gh`, and render a **derived** Kanban into that panel. The board is never dragged — placement comes from durable facts through a reducer ported from the reference's `backend/pkg/contract/kanban.go`.
+So this is not "port a Go daemon". It is: spawn one resumable DSH root session per issue in its own git worktree, drive it through a staged pipeline with a small worker-protocol toolset, observe the resulting PR with `gh`, and render a **derived** Kanban into that panel — one panel and one sidebar row per connected project, so each board is scoped to its own project rather than aggregating every one. The board is never dragged — placement comes from durable facts through a reducer ported from the reference's `backend/pkg/contract/kanban.go`.
 
 ```mermaid
 flowchart LR

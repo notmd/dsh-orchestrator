@@ -41,6 +41,8 @@ import { sweepHumanFeedback } from './host/feedback-service.ts'
 import { fillSlots } from './host/workers-service.ts'
 import { createBoardRoute } from './host/board-route.ts'
 import { createSettingsRoutes } from './host/settings-route.ts'
+import { createConnectRoutes } from './host/connect-route.ts'
+import type { WorkspaceListerLike } from './host/connect-route.ts'
 import { restrictionFor, sessionKind } from './host/tools.ts'
 import { lazyFactStore, openFactStore } from './host/store.ts'
 import { FACT_SCHEMAS } from './host/schemas.ts'
@@ -74,6 +76,20 @@ export const inject = [
   'sessionTitle',
   'webServer',
 ]
+
+/**
+ * The workspace registry, narrowed to the one method the connect panel reads.
+ *
+ * A cast rather than a second declaration: `spawn-deps.ts` already owns the registry's
+ * `create`/`delete` slice, and `list` is the same service's fourth method. Declaring it
+ * again here would give the host two descriptions of one peer to keep in step. Reading
+ * the METHOD is still guarded, because a registry without `list` must leave the panel
+ * working with its path field rather than throwing on activation.
+ */
+function readWorkspaceLister(ctx: HostContext): WorkspaceListerLike {
+  const registry = ctx.workspaceRegistry as unknown as WorkspaceListerLike
+  return typeof registry?.list === 'function' ? registry : {}
+}
 
 /**
  * Activates the plugin.
@@ -122,6 +138,24 @@ export function apply(ctx: HostContext, config?: PluginConfigInput): PluginConfi
       // route from the board because it is only fetched when the dialog opens -- the
       // board poll must not grow with every setting the page gains.
       for (const route of createSettingsRoutes({ store, config: resolved })) {
+        disposers.push(ctx.webServer.register(route))
+      }
+
+      // The connect panel's read and write endpoint. Registered here for the same reason
+      // as the two above -- a route must not outlive the plugin that owns its handler --
+      // and, unlike them, it is what makes a FIRST connection possible from the UI at all:
+      // the board's own rows are built from the connected project list, so an install with
+      // nothing connected has no surface to connect from.
+      //
+      // The workspace list is read through a guard rather than declared in `inject`:
+      // `list` is optional on the registry, and a host that cannot list should still get
+      // the path field rather than no panel.
+      for (const route of createConnectRoutes({
+        store,
+        config: resolved,
+        run,
+        workspaces: readWorkspaceLister(ctx),
+      })) {
         disposers.push(ctx.webServer.register(route))
       }
 

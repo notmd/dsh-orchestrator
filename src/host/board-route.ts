@@ -4,6 +4,14 @@
  * One snapshot endpoint, no per-card fan-out: the client fetches this once and
  * subscribes to one stream, rather than asking about each card in turn.
  *
+ * ## One endpoint, scoped by a query parameter
+ *
+ * The page draws one board per project, so a read may name the project it wants with
+ * `?repoId=<id>`; without it the answer is the whole install, which is what the project list
+ * (and the `orchestrator_board` tool) needs. A second endpoint for the project list was the
+ * alternative and was rejected: the list is already on every snapshot, and a scoped read still
+ * carries every project, so one route serves both readers (see `BoardSnapshot.projects`).
+ *
  * ## Why a plain Fetch route and not a Typert Remote API
  *
  * The PRD decides this (PRD §6.3): Remote needs `@Remote` decorators, generated
@@ -31,11 +39,17 @@
 
 import { buildBoard } from './board-service.ts'
 import type { BoardDeps } from './board-service.ts'
+import { repoIdFromUrl } from './settings-route.ts'
 
 /** The response surface this route uses. */
 export interface HttpResponseLike {
   writeHead(status: number, headers?: Record<string, string>): void
   end(body?: string): void
+}
+
+/** The request surface this route uses. Only the URL matters, and only for `?repoId=`. */
+export interface HttpRequestLike {
+  url?: string
 }
 
 /** The route object the web server wants. */
@@ -48,13 +62,20 @@ export interface WebRouteLike {
 /** The path the client reads, and the client's only coupling to the host. */
 export const BOARD_ROUTE_PATH = '/dsho/api/board'
 
-/** Serves the board as JSON. Exported so the shape is testable without a socket. */
+/**
+ * Serves the board as JSON — every project, or the one named by `?repoId=`.
+ *
+ * Exported so the shape is testable without a socket, with the scope passed **explicitly**
+ * rather than read from a request object: the URL parsing is the route's job (see
+ * {@link createBoardRoute}), so this function stays a pure "answer this question".
+ */
 export async function handleBoardRequest(
   deps: BoardDeps,
   response: HttpResponseLike,
+  repoId = '',
 ): Promise<void> {
   try {
-    const snapshot = await buildBoard(deps)
+    const snapshot = await buildBoard(deps, { repoId })
     send(response, 200, snapshot)
   } catch (error) {
     // Explicit, not a throw-to-400: a storage failure is not a bad request.
@@ -82,6 +103,19 @@ export function createBoardRoute(deps: BoardDeps): WebRouteLike {
   return {
     kind: 'exact',
     path: BOARD_ROUTE_PATH,
-    handler: (_request, response) => handleBoardRequest(deps, response),
+    handler: (request, response) => handleBoardRequest(deps, response, repoIdOf(request)),
   }
+}
+
+/**
+ * The `repoId` a board read carries in its query string.
+ *
+ * The same parameter name the settings route uses, from the same reader, so the page has one
+ * spelling for "which project" across both endpoints. Absent or malformed is `''` — every
+ * project — rather than an error: the unscoped board is a real answer, and a bad query string
+ * must not turn into a panel that can only say "500".
+ */
+export function repoIdOf(request: unknown): string {
+  const url = (request as HttpRequestLike | undefined)?.url
+  return repoIdFromUrl(typeof url === 'string' ? url : undefined)
 }

@@ -59,7 +59,8 @@ everything else inherits.
 | 7b | **A removal path for the spike workspaces** left in the web profile\'s `workspace.json`. Not hand-edited: it is a running service\'s own state, with the user\'s real workspaces in the same table. | housekeeping | Needs the registry, or the user.
 | 6v\\.3 | DONE — the lane sequence is proven live (see §3). Superseded by: (`building → validating (Review scheduled) → validating (Reviewing) → needs_review (Needs human review)`) and the failed-pass path. Note the durable store now holds spike repositories and issues in the **web profile's** `~/.dsh/storages/dsho.json` — harmless, but it is test residue. | §7.5, §7.6, A13, A17 | The half after `worker_start` has never executed live, and it is where the review ordering lives. |
 | 6t | **The panel renders in a real GUI.** Module loaded, nav row present, selection works, and the panel shows its heading, count and empty state | **live** |
-| 6s | **The client half.** `src/client/index.ts` registers the `sidebar.panellist` row and the `main` keyed panel, polls `/dsho/api/board`, and renders four lanes with loading/empty/error states. Its own `tsconfig.client.json` emits a **classic script** (`module: none`), since that is what `window.__ModuleLoader__` requires | builds |
+| 6s | **The client half.** `src/client/index.ts` polls `/dsho/api/board`, renders four lanes with loading/empty/error states, and registers its slots. Its own `tsconfig.client.json` emits a **classic script** (`module: none`), since that is what `window.__ModuleLoader__` requires | builds |
+| 6s.1 | **One board per project, not one global board.** A connected project gets a sidebar row AND a `main` keyed panel, addressed by the same id (`orchestrator:<repoId>`); the host scopes the cards, lanes, archive and counts by `?repoId=`, and the project list on every snapshot stays complete so the row list is never scoped by whichever panel polled last. The global row is gone: it could not answer "which project is this?" | **live** (two seeded projects: each row opened its own board and its own settings dialog) + 8 executable client tests against a fake `ctx.slots`, and 7 host scoping tests |
 | 6p | **The review sweep, and a real activity gate.** A tick schedules a pass for every worker whose head has none, and the gate now reads the **live** `AgentStatus` rather than assuming the worker is quiet | 5 tests |
 | 6o | **The auto-review pass.** The reviewer contract (PRD §12.5, with "prefer a few high-confidence findings over nitpicks" quoted because that line is what stops every PR hitting the round cap), the read-only reviewer session in the worker's **own worktree**, the pinned-head `ReviewRun`, the head-checked verdict, finding routing, and the failed-pass retry budget | 16 tests |
 | 6n | **The PR observer.** The `PrSnapshot` record and the `gh pr view --json` parser, plus the per-repository serialised poll. R13's invariant is the substance: a failed observation writes `fetched: false` **with the prior facts**, so even a caller that ignores the flag cannot see a fabricated `CLOSED` | 18 tests |
@@ -661,6 +662,18 @@ Treat these as current intent. Overrule them deliberately, but not by accident.
     `APPROVE`/`REQUEST_CHANGES` on your own PR, so forwarding the verdict would 422
     every PR. **`pushArgv` has no `--force` parameter at all** — making force-push
     unreachable is stronger than making it conditional.
+25. **The board is per PROJECT, and the entry point is too.** PRD §11.3 assumed one
+    global panel; a global board cannot answer "which project is this?", and the panel
+    it drew showed every project's workers at once under a topbar naming one of them.
+    So a connected project gets **one `main` keyed panel and one `sidebar.panellist`
+    row, addressed by the same id** (`orchestrator:<repoId>`), and the host scopes the
+    cards, lanes, archive and counts by `?repoId=`. Three consequences worth naming:
+    the **project list on a snapshot is never scoped** (it is what the row list is
+    built from); the rows are **polled into existence**, because connecting a project
+    is a host-side action taken by a session and nothing tells the client; and a
+    **failed poll unregisters nothing**, because these rows are the only route to a
+    board. PRD §11.3's "a full-page panel seat" still holds — it is now one seat per
+    project. The project ROW still has no action seat of its own (§8).
 
 
 ---
@@ -706,9 +719,11 @@ things are ours, and both are deliberate:
 DSH's sidebar has a `...` menu only for SESSION rows (`sidebar.workspaces.session.menu.item`
 is a real list slot); the workspace/project row's menu (Rename / Delete workspace) is
 hard-coded in `dsh-client-ui-workspace` and exposes no seat, and `sidebar.workspaces`
-itself is a `single` slot that package already owns. So the entry point is the board
-panel's own topbar: it names the connected project and carries the `...` that opens the
-dialog — which is also why the snapshot now carries `projects`.
+itself is a `single` slot that package already owns. So the entry point is a
+`sidebar.panellist` row per project — one row, one `main` keyed panel, addressed by the
+same id — and the panel's own topbar carries the `...` that opens the dialog for THAT
+project. The project row itself still exposes no seat; a row on it would need an
+upstream `dsh-client-ui-workspace` change (see §8).
 
 
 ---
@@ -749,7 +764,8 @@ record what it did.
 
 | Risk | State |
 |---|---|
-| **R1 — the `main` keyed slot** | **Closed.** Proven by execution, with a shipped exemplar. |
+| **R1 — the `main` keyed slot** | **Closed.** Proven by execution, with a shipped exemplar — and re-proven for DYNAMIC keys: one panel per connected project, registered and disposed as the project list moves. |
+| **An icon button ON the project row** | Open, and it is an upstream change, not ours: `dsh-client-ui-workspace` renders the workspace row's hover buttons inline (the `...` menu and New Session) and declares no seat for them, so a plugin cannot add one. What exists today is a `sidebar.panellist` row per project (`orchestrator:<repoId>`), which selects that project's board. A `sidebar.workspaces.project.row.action` list slot upstream is what the icon button would need. |
 | **`ctx.agents.create()` outside `dsh-webhook`** | **Closed** (spike 2), with one residual: the admitted prompt's turn is unobserved. |
 | **`attachSession` against a worktree** | **Closed** (spike 2). |
 | **SSE through `ctx.webServer.register`** | Open. Plain HTTP is documented; streaming is not. Fallback is polling `/dsho/api/board`. |

@@ -69,12 +69,18 @@ export interface BoardSnapshot {
   }
   counts: { total: number; needsAttention: number; byLane: Record<string, number> }
   /**
-   * The connected projects, oldest first.
+   * The connected projects, oldest first — EVERY project, even on a scoped read.
    *
-   * Carried on the snapshot rather than fetched separately so the panel can name the
-   * project whose settings its "..." menu opens, from the poll it already makes. The
-   * settings payload is a separate request because it is only needed once the dialog
-   * opens -- and the board poll must not grow with every setting the page gains.
+   * Deliberately not filtered with the cards. The page's entry points are one sidebar row
+   * and one main panel per project, so the project list is the only thing that tells it
+   * which rows should exist — and a scoped read is exactly the read a panel makes. If this
+   * list were scoped too, each panel would report a single project and the row list would
+   * collapse to whichever panel polled last.
+   *
+   * Carried on the snapshot rather than fetched separately, so naming the project and
+   * listing the projects cost no extra request. The settings payload is a separate request
+   * because it is only needed once the dialog opens -- and the board poll must not grow
+   * with every setting the page gains.
    */
   projects: ProjectRef[]
 }
@@ -267,14 +273,30 @@ export function reviewEvidence(
 }
 
 /**
+ * Which project a read is scoped to.
+ *
+ * `repoId: ''` is the whole install, which is what the tool and a project list need;
+ * a non-empty id is ONE project's board, which is what each panel draws. The filter is
+ * applied here rather than in the page for two reasons: the lanes, the archive sheet
+ * and the counts are all derived from the same worker set, so filtering one and not the
+ * others would leave a header disagreeing with its board; and a page-side filter would
+ * make the scoped board's correctness untestable without a browser.
+ */
+export interface BoardScope {
+  /** A {@link Repo} id, or `''` for every project. */
+  repoId?: string
+}
+
+/**
  * Assembles the whole board.
  *
  * **One snapshot, no per-card fan-out** (the performance NFR): every store is read
  * once, and the lanes are computed from that in memory.
  */
-export async function buildBoard(deps: BoardDeps): Promise<BoardSnapshot> {
+export async function buildBoard(deps: BoardDeps, scope: BoardScope = {}): Promise<BoardSnapshot> {
   const now = (deps.now ?? Date.now)()
   const store = await deps.store.get()
+  const repoId = (scope.repoId ?? '').trim()
 
   const [workers, issues, snapshots, runs, repos] = await Promise.all([
     store.workers.list(),
@@ -288,13 +310,31 @@ export async function buildBoard(deps: BoardDeps): Promise<BoardSnapshot> {
   const normalizedRuns = runs.filter(
     (candidate): candidate is ReviewRun => typeof candidate === 'object' && candidate !== null,
   )
+  /**
+   * A worker's project is its ISSUE's, not its own.
+   *
+   * `Worker.workspaceId` is the DSH Workspace of the worker's **worktree** — a path under
+   * the project, with a different id — so it cannot answer "which project is this". The
+   * issue is the record that was created against a `repoId`, and it is the only link the
+   * plugin actually writes.
+   *
+   * A worker whose issue is missing (a record from a hand-edited store) or whose issue
+   * carries no `repoId` belongs to no project, so a scoped board leaves it out rather
+   * than guessing. It is still on the unscoped board, which is what the `orchestrator_board`
+   * tool and the projects read see.
+   */
+  const issueById = new Map(normalizedIssues.map((issue) => [issue.id, issue]))
+  const scoped = workers.map(normalizeWorker).filter((worker) => {
+    if (repoId === '') return true
+    return issueById.get(worker.issueId)?.repoId === repoId
+  })
   // Keyed by worker id, which is how the OBSERVER writes them (`snapshotKey`). An
   // earlier version matched by URL instead, and the two disagreed the moment a
   // worker's `pr.url` differed from the snapshot's -- so a real pull request never
   // moved a card, silently, even though both halves were individually tested. A live
   // end-to-end run is what surfaced it; a unit test on either side could not.
   const snapshotByWorker = new Map<string, PrSnapshot>()
-  for (const worker of workers.map(normalizeWorker)) {
+  for (const worker of scoped) {
     const snapshot = await store.prSnapshots.get(snapshotKey(worker.id))
     if (snapshot && typeof snapshot === 'object') {
       snapshotByWorker.set(worker.id, snapshot as PrSnapshot)
@@ -313,8 +353,8 @@ export async function buildBoard(deps: BoardDeps): Promise<BoardSnapshot> {
     autoReviewFailedRetryLimit: deps.config.autoReviewFailedRetryLimit,
   }
 
-  const cards = workers.map(normalizeWorker).map((worker) => {
-    const issue = normalizedIssues.find((candidate) => candidate.id === worker.issueId)
+  const cards = scoped.map((worker) => {
+    const issue = issueById.get(worker.issueId)
     const workerRuns = normalizedRuns.filter((run) => run.workerId === worker.id)
     // Computed before the literal: the review evidence is a lookup, and repeating it
     // inside a spread conditional reads as though the two calls could differ.
@@ -357,13 +397,13 @@ export async function buildBoard(deps: BoardDeps): Promise<BoardSnapshot> {
 }
 
 /**
- * The projects as the panel shows them: the install's configured one FIRST, then oldest first.
+ * The projects as the page shows them: the install's configured one FIRST, then oldest first.
  *
- * The order is load-bearing rather than cosmetic. The panel labels its `...` menu with the
- * FIRST project in this list, and the settings route picks a project by its own rule
- * (`settings-service.selectProject`, which also prefers `defaultRepo`). Two orderings would
- * mean the header naming one project while the dialog edits another -- and the user would
- * have no way to see the disagreement.
+ * The order is load-bearing rather than cosmetic. It is the order the sidebar's project rows
+ * are registered in, so the project the install is configured for leads the list — and the
+ * settings route picks a project by its own rule (`settings-service.selectProject`, which
+ * also prefers `defaultRepo`). Two orderings would mean the row the user reaches for first
+ * and the project the dialog opens by default being different projects, with no visible sign.
  */
 export function orderProjects(repos: readonly Repo[], config: PluginConfig): ProjectRef[] {
   const configured = (config.defaultRepo ?? '').trim()

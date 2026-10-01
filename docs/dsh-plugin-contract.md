@@ -132,6 +132,36 @@ Verified in `@deepseek-ai/dsh-client-ui-sidebar/lib/types/client/contract/slots.
 - Cardinality: `single` | `list` (needs `id` + `order`) | `keyed` (owner dispatches `entryKey`) | `chain`.
 - `priority` is a shadowing rank; lower renders first. Additive work should take a fresh list `id` or unoccupied key.
 
+### A2.3.1 Runtime registration — verified against a live GUI
+
+The board registers **one `main` panel and one `sidebar.panellist` row per connected project**, and adds
+and removes them as the project list moves. That is a step past "register once at activation", so each
+fact it depends on is recorded here with what it was verified from:
+
+| Fact | Evidence |
+|---|---|
+| A keyed slot takes **many keys from one plugin**; each key is its own cell, and a disposer removes exactly its own. | `dsh-client-ui-slots/lib/index.js` — `SlotCore.register` keys cells by `key`; `entriesOfSlot` projects one winner per cell. **Live**: two panels registered under `orchestrator:repo-v1` / `orchestrator:repo-v2`, both rendered, no shadowing error. |
+| The layout **prunes a selection whose main key disappeared**, so a disconnected project cannot leave a blank centre pane. | `dsh-client-ui-layout/lib/client.js` — `ctx.slots.subscribe("main", retainMainPanels)`, and `retainMainPanels` clears `activePanelId` when no live entry carries it. |
+| The sidebar **derives its rows from the registry** and re-syncs on a slot subscription, so a row registered after activation appears without a reload. `order` is ascending, ties keep registration order. | `dsh-client-ui-sidebar/lib/client.js` — `syncPanels()` maps `entriesOfSlot("sidebar.panellist")` and sorts by `options.order`; `ctx.slots.subscribe("sidebar.panellist", syncPanels)`. |
+| `label` may be a **function**, which the shell re-resolves on every sync (locale change included). This is the only way to put data (the repository) inside a translated row label. | `dsh-client-ui-slots/lib/index.js` — `resolveSlotLabel(label) { return typeof label === 'function' ? label() : label }`; `dsh-client-ui-sidebar` calls it in `syncPanels`, which is also subscribed to `ctx.locale`. |
+
+**One consequence to design around: `ctx.slots.inject`'s callback runs when the seat is DECLARED, not when
+our data changes.** Registering from a poll therefore needs both paths to converge on one reconcile
+function, and a row must wait for its panel (`selectPanel` throws — inside the user's click — for a key no
+one registered).
+
+### A2.3.2 The workspace/project row exposes NO action seat
+
+`dsh-client-ui-workspace`'s `ProjectRowItem` renders the workspace row's hover buttons **inline**: a `...`
+menu whose items are hard-coded to Rename / Delete, and a New Session button. There is no `list` slot for
+them, and `sidebar.workspaces` itself is a `single` hole that the same package already occupies. Verified
+in `dsh-client-ui-workspace/lib/client.js` (`ProjectRowItem`, `WorkspaceBrowser`'s registration) and by
+querying the running GUI: the project row's buttons carry no plugin id.
+
+So **an icon button on the project row is not reachable from a plugin** without an upstream seat (a
+`sidebar.workspaces.project.row.action` list, declared and rendered by that package). What is reachable,
+and what this plugin uses, is a `sidebar.panellist` row per project.
+
 ### A2.4 Client module registration
 
 A package joins the browser graph by declaring `dsh.client` in `package.json` and exporting a bundle at `exports["./client"]`:

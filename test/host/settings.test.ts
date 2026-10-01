@@ -342,10 +342,11 @@ test('the board snapshot publishes the projects, oldest first', async () => {
   )
 })
 
-test('the configured project is FIRST in the snapshot, so the header and the dialog agree', async () => {
-  // The panel labels its menu with the first project and opens the dialog for THAT project.
-  // If the snapshot ordered by age while the settings route preferred `defaultRepo`, the
-  // header would name one project and the dialog would edit another -- with no visible sign.
+test('the configured project is FIRST in the snapshot, so the first row and the dialog agree', async () => {
+  // The page registers its project rows in this order, so the project the install is configured
+  // for leads the sidebar. The settings route picks a project by its own rule, which also
+  // prefers `defaultRepo`; if the snapshot ordered by age instead, the row a user reaches for
+  // first and the project the dialog opens by default would be different projects.
   const { store, deps } = await depsWithProject()
   const second = await connectRepo({ run: preflightRun, rootPath: '/code/other', id: 'repo-2', now: 2000 })
   assert.ok(second.ok)

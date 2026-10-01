@@ -58,8 +58,14 @@ export const SETTINGS_ROUTE_PATH = '/dsho/api/settings'
  */
 export const MAX_SETTINGS_BODY_BYTES = 64 * 1024
 
-/** Reads a JSON body, bounded. Returns a refusal rather than throwing. */
-async function readJsonBody(
+/**
+ * Reads a JSON body, bounded. Returns a refusal rather than throwing.
+ *
+ * Exported so `./connect-route.ts` reuses it rather than growing a second reader: the
+ * bound is the whole point of this function, and two copies of a limit is one copy that
+ * gets raised and another that does not.
+ */
+export async function readJsonBody(
   request: HttpRequestLike,
 ): Promise<{ ok: true; value: unknown } | { ok: false; status: number; code: string; message: string }> {
   return new Promise((resolve) => {
