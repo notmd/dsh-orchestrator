@@ -80,7 +80,11 @@ async function run(ctx: HostContext): Promise<void> {
       branch: 'dsho/issue-7-flaky-auth-test',
       worktreePath: `${REPO}/.dsho/worktrees/issue-7`,
       workspaceId: 'w',
-      phase: 'awaitingAutoReview',
+      // Awaiting a person with an open question, so the seeded card exercises the
+      // attention treatment AND the R9/R20 precedence fix: the protocol's explicit
+      // blockage must outrank the (idle) live status, or the card decays out of Needs you.
+      phase: 'awaiting_human',
+      pendingQuestion: { id: 'q-seed-1', text: 'Which migration order do you want?', at: now },
       phaseHistory: [],
       pr: { number: 128, url: 'https://github.com/acme/widgets/pull/128', headSha: HEAD },
       lastSignalAt: now,

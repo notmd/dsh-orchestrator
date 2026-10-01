@@ -254,11 +254,16 @@ loader.load({
 .dsho-lane__empty { margin: 0; font-size: 0.8125rem; color: var(--dsw-alias-label-primary-dimmed, inherit); opacity: 0.75; }
 .dsho-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
 
-/* The card. The click target is the OUTER element; a full-bleed button supplies the
+/* The card. The border is a step stronger than the lane's because in LIGHT mode the
+   host's bg-layer-1..3 are ALL #fff -- measured cardVsLane = 0 -- so a column and the
+   card on it are distinguished by borders or not at all. Dark mode separates them by
+   surface, so the stronger border costs nothing there.
+
+   The click target is the OUTER element; a full-bleed button supplies the
    accessible name and the keyboard path. A button WRAPPING the card cannot contain the
    hover actions -- nesting buttons is invalid HTML -- which is why the reference does it
    this way and why the earlier version could never have grown an action. */
-.dsho-card { position: relative; border: 1px solid var(--dsw-alias-border-l2, rgba(127,127,127,0.3));
+.dsho-card { position: relative; border: 1px solid var(--dsw-alias-border-l3, rgba(127,127,127,0.35));
   border-radius: 10px; background: var(--dsw-alias-bg-layer-2, transparent); cursor: pointer;
   transition: background-color 120ms ease-out, border-color 120ms ease-out, transform 120ms ease-out; }
 .dsho-card:hover, .dsho-card:focus-within { background: var(--dsw-alias-bg-layer-3, rgba(127,127,127,0.12)); }
@@ -309,7 +314,21 @@ loader.load({
   border: 1px solid var(--dsw-alias-border-l2, rgba(127,127,127,0.24)); background: transparent; color: inherit; }
 .dsho-btn:hover { background: var(--dsw-alias-button-ghost-active-fill, rgba(127,127,127,0.2)); }
 .dsho-btn:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--dsw-alias-state-business-primary, #4c8dff); }
-@media (prefers-reduced-motion: reduce) { .dsho-card, .dsho-card__actions { transition: none; } }
+/* Copied from the reference's styles.css: an attention card gets a pulsing OVERLAY
+   rather than only a border, because a border is easy to miss on a busy board. The
+   reference pulses opacity 0.15 -> 1 on a 3.5s cubic-bezier over a 9% wash of its
+   needs-you colour; both are reproduced with a measured token. */
+@keyframes dsho-attention-pulse { 0%, 100% { opacity: 0.15; } 50% { opacity: 1; } }
+@keyframes dsho-status-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+.dsho-card--attention::before { position: absolute; inset: 0; content: ''; pointer-events: none;
+  border-radius: inherit; background-color: color-mix(in srgb, var(--dsw-alias-state-warn-primary, #f59e0b) 9%, transparent);
+  animation: dsho-attention-pulse 3.5s cubic-bezier(0.45, 0, 0.55, 1) infinite; }
+.dsho-card[data-tone='busy'] .dsho-glyph { animation: dsho-status-pulse 1.8s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .dsho-card, .dsho-card__actions { transition: none; }
+  .dsho-card--attention::before { animation: none; opacity: 0.5; }
+  .dsho-card[data-tone='busy'] .dsho-glyph { animation: none; }
+}
 `
 
     /** What the panel is currently showing. */

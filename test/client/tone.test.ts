@@ -89,3 +89,18 @@ test('every lane has a tone, so no card is ever colourless', () => {
     assert.match(mapBody, new RegExp(`${lane}:`), `lane ${lane} needs a tone`)
   }
 })
+
+
+test('an attention card animates, and every animation has a reduced-motion escape', () => {
+  // The reference pulses an attention card rather than only tinting its border, because a
+  // border is easy to miss on a busy board. An animation without a reduced-motion escape
+  // is a accessibility defect, so both are asserted together.
+  assert.match(source, /@keyframes dsho-attention-pulse/)
+  assert.match(source, /animation: dsho-attention-pulse/, 'the attention overlay animates')
+  const reduce = source.slice(source.indexOf('prefers-reduced-motion'))
+  // Asserted on the SELECTORS, not the keyframe names: the reduced-motion block names the
+  // element whose animation stops, and the keyframe name does not appear in it at all.
+  assert.match(reduce, /\.dsho-card--attention::before\s*\{[^}]*animation: none/s, 'the overlay stops')
+  assert.match(reduce, /\.dsho-card\[data-tone='busy'\] \.dsho-glyph\s*\{[^}]*animation: none/s, 'so does the glyph')
+  assert.match(reduce, /opacity: 0\.5/, 'and the overlay keeps a static tint rather than vanishing')
+})
