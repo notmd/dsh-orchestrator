@@ -32,10 +32,14 @@ import type { CommandResult, RunCommand } from '../../src/host/worktree.ts'
 function fakeContext(): HostContext & {
   readonly registered: ToolDescriptor<never, unknown>[]
   readonly effects: string[]
+  fire(event: string, ...args: unknown[]): void
   disposeAll(): void
 } {
   const registered: ToolDescriptor<never, unknown>[] = []
   const effects: string[] = []
+  // An event bus, so the protocol-tool restriction is testable at the boundary this
+  // plugin controls: what its `agent/created` listener DOES, given a payload.
+  const listeners = new Map<string, Array<(...args: unknown[]) => void>>()
   const cleanups: Array<() => void> = []
   return {
     // The two services activation now requires. Storage is a real in-memory
@@ -94,6 +98,16 @@ function fakeContext(): HostContext & {
           if (index >= 0) registered.splice(index, 1)
         }
       },
+    },
+    on(event: string, listener: (...args: unknown[]) => void) {
+      const existing = listeners.get(event) ?? []
+      existing.push(listener)
+      listeners.set(event, existing)
+      return () => {}
+    },
+    /** Fire an event, as the host would. */
+    fire(event: string, ...args: unknown[]) {
+      for (const listener of listeners.get(event) ?? []) listener(...args)
     },
     effect(callback, label) {
       effects.push(label ?? '(unlabelled)')
@@ -1037,4 +1051,84 @@ test('no restriction ever denies an ordinary tool', () => {
       assert.ok(ORCHESTRATOR_TOOL_NAMES.includes(name), `${name} is not one of ours`)
     }
   }
+})
+
+
+// ---------------------------------------------------------------------------
+// The protocol-tool restriction's WIRING (PRD §12.2)
+// ---------------------------------------------------------------------------
+
+/** A fake agent, whose scoped tool runtime records what it was asked to restrict. */
+function fakeAgent(sessionId: string | undefined) {
+  const applied: Array<{ deny: string[] }> = []
+  const rootApplied: Array<{ deny: string[] }> = []
+  const agent = {
+    session: sessionId === undefined ? undefined : { id: sessionId },
+    ctx: {
+      tools: { restrict: (filter: { deny: string[] }) => { applied.push(filter); return () => {} } },
+      effect: (cb: () => (() => void) | void) => { cb(); return () => {} },
+    },
+  }
+  return { agent, applied, rootApplied }
+}
+
+test('§12.2: the listener reads the payload\'s agent, and denies by session kind', () => {
+  // The bug this guards: the payload is `{ agent, source, signal }` and the listener read
+  // it AS the agent, so every session arrived with `session: undefined`, was classified
+  // `other`, and the deny-list was applied to nothing -- silently. Reading the wrong
+  // object does not throw.
+  const ctx = fakeContext()
+  apply(ctx as never, {})
+
+  const worker = fakeAgent('dsho-wrk-01ABC')
+  ctx.fire('agent/created', { agent: worker.agent, source: { kind: 'user' } })
+  assert.equal(worker.applied.length, 1, 'the worker was restricted exactly once')
+  assert.ok(!worker.applied[0]!.deny.includes('orchestrator_report'), 'a worker keeps its own protocol tool')
+  assert.ok(worker.applied[0]!.deny.includes('orchestrator_issue_create'), 'and loses the orchestrator surface')
+
+  const reviewer = fakeAgent('dsho-rev-01ABC')
+  ctx.fire('agent/created', { agent: reviewer.agent, source: {} })
+  assert.ok(!reviewer.applied[0]!.deny.includes('orchestrator_review_verdict'), 'a reviewer keeps its own')
+  assert.ok(reviewer.applied[0]!.deny.includes('orchestrator_report'))
+
+  const user = fakeAgent('session-4f012493')
+  ctx.fire('agent/created', { agent: user.agent, source: {} })
+  assert.ok(user.applied[0]!.deny.includes('orchestrator_report'), 'a user session loses the protocol tools')
+  assert.ok(!user.applied[0]!.deny.includes('orchestrator_issue_create'), 'and keeps the orchestrator surface')
+})
+
+test('§12.2: the restriction goes on the AGENT\'s ctx, never the root one', () => {
+  // The catastrophic failure: `restrict` on a plain context is GLOBAL, so a worker's
+  // restriction applied there would strip tools from every session including the user's.
+  // Asserted by construction -- the fake root ctx exposes no `tools` at all, so a
+  // fallback to it would throw rather than silently over-restrict.
+  const ctx = fakeContext()
+  assert.notEqual(
+    typeof (ctx as { tools?: { restrict?: unknown } }).tools?.restrict,
+    'function',
+    'the root registry has no restrict, so a fallback to it would THROW rather than silently over-restrict',
+  )
+  assert.doesNotThrow(() => {
+    apply(ctx as never, {})
+    ctx.fire('agent/created', { agent: fakeAgent('dsho-wrk-01ABC').agent, source: {} })
+  })
+})
+
+test('§12.2: a malformed payload restricts nothing and does not throw', () => {
+  // Defensive rather than theoretical: the listener runs on every session creation, and a
+  // throw there would take down whatever created the session.
+  const ctx = fakeContext()
+  apply(ctx as never, {})
+  for (const payload of [undefined, null, {}, { agent: undefined }, { agent: {} }, 'nonsense']) {
+    assert.doesNotThrow(() => ctx.fire('agent/created', payload), `payload ${JSON.stringify(payload)}`)
+  }
+})
+
+test('§12.2: with no event bus the plugin still activates', () => {
+  // A host without `on` must leave the plugin working, logged but not broken -- the same
+  // fail-safe posture as the client half's locale read.
+  const ctx = fakeContext()
+  delete (ctx as { on?: unknown }).on
+  assert.doesNotThrow(() => apply(ctx as never, {}))
+  assert.ok(ctx.registered.length > 0, 'the tools are still registered')
 })

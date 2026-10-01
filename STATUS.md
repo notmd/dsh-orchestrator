@@ -11,7 +11,7 @@ bloated status file costs the next agent more than it saves.
 |---|---|
 | **Goal** | Implement [PRD.md](PRD.md) |
 | **Plan source** | [PRD.md §16 Milestones](PRD.md#16-milestones), verified against [docs/dsh-plugin-contract.md](docs/dsh-plugin-contract.md) |
-| **Last updated** | 2026-10-01, chunk 33 (all 26 config keys obeyed) |
+| **Last updated** | 2026-10-01, chunk 34 (the restriction's wiring is verified) |
 | **Verify** | `npm run verify` → `tsc` (src + test + client + spike) + `node --test` + build · **all green** |
 | **Current state** | **735 tests, 0 type errors. The requested flow runs end to end** — issue → worker → worktree → PR → observer → auto review → findings → verdict → `Needs human review` → merge → completion → cleanup — driven by `test/integration/flow.test.ts` against a **mock provider with real git**, and the board UI is verified rendering in a live GUI. **What is open:** §12.2's effect is unverified; M4's CI/conflict routing and M6's hardening are unimplemented; and the provider is MOCKED, so nothing here proves the real `gh` accepts the flags sent. |
 
