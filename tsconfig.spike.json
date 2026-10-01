@@ -5,6 +5,9 @@
     "outDir": "dist",
     "rootDir": "src"
   },
-  "include": ["src/**/*.ts"],
-  "exclude": ["src/client/**", "src/spike/**"]
+  "include": [
+    "src/spike/**/*.ts",
+    "src/host/**/*.ts",
+    "src/config/**/*.ts"
+  ]
 }

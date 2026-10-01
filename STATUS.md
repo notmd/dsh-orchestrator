@@ -9,7 +9,7 @@ bloated status file costs the next agent more than it saves.
 |---|---|
 | **Goal** | Implement [PRD.md](PRD.md) |
 | **Plan source** | [PRD.md §16 Milestones](PRD.md#16-milestones), verified against [docs/dsh-plugin-contract.md](docs/dsh-plugin-contract.md) |
-| **Last updated** | 2026-10-01, chunk 6b (worker spawner) |
+| **Last updated** | 2026-10-01, chunk 6c (spike 2 answered) |
 | **Verify** | `npm run verify` → typecheck (src) + `node --test` + build · **all three green** |
 | **Current state** | **The plugin installs and activates in DSH, and the worker-spawn recipe is written and unit-tested.** 370 tests pass; `tsc` reports **0 errors across `src/` and `test/`**; `npm run build` emits `dist/`. M0 spike 1 is done (panel seat proven) and the host entry is live with one real tool. The services behind it (issue store, spawner, observer, routes) and the whole client half are still to come. |
 
@@ -94,14 +94,16 @@ Chunk numbers are this file's own; milestone letters are the PRD's.
 
 | Chunk | Work | PRD | Why now |
 |---|---|---|---|
-| 6c | **Run M0 spike 2** (§16): call the real `ctx.agents.create()` from a non-`dsh-webhook` caller, with `attachSession` against a worktree whose repo root is a different workspace (Appendix A §A10 items 2–3). The recipe is written; only reality can confirm it. | M0 | It is the last unknown that can invalidate the spawner, and it invalidates the load-bearing part of M1. |
-| 6d | **`WorktreeManager`** (`git worktree add/remove` via `ctx.subprocess`), then `OrchestratorService` + the issue/worker stores over `ctx.storageDomain`, `GitHubGateway` (`gh`), `PrObserver`. Each tool ships **with** its service. | §6, §9, §12, M1 | The spawner needs a real worktree to point at before anything can be spawned for real. |
 | 7 | **Client half**: `src/client/**/*.ts` → `dist/client.js` in the `window.__ModuleLoader__` **classic-script** form, plus the `sidebar.panellist` row and the `main` keyed panel, lanes/cards/inspector, themes, locale, keyboard access. | §11, M2 | Needs the routes from chunk 6. |
 | 8 | **M0 spikes 2–4**: `ctx.agents.create()` outside `dsh-webhook`; `attachSession` against a worktree; a `/dsho/api/*` route + SSE from a slot component. | §16 | Spike 1 is done; these are the remaining unknowns. |
 | 9 | **Feedback classification** (actionability, bot detection by `__typename`/`User.Type` never a login substring, per-comment dedup, re-arm only on a definitive clear) and the **report outbox** (§10.5, A23). | §10.3, §10.5 | M4's logic, testable offline. Can be interleaved with 6. |
 
-**Recommended next step: chunk 6c — run spike 2.** The spawner exists and is
-tested against fakes, and fakes cannot answer the only question that matters about
+**Recommended next step: chunk 6d — `WorktreeManager`.** Spike 2 removed the last
+unknown that could have invalidated the spawner, so the next real dependency is a
+worktree to point it at: `git worktree add` via `ctx.subprocess`, branch naming, and
+cleanup on archive. Two smaller things are also queued: confirm the admitted prompt
+actually produces a turn (the residual above), and settle whether the preset lease
+should be released by the caller or owned by the worker's context.
 it: does the real `ctx.agents.create()` accept a non-`dsh-webhook` caller, and does
 `attachSession` tolerate a worktree whose repository root is a different workspace?
 Append a spawn to `fixtures/panel-spike`'s host half (or a sibling fixture), install
@@ -109,6 +111,53 @@ it, boot, and look for the new titled session in the GUI sidebar. The install lo
 is cheap and documented in [docs/verification-harness.md](docs/verification-harness.md).
 outside `dsh-webhook`, and `attachSession` against a worktree). The install loop is
 now cheap and fully documented in [docs/verification-harness.md](docs/verification-harness.md).
+
+### ✅ M0 SPIKE 2 DONE — `ctx.agents.create()` works for a third-party caller
+
+**This was the last unknown that could invalidate the spawner, and it is answered
+by execution, not by reading types.** Appendix A §A10 items 2 and 3 are closed.
+
+The spike is [`src/spike/agent-spawn-spike.ts`](src/spike/agent-spawn-spike.ts),
+deliberately **kept out of the shipped bundle** (`tsconfig.build.json` excludes
+`src/spike/**`; `npm run build:spike` builds it separately). It runs the real recipe
+from `src/host/spawn.ts` against the real services and writes each step to
+`/tmp/dsho-spike-result.json` — a host-side result is otherwise invisible from
+outside the process, and this needs no GUI to read.
+
+```bash
+mkdir -p /tmp/dsho-spawn-spike
+npm run build:spike
+dsh --profile web --patch /tmp/dsho-spike-patch.yml --port 0 --no-open --host 127.0.0.1
+cat /tmp/dsho-spike-result.json
+```
+
+Every step succeeded, against the **real** services:
+
+| Step | Observed |
+|---|---|
+| `permissionPresets.resolve('read-only')` | ok |
+| `agentPresets.resolve('standard')` | id `standard` |
+| `agentPresets.acquireScope('standard')` | **worked** — so `acquireScope` is real, not just an appendix claim |
+| `workspaceRegistry.create('/tmp/dsho-spawn-spike')` | canonicalized to `/private/tmp/dsho-spawn-spike` (the `fs.realpath` behaviour Appendix A4 documents) |
+| `agents.create({…})` | returned, `agent.status === 'idle'` |
+| `agentPresets.mount(agentCtx, 'standard')` | **worked** |
+| `workspace.attachSession(sessionId)` | **worked** — answered: a per-issue worktree path is acceptable |
+| `permissionPresets.set` / `sessionTitle.rename` | worked |
+| Outcome | `spawn:succeeded` |
+
+Corroborated outside the process three ways: the session is **persisted** at
+`~/.dsh/sessions/--private-tmp-dsho-spawn-spike--/spawn-spike-1790848866406/` with
+a header carrying **our caller-supplied id**, **our `cwd`**, and **our resolved
+`agentPreset`**; and it appears in the GUI sidebar under **our title**, proving
+`sessionTitle.rename` took effect.
+
+**One honest residual:** the session log held only its header (938 bytes, one
+event) and did not grow, and the prompt's expected `READY` never appeared. The
+session was still live and holding its lock, so the most likely explanation is that
+turn events buffer until the session closes — but that is an *inference*. So:
+**creation and publication are confirmed; that the admitted prompt produces a turn
+is not.** Settle it by watching the session in the GUI, or by reading the log after
+the session closes.
 
 ### ✅ Chunk 6b — the worker spawner is written and tested
 
