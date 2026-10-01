@@ -11,7 +11,7 @@ bloated status file costs the next agent more than it saves.
 |---|---|
 | **Goal** | Implement [PRD.md](PRD.md) |
 | **Plan source** | [PRD.md §16 Milestones](PRD.md#16-milestones), verified against [docs/dsh-plugin-contract.md](docs/dsh-plugin-contract.md) |
-| **Last updated** | 2026-10-01, chunk 29 (STATUS had 474 duplicated lines) |
+| **Last updated** | 2026-10-01, chunk 30 (autoInjectCI was board-only) |
 | **Verify** | `npm run verify` → `tsc` (src + test + client + spike) + `node --test` + build · **all green** |
 | **Current state** | **735 tests, 0 type errors. The requested flow runs end to end** — issue → worker → worktree → PR → observer → auto review → findings → verdict → `Needs human review` → merge → completion → cleanup — driven by `test/integration/flow.test.ts` against a **mock provider with real git**, and the board UI is verified rendering in a live GUI. **What is open:** §12.2's effect is unverified; M4's CI/conflict routing and M6's hardening are unimplemented; and the provider is MOCKED, so nothing here proves the real `gh` accepts the flags sent. |
 
@@ -262,6 +262,8 @@ counted as done.
 **AUDIT THE SPEC AGAINST THE CODE, NOT AGAINST YOUR OWN NARRATION.** Recent rounds implied only A4 and §12.2 remained. Re-reading the milestones against `src/` found `maxConcurrentWorkers` **validated, displayed, and never enforced** — the plugin started unbounded workers — plus an absent human feedback loop (M4) and an empty `locale/` (M7). A long session drifts toward believing its own summaries; the spec does not drift.
 
 
+**A SETTING THE BOARD READS IS NOT A SETTING ANYTHING OBEYS.** Three gaps found by auditing, all the same shape: `maxConcurrentWorkers` (validated, displayed, never enforced), R14's guardrail (in the PRD, no code), and `autoInjectCI` (read by the reducer to derive `Fixing CI failures`, read by nothing that acts). **The board reading a setting makes the gap invisible, because the UI looks like proof that the behaviour exists** — a card claiming `Fixing CI failures` is evidence of a label, not of a loop. The audit that finds these is mechanical: for every config key and every R-requirement, find the code that ACTS on it, not the code that mentions it.
+
 **A RULE CAN BE IMPLEMENTED, TESTED, AND BYPASSED BY WHAT FEEDS IT.** R20's sticky rule was correct -- `isSticky` exists and `deriveStatus` checks the paused case before the clock -- but `buildCard` never SET the activity from the protocol, so a worker with an unanswered question arrived as plain `idle` and the clock demoted it to `No signal`, which is exactly what R20 forbids and rates HIGH. Testing a rule in isolation cannot see that its input never arrives. Assert the reader-visible outcome instead.
 
 **A GUARD APPLIED TO THE WRONG DIRECTION IS A DEADLOCK.** R14 says a blocked worker is never injected into. Applied to the outbox as well -- which delivers a worker's reports into the ORCHESTRATOR session, the opposite direction -- it holds the worker's own `needs_input` report, which IS the blockage: nobody sees the question and the block can never clear. Seven tests failed on exactly that. **Before adding a guard, establish the direction it protects.** In that case the ABSENCE of a guard is the property, so a test now asserts the outbox does not consult the predicate at all.
@@ -478,7 +480,6 @@ one and re-does finished work. Only genuinely-remaining items belong here.
 | 26 | **Compress §3.** It is ~280 lines and the largest section in this file, which is the thing the handoff asks to keep small. The lessons are all load-bearing; several repeat the same shape and can be merged under one heading with the instances listed. | maintenance | Context cost, not correctness. |
 | 27 | **R-audit the remaining unverified mechanisms**: R7's `git status` check in the repo root before shipping, and R20's sticky-state decay. Traced as present, not read closely — the R14 audit found a HIGH-rated guardrail with NO code at all, so presence of a keyword is not presence of the behaviour. | §15 | The audit found one real gap among twenty-two; the other two are the most likely next. |
 | 27 | **R7's second half is MISSING.** "Verify with `git status` in the repo root before shipping" -- there is no `git status` anywhere in `src/`. The permission preset and the worktree-scoped cwd exist; the post-hoc check does not, so a worker that edited outside its worktree is not detected before it ships. | R7 | The R-audit found R14 (HIGH, absent) and now R7; keyword presence was never the test. |
-| 28 | **M4's CI-failure and merge-conflict routing.** M4 lists them beside the human review loop; the reducer carries `ciFailing` and `changesRequested`, and nothing routes either to the worker. `autoInjectCI` is in the config and read by the reducer, and -- like `maxConcurrentWorkers` before it -- may be a configured behaviour with no code behind it. **Check whether it is read anywhere but the board.** | M4, §7.6 | The same shape as the two gaps this audit already found. |
 
 
 **Recommended next step: A4, and it needs a decision rather than work.** Ask the user

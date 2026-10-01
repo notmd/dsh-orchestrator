@@ -16,7 +16,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { actionableFeedback, renderFeedback, routeHumanFeedback, sweepHumanFeedback } from '../../src/host/feedback-service.ts'
+import { actionableFeedback, ciFeedback, renderFeedback, routeHumanFeedback, sweepHumanFeedback } from '../../src/host/feedback-service.ts'
 import { readFileSync } from 'node:fs'
 import { createMemoryFactStore, lazyFactStore } from '../../src/host/store.ts'
 import { createLiveWorkers } from '../../src/host/handle-registry.ts'
@@ -95,7 +95,7 @@ test('an already-routed review is not actionable again', () => {
 test('the message names the author and quotes what they asked for', () => {
   const worker = normalizeWorker({ id: 'w', issueId: 'i', sessionId: 's', branch: 'dsho/issue-7', worktreePath: '/p', workspaceId: 'ws', phase: WorkerPhase.implementing, phaseHistory: [], lastSignalAt: 1, createdAt: 1, updatedAt: 1 })
   const text = renderFeedback(worker, [{ id: 'r1', kind: 'changes_requested', author: 'a-person', body: 'this drops the token' }], 'pr/7')
-  assert.match(text, /A person requested changes/, 'the worker learns a person, not the plugin, asked')
+  assert.match(text, /Changes are needed on dsho\/issue-7/, 'the message names the branch it is about')
   assert.match(text, /a-person requested changes/)
   assert.match(text, /this drops the token/, 'the worker needs to know WHAT to fix')
 })
@@ -290,4 +290,63 @@ test('the guard is on the INBOUND path only — the outbox still delivers a bloc
   // because the *absence* of a guard is the property.
   const outbox = readFileSync(new URL('../../src/host/outbox-service.ts', import.meta.url), 'utf8')
   assert.ok(!/isBlockedWorker/.test(outbox), 'the outbox must not hold a blocked worker\'s outgoing reports')
+})
+
+
+// ---------------------------------------------------------------------------
+// M4 — CI failures and merge conflicts
+// ---------------------------------------------------------------------------
+
+test('autoInjectCI is real: failing checks become a routable item', () => {
+  // Before this, the flag was read ONLY by the board, so a card displayed
+  // "Fixing CI failures" while nothing ever told the worker -- the board asserting an
+  // active loop that was not running.
+  const items = ciFeedback(snapshot({ ciState: 'failing' }), [])
+  assert.equal(items.length, 1)
+  assert.equal(items[0]!.kind, 'ci_failed')
+  assert.deepEqual(ciFeedback(snapshot({ ciState: 'passing' }), []), [])
+  assert.deepEqual(ciFeedback(snapshot({ ciState: 'unknown' }), []), [], 'unknown is not failing')
+})
+
+test('a merge conflict is routable, by either of the provider\'s two words for it', () => {
+  const byMergeable = ciFeedback(snapshot({ mergeable: 'CONFLICTING' }), [])
+  assert.equal(byMergeable[0]!.kind, 'merge_conflict')
+  const byState = ciFeedback(snapshot({ mergeStateStatus: 'DIRTY' }), [])
+  assert.equal(byState[0]!.kind, 'merge_conflict')
+  assert.deepEqual(ciFeedback(snapshot({ mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN' }), []), [])
+})
+
+test('CI items are keyed by the HEAD, so a new commit starts a fresh round', () => {
+  const atHead = ciFeedback(snapshot({ ciState: 'failing', headSha: 'sha-1' }), [])
+  assert.deepEqual(atHead.map((item) => item.id), ['ci:sha-1'])
+  // Already sent for this commit: not again.
+  assert.deepEqual(ciFeedback(snapshot({ ciState: 'failing', headSha: 'sha-1' }), ['ci:sha-1']), [])
+  // A new commit: a new item, because the failure may be a different one.
+  assert.deepEqual(ciFeedback(snapshot({ ciState: 'failing', headSha: 'sha-2' }), ['ci:sha-1']).map((i) => i.id), ['ci:sha-2'])
+})
+
+test('a CI failure and a conflict on one commit are separate items', () => {
+  const items = ciFeedback(snapshot({ ciState: 'failing', mergeable: 'CONFLICTING' }), [])
+  assert.deepEqual(items.map((item) => item.kind).sort(), ['ci_failed', 'merge_conflict'])
+})
+
+test('the check message attributes the failure to the CHECK, not to a person', () => {
+  // "A person requested changes" would be a lie, and the worker might act on it
+  // differently -- looking for a reviewer rather than for the failing job.
+  const worker = normalizeWorker({ id: 'w', issueId: 'i', sessionId: 's', branch: 'b', worktreePath: '/p', workspaceId: 'ws', phase: WorkerPhase.implementing, phaseHistory: [], lastSignalAt: 1, createdAt: 1, updatedAt: 1 })
+  const text = renderFeedback(worker, ciFeedback(snapshot({ ciState: 'failing' }), []), 'pr/7')
+  assert.match(text, /The checks is failing:/)
+  assert.ok(!/person requested/.test(text), text)
+})
+
+test('the routing honours autoInjectCI, and holds nothing when it is off', async () => {
+  const { store, deps, sent } = await feedbackFixture()
+  const snap = snapshot({ ciState: 'failing' })
+
+  await routeHumanFeedback({ ...deps, config: normalizePluginConfig({ autoInjectCI: false }) }, normalizeWorker(await store.workers.get('w')), snap)
+  assert.equal(sent.length, 0, 'off means off')
+
+  const outcome = await routeHumanFeedback({ ...deps, config: normalizePluginConfig({ autoInjectCI: true }) }, normalizeWorker(await store.workers.get('w')), snap)
+  assert.equal(outcome.routed, 1, 'and on means on')
+  assert.equal(sent.length, 1)
 })

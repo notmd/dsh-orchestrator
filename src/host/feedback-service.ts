@@ -52,10 +52,10 @@ export interface FeedbackOutcome {
   capped?: boolean
 }
 
-/** One piece of human feedback worth acting on. */
+/** One piece of feedback worth acting on, whatever its source. */
 interface Actionable {
   id: string
-  kind: 'changes_requested' | 'comment'
+  kind: 'changes_requested' | 'comment' | 'ci_failed' | 'merge_conflict'
   author: string
   body: string
 }
@@ -92,15 +92,66 @@ export function actionableFeedback(snapshot: PrSnapshot, alreadyRouted: readonly
   return out
 }
 
+/**
+ * CI failures and merge conflicts, as routable items (R5-adjacent, M4).
+ *
+ * **This is what makes `autoInjectCI` real.** The flag was read ONLY by the board, so a
+ * card with failing checks displayed `Fixing CI failures` while nothing ever told the
+ * worker -- the board asserting an active loop that was not running, which is the
+ * failure mode the reducer's own divergence notes forbid.
+ *
+ * Keyed by the HEAD COMMIT, so a new commit naturally starts a fresh round of feedback
+ * and a repeat of the same failure on the same commit is not sent twice. The key also
+ * carries the kind, so a CI failure and a conflict on one commit are separate items.
+ */
+export function ciFeedback(snapshot: PrSnapshot, alreadyRouted: readonly string[]): Actionable[] {
+  const routed = new Set(alreadyRouted)
+  const head = snapshot.headSha ?? ''
+  if (head === '') return []
+  const out: Actionable[] = []
+
+  if (snapshot.ciState === 'failing') {
+    const id = `ci:${head}`
+    if (!routed.has(id)) {
+      out.push({
+        id,
+        kind: 'ci_failed',
+        author: 'checks',
+        body: 'Continuous integration is failing on this commit. Read the failing job output, fix it, and push.',
+      })
+    }
+  }
+  // `CONFLICTING` is the provider's own word; `DIRTY` is the merge-state equivalent, and
+  // either means the branch no longer applies cleanly.
+  if (snapshot.mergeable === 'CONFLICTING' || snapshot.mergeStateStatus === 'DIRTY') {
+    const id = `conflict:${head}`
+    if (!routed.has(id)) {
+      out.push({
+        id,
+        kind: 'merge_conflict',
+        author: 'git',
+        body:
+          'This branch no longer applies cleanly to its base. Rebase or merge the base in, resolve the ' +
+          'conflicts, and push.',
+      })
+    }
+  }
+  return out
+}
+
 /** The message that tells the worker what a person asked for. */
 export function renderFeedback(worker: Worker, items: readonly Actionable[], prUrl: string): string {
-  const lines = [
-    `A person requested changes on ${worker.branch} (${prUrl}).`,
-    '',
-  ]
+  const lines = [`Changes are needed on ${worker.branch} (${prUrl}).`, '']
   for (const item of items) {
-    const label = item.kind === 'changes_requested' ? 'requested changes' : 'commented'
-    lines.push(`${item.author} ${label}:`)
+    // A person's feedback is attributed to them; a check failure is attributed to the
+    // check, because "a person requested changes" would be a lie the worker might act on
+    // differently.
+    const label =
+      item.kind === 'changes_requested' ? 'requested changes'
+      : item.kind === 'comment' ? 'commented'
+      : item.kind === 'ci_failed' ? 'is failing'
+      : 'does not apply cleanly'
+    lines.push(item.kind === 'changes_requested' || item.kind === 'comment' ? `${item.author} ${label}:` : `The ${item.author} ${label}:`)
     lines.push(item.body.trim() === '' ? '  (no comment body)' : item.body.trim())
     lines.push('')
   }
@@ -130,7 +181,12 @@ export async function routeHumanFeedback(
   const routedIds = prior && prior.headSha === headSha ? prior.routedIds : []
   const nudgedAtHead = prior && prior.headSha === headSha ? prior.nudgedAtHead : 0
 
-  const items = actionableFeedback(snapshot, routedIds)
+  // `autoInjectCI` gates the check-driven items, which is what makes the flag real
+  // rather than a board-only annotation.
+  const items = [
+    ...actionableFeedback(snapshot, routedIds),
+    ...(deps.config.autoInjectCI ? ciFeedback(snapshot, routedIds) : []),
+  ]
   if (items.length === 0) {
     return { workerId: worker.id, routed: 0, reason: 'nothing-new' }
   }
