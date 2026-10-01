@@ -120,11 +120,28 @@ preset inside `app.asar`).
 ### 4a. CLI — `dsh plugin`
 
 ```bash
-dsh plugin --profile web add /absolute/path/to/package-dir
+cd /Users/notmd/dev/game/dsh-orchestrator
+npm run build                                        # REQUIRED: the package is TypeScript
+dsh plugin --profile web add "$PWD"
 ```
 
 `--profile <name>` is **required** (without it: `error: required option '--profile
-<name>' not specified`). This is the CLI counterpart of `install_bundle`.
+<name>' not specified`). This is the CLI counterpart of `install_bundle`, and it
+does **both** steps the tool would: it adds the package as a dependency **and**
+appends the bundle to `dsh.profile.bundles` in the profile manifest. No
+hand-editing of the profile is needed.
+
+**`npm run build` is not optional.** `exports["."]` points at `./dist/index.js`, so
+installing without building links a package whose entry does not exist. Remove with
+`dsh plugin --profile web remove @local/dsh-orchestrator`.
+
+Verify the install in three cheap steps, in increasing strength:
+
+```bash
+dsh --profile web --dump-config | grep -A2 'dsh-orchestrator'   # composed into the loader tree
+dsh --profile web --port 0 --no-open --host 127.0.0.1           # boots with no activation error
+# then: GUI -> Settings -> Plugins -> the row appears under "Installed"
+```
 
 ### 4b. GUI — the Plugins page
 
