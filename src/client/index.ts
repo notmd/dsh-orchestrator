@@ -76,15 +76,77 @@ interface BoardSnapshot {
 }
 
 /** The lane order the board renders, and the labels it uses. */
-const LANES: ReadonlyArray<{ key: string; label: string }> = [
-  { key: 'building', label: 'Building' },
-  { key: 'validating', label: 'Validating' },
-  { key: 'needs_review', label: 'In review' },
-  { key: 'ready', label: 'Ready' },
+const LANES: ReadonlyArray<{ key: string; labelKey: string }> = [
+  { key: 'building', labelKey: 'orchestrator.lane.building' },
+  { key: 'validating', labelKey: 'orchestrator.lane.validating' },
+  { key: 'needs_review', labelKey: 'orchestrator.lane.needs_review' },
+  { key: 'ready', labelKey: 'orchestrator.lane.ready' },
 ]
 
 /** The endpoint this panel reads. The client's only coupling to the host. */
 const BOARD_PATH = '/dsho/api/board'
+
+/**
+ * The English fallback, keyed by the locale namespace.
+ *
+ * Mirrors `locale/en.json`, and a test asserts the two agree -- so a string cannot be
+ * edited in one place and not the other. It is a FALLBACK, not the source: the
+ * platform's translate surface is consulted first when it is present.
+ *
+ * `module: none` forbids importing `en.json`, hence a duplicated table plus a test
+ * rather than a build step.
+ */
+const FALLBACK: Record<string, string> = {
+  'orchestrator.title': 'Orchestrator',
+  'orchestrator.board.workers': '{count} worker(s)',
+  'orchestrator.board.needsAttention': '{count} needing attention',
+  'orchestrator.board.loading': 'Loading the board...',
+  'orchestrator.board.unavailable': 'The board is unavailable: {message}',
+  'orchestrator.board.empty': 'No workers yet. Create an issue in a session to start one.',
+  'orchestrator.lane.building': 'Building',
+  'orchestrator.lane.validating': 'Validating',
+  'orchestrator.lane.needs_review': 'In review',
+  'orchestrator.lane.ready': 'Ready',
+  'orchestrator.lane.empty': 'Nothing here.',
+  'orchestrator.archive': '{count} archived session(s), not a lane.',
+  'orchestrator.card.details': 'Details for {title}',
+  'orchestrator.card.reviewRound': 'auto review round {round}/{max}',
+  'orchestrator.card.automationStopped': 'automation stopped: {reason}',
+  'orchestrator.inspector.noReview': 'No automated review has run at this commit.',
+  'orchestrator.inspector.noFindings': 'No findings recorded for this commit.',
+  'orchestrator.inspector.review': 'review {id}',
+  'orchestrator.inspector.close': 'Close',
+}
+
+type Translate = (key: string, params?: Record<string, string | number>) => string
+
+/**
+ * Substitutes `{name}` placeholders. A missing value leaves the placeholder VISIBLE,
+ * which is how a missing key gets noticed rather than rendering a silent hole.
+ */
+function fill(template: string, params?: Record<string, string | number>): string {
+  if (!params) return template
+  return template.replace(new RegExp('[{]([A-Za-z0-9_]+)[}]', 'g'), (whole: string, name: string) =>
+    params[name] === undefined ? whole : String(params[name]),
+  )
+}
+
+/**
+ * The translate function.
+ *
+ * The platform's surface is consulted first, duck-typed rather than imported
+ * (`module: none` forbids imports, and the panel must load when the locale service is
+ * absent). Without it the English fallback applies, so a missing locale degrades to
+ * English rather than to raw keys.
+ */
+function makeTranslate(locale: unknown): Translate {
+  const surface = locale as { t?: Translate } | undefined
+  return (key, params) => {
+    const translated = typeof surface?.t === 'function' ? surface.t(key, params) : undefined
+    if (typeof translated === 'string' && translated.length > 0) return translated
+    return fill(FALLBACK[key] ?? key, params)
+  }
+}
 
 /** How often the board refreshes, since the stream is unverified. */
 const POLL_MS = 5_000
@@ -110,6 +172,10 @@ loader.load({
       useEffect: (effect: () => void | (() => void), deps?: unknown[]) => void
     }
     const h = React.createElement
+
+    // ONE binding the components close over, assigned in `apply` when the locale is
+    // known. Threading `t` through every component is what broke the first attempt.
+    let translate: Translate = makeTranslate(undefined)
 
     /**
      * The panel's styles, applied inline.
@@ -216,7 +282,7 @@ loader.load({
             style,
             'data-worker': card.id,
             'data-column': card.column,
-            'aria-label': `Details for ${card.title}`,
+            'aria-label': translate('orchestrator.card.details', { title: card.title }),
             onClick: () => props.onOpen(card.id),
           },
           h(
@@ -231,10 +297,10 @@ loader.load({
           // The round is on the card face while the loop runs, so the BOUND is visible
           // rather than arriving as a surprise when it trips.
           review && review.verdict !== 'approved'
-            ? h('span', { style: S.tabular }, `auto review round ${review.round}/${review.maxRounds}`)
+            ? h('span', { style: S.tabular }, translate('orchestrator.card.reviewRound', { round: review.round, max: review.maxRounds }))
             : null,
           card.escalationReason
-            ? h('span', { style: S.cardReason }, `automation stopped: ${card.escalationReason}`)
+            ? h('span', { style: S.cardReason }, translate('orchestrator.card.automationStopped', { reason: card.escalationReason }))
             : null,
         ),
       )
@@ -254,7 +320,7 @@ loader.load({
       const findings = review?.findings ?? []
       return h(
         'aside',
-        { style: S.inspector, 'aria-label': `Details for ${card.title}` },
+        { style: S.inspector, 'aria-label': translate('orchestrator.card.details', { title: card.title }) },
         h(
           'div',
           { style: S.inspectorHead },
@@ -268,10 +334,10 @@ loader.load({
             ? `auto review round ${review.round}/${review.maxRounds}` +
               (review.verdict ? ` \u00b7 ${review.verdict}` : '') +
               (review.githubReviewId ? ` \u00b7 review ${review.githubReviewId}` : '')
-            : 'No automated review has run at this commit.',
+            : translate('orchestrator.inspector.noReview'),
         ),
         findings.length === 0
-          ? h('p', { style: S.note }, 'No findings recorded for this commit.')
+          ? h('p', { style: S.note }, translate('orchestrator.inspector.noFindings'))
           : h(
               'ul',
               { style: S.list },
@@ -288,22 +354,22 @@ loader.load({
                 ),
               ),
             ),
-        h('button', { type: 'button', onClick: props.onClose }, 'Close'),
+        h('button', { type: 'button', onClick: props.onClose }, translate('orchestrator.inspector.close')),
       )
     }
 
-    function Lane(props: { lane: { key: string; label: string }; cards: CardView[]; onOpen: (id: string) => void }) {
+    function Lane(props: { lane: { key: string; labelKey: string }; cards: CardView[]; onOpen: (id: string) => void }) {
       return h(
         'section',
-        { style: S.lane, 'data-lane': props.lane.key, 'aria-label': props.lane.label },
+        { style: S.lane, 'data-lane': props.lane.key, 'aria-label': translate(props.lane.labelKey) },
         h(
           'h3',
           { style: S.laneTitle },
-          props.lane.label,
+          translate(props.lane.labelKey),
           h('span', { style: S.laneCount }, ` ${props.cards.length}`),
         ),
         props.cards.length === 0
-          ? h('p', { style: S.laneEmpty }, 'Nothing here.')
+          ? h('p', { style: S.laneEmpty }, translate('orchestrator.lane.empty'))
           : h(
               'ul',
               { style: S.list },
@@ -344,19 +410,19 @@ loader.load({
       const header = h(
         'header',
         { className: 'dsho-header' },
-        h('h2', { style: S.title }, 'Orchestrator'),
+        h('h2', { style: S.title }, translate('orchestrator.title')),
         view.kind === 'ready'
           ? h(
               'p',
               { style: S.meta },
-              `${view.board.counts.total} worker(s)`,
+              translate('orchestrator.board.workers', { count: view.board.counts.total }),
               view.board.counts.needsAttention > 0 ? ` · ${view.board.counts.needsAttention} needing attention` : '',
             )
           : null,
       )
 
       if (view.kind === 'loading') {
-        return h('div', { style: S.panel }, header, h('p', { style: S.note }, 'Loading the board\u2026'))
+        return h('div', { style: S.panel }, header, h('p', { style: S.note }, translate('orchestrator.board.loading')))
       }
       if (view.kind === 'error') {
         // A real state, not a blank panel: "the plugin is broken" and "there are no
@@ -365,7 +431,7 @@ loader.load({
           'div',
           { style: S.panel },
           header,
-          h('p', { style: S.errorNote, role: 'status' }, `The board is unavailable: ${view.message}`),
+          h('p', { style: S.errorNote, role: 'status' }, translate('orchestrator.board.unavailable', { message: view.message })),
         )
       }
 
@@ -375,7 +441,7 @@ loader.load({
         { style: S.panel },
         header,
         board.counts.total === 0
-          ? h('p', { style: S.note }, 'No workers yet. Create an issue in a session to start one.')
+          ? h('p', { style: S.note }, translate('orchestrator.board.empty'))
           : h(
               'div',
               { style: S.lanes },
@@ -417,12 +483,15 @@ loader.load({
       // `slots` is the only thing this half needs; the endpoint needs no service.
       inject: ['slots'],
       apply(ctx: {
+        locale?: unknown
         slots: {
           inject: (owner: string, callback: () => unknown) => () => void
           register: (options: Record<string, unknown>, component: unknown) => () => void
         }
         effect: (callback: () => (() => void) | void, label?: string) => () => void
       }) {
+        // Assigned once, here, where the locale is known.
+        translate = makeTranslate(ctx.locale)
         ctx.effect(() => {
           const disposers: Array<() => void> = []
           // The same id addresses both seats: the panellist row selects the panel

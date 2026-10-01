@@ -81,3 +81,41 @@ test('a translation actually differs from English, or it is not a translation', 
     `zh is still English for ${identical.length} keys: ${identical.slice(0, 4).join(', ')}`,
   )
 })
+
+
+test("the client's fallback table agrees with en.json", () => {
+  // The client cannot import en.json (`module: none` makes it a classic script), so it
+  // carries a duplicated table. This is the guard that makes the duplication safe: a
+  // string edited in one place and not the other fails here rather than silently
+  // showing English to a Chinese user.
+  const source = readFileSync(new URL('../src/client/index.ts', import.meta.url), 'utf8')
+  const table = source.slice(source.indexOf('const FALLBACK: Record<string, string> = {'), source.indexOf('function fill('))
+  const entries = [...table.matchAll(/'([^']+)':\s*'((?:[^'\\]|\\.)*)'/g)]
+  assert.ok(entries.length > 10, `parsed ${entries.length} fallback entries`)
+
+  const fallback: Record<string, string> = {}
+  for (const [, key, value] of entries) fallback[key!] = value!.replace(/\\u2026/g, '\u2026')
+  const en = dict('en')
+
+  // The separator characters differ deliberately (the client uses ASCII for the
+  // loading ellipsis and the archive dash, since the source is a plain script); so the
+  // comparison is on the KEY SET and on the placeholder shape, not on punctuation.
+  // A SUBSET, not an equality: `en.json` also holds the panellist label, which is
+  // passed to the slot registration and never goes through `translate`. Every key the
+  // client DOES translate must exist in the dictionary, and vice versa is not required.
+  const missing = Object.keys(fallback).filter((key) => !(key in en))
+  assert.deepEqual(missing, [], 'every client string exists in en.json')
+  assert.ok(Object.keys(en).length >= Object.keys(fallback).length, 'and the dictionary is not behind')
+  for (const [key, value] of Object.entries(fallback)) {
+    assert.deepEqual(placeholders(value), placeholders(en[key]!), `${key} placeholders`)
+  }
+})
+
+test('the client does not import its dictionary, because it cannot', () => {
+  // A regression guard for the shape, not the content: `module: none` means the client
+  // is a classic script, and an `import` or `export` in it silently changes the emitted
+  // bundle from a script into a module -- which the loader then fails to find.
+  const source = readFileSync(new URL('../src/client/index.ts', import.meta.url), 'utf8')
+  const moduleStatements = source.split('\n').filter((line) => /^(import|export)\s/.test(line))
+  assert.deepEqual(moduleStatements, [], 'the client must stay a script')
+})
