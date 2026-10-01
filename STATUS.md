@@ -9,9 +9,9 @@ bloated status file costs the next agent more than it saves.
 |---|---|
 | **Goal** | Implement [PRD.md](PRD.md) |
 | **Plan source** | [PRD.md §16 Milestones](PRD.md#16-milestones), verified against [docs/dsh-plugin-contract.md](docs/dsh-plugin-contract.md) |
-| **Last updated** | 2026-10-01, chunk 6e (command seam) |
+| **Last updated** | 2026-10-01, chunk 6f (GitHub credential chain + argv) |
 | **Verify** | `npm run verify` → typecheck (src) + `node --test` + build · **all three green** |
-| **Current state** | **The plugin installs and activates in DSH; the spawn, worktree, and command layers exist and are verified — worktrees against real git.** 444 tests pass; `tsc` reports **0 errors across `src/` and `test/`**; `npm run build` emits `dist/`. M0 spike 1 is done (panel seat proven) and the host entry is live with one real tool. The services behind it (issue store, spawner, observer, routes) and the whole client half are still to come. |
+| **Current state** | **The plugin installs and activates in DSH; the spawn, worktree, command, and GitHub-access layers exist and are verified — worktrees against real git.** 474 tests pass; `tsc` reports **0 errors across `src/` and `test/`**; `npm run build` emits `dist/`. M0 spike 1 is done (panel seat proven) and the host entry is live with one real tool. The services behind it (issue store, spawner, observer, routes) and the whole client half are still to come. |
 
 ---
 
@@ -94,19 +94,60 @@ Chunk numbers are this file's own; milestone letters are the PRD's.
 
 | Chunk | Work | PRD | Why now |
 |---|---|---|---|
+| 6g | **`orchestrator_repo_connect`** — now unblocked on both sides, and the first tool to register beyond `orchestrator_config`: preflight (`rev-parse --is-inside-work-tree`, `.dsho/` ignored, `gh auth status`, `gh repo view`), then return the `Repo` record. Blocked only on where the record is persisted, so it ships with either a minimal store or as a read-back until the store lands. | §12.1, R3, R4 | It is the gate every other tool depends on: nothing can be spawned until a repo is connected. |
 | 6f | **`orchestrator_repo_connect`** — now unblocked: the gate every other tool depends on. Register a local checkout, verify it is a git work tree, warn when `.dsho/` is not ignored (R4), preflight `gh auth` (R3), and read repo identity. It needs the `Repo` store (or returns the record for a later store), plus the `gh` argv builders and the token-precedence chain (`AO_GITHUB_TOKEN` → `GITHUB_TOKEN` → `gh auth token`, memoised, invalidated on 401/403). | §12.1, R3, R4 | It is the gate every other tool depends on: nothing can be spawned until a repo is connected. |
 | 6e | **`orchestrator_repo_connect`** — the first tool backed by real code now that git exists: register a local checkout, verify it is a git work tree, warn when `.dsho/` is not ignored (R4), and preflight `gh auth` (R3). Needs the `ctx.shell` adapter (`resolve` → `execute` → `run.result()`) that supplies the `RunCommand` seam. | §12.1, R3, R4 | The gate every other tool depends on: nothing can be spawned until a repo is connected. |
 | 7 | **Client half**: `src/client/**/*.ts` → `dist/client.js` in the `window.__ModuleLoader__` **classic-script** form, plus the `sidebar.panellist` row and the `main` keyed panel, lanes/cards/inspector, themes, locale, keyboard access. | §11, M2 | Needs the routes from chunk 6. |
 | 8 | **M0 spikes 2–4**: `ctx.agents.create()` outside `dsh-webhook`; `attachSession` against a worktree; a `/dsho/api/*` route + SSE from a slot component. | §16 | Spike 1 is done; these are the remaining unknowns. |
 | 9 | **Feedback classification** (actionability, bot detection by `__typename`/`User.Type` never a login substring, per-comment dedup, re-arm only on a definitive clear) and the **report outbox** (§10.5, A23). | §10.3, §10.5 | M4's logic, testable offline. Can be interleaved with 6. |
 
-**Recommended next step: chunk 6f — `orchestrator_repo_connect`.** The exec seam
-landed this round, so the gate every other tool depends on is now unblocked: it
-needs the `gh` argv builders, the token-precedence chain, and the repo preflight,
-all three of which sit directly on top of code that already exists and is tested.
-Two smaller things stay queued: confirm the admitted prompt actually produces a
-turn (the residual in spike 2), and settle whether the preset lease should be
-released by the caller or owned by the worker's context.
+**Recommended next step: chunk 6g — `orchestrator_repo_connect`.** It is the gate
+every other tool depends on, and both sides are now in place and tested: the git
+preflight (worktree module, real git) and the GitHub preflight (`gh auth status`,
+`gh repo view`, credential chain). What remains is deciding where the `Repo` record
+lives — which is the storage question the issue store also needs, so the next chunk
+should settle `ctx.storageDomain` once rather than twice. Two smaller things stay
+queued: confirm the admitted prompt actually produces a turn (the residual in spike
+2), and settle whether the preset lease should be released by the caller or owned by
+the worker's context.
+
+### ✅ Chunk 6f — the GitHub credential chain and `gh`/`git` argv
+
+Two pure modules, both named in the PRD's test plan.
+
+[`src/github/auth.ts`](src/github/auth.ts) is the local-path credential chain,
+ported from AO `backend/internal/adapters/scm/github/auth.go`:
+**`AO_GITHUB_TOKEN` → `GITHUB_TOKEN` → `gh auth token`**, memoised for five
+minutes, dropped on an auth-class failure. No GitHub App, no OAuth, no PAT store
+(PRD §5.3) — it reuses the credential the developer already has.
+
+Three details are load-bearing and each has a test:
+
+| Detail | Why it matters |
+|---|---|
+| A project-scoped variable **wins** over the global default | otherwise a per-repo credential could never be used |
+| `gh auth token` is **memoised, and the memo is droppable** | without the drop, a rotated token is never picked up until the process restarts, and every later call keeps failing with the credential the user already replaced |
+| A **blank** `gh auth token` is `NoTokenError`, not `""` | `gh` prints nothing when logged out; an empty `Authorization` header produces a 401 that reads as "your token is wrong" when the truth is "you have no token" |
+| `NoTokenError` vs any other error | "not configured" and "configuration is broken" need different messages, so a no-token source is skipped and a real error is only surfaced if nothing later succeeds |
+
+[`src/github/argv.ts`](src/github/argv.ts) builds and asserts every `gh`/`git`
+invocation. Four decisions were made deliberately:
+
+- **`gh pr view --json`, not GraphQL.** AO reads PRs through `gh api graphql` with a
+  typed field selection; the PRD prescribes `gh pr view --json` (§7.4). The field
+  list is the union of what §7.4 names and what the reducer actually reads — no
+  more, because every extra field is more response to parse and more chance a
+  truncation matters.
+- **`--repo` is always explicit.** A worker's worktree shares `.git/config` with
+  the human checkout, so which repository a worker belongs to must be the plugin's
+  decision, not whatever remote happens to be configured.
+- **A review is always `event=COMMENT`.** R17 is a hard provider constraint: the
+  reviewer acts from the PR author's account, and GitHub rejects `APPROVE` and
+  `REQUEST_CHANGES` on your own PR. Passing the verdict as an event would 422 every
+  PR, so the test asserts that neither string appears in the argv.
+- **`pushArgv` has no `--force` parameter at all.** The PRD's authority rule is
+  that the plugin never force-pushes; making it unreachable is stronger than
+  making it conditional.
 
 ### ✅ Chunk 6e — the command seam (the exec layer under everything)
 
