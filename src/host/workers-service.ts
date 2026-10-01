@@ -22,7 +22,7 @@
  */
 
 import { newId } from '../domain/ids.ts'
-import { IssueState, assignWorker, normalizeIssue } from '../domain/issues.ts'
+import { IssueState, assignWorker, normalizeIssue, releaseWorker } from '../domain/issues.ts'
 import type { Issue } from '../domain/issues.ts'
 import { WorkerPhase, normalizeWorker, workerSessionTitle } from '../domain/workers.ts'
 import type { Worker } from '../domain/workers.ts'
@@ -280,6 +280,16 @@ export async function messageWorkerForTool(
  * Cancels the **turn**, not the session: PRD §12.1 says "cancel a worker's active
  * turn", and A9 says unloading leaves sessions intact. Terminating a session is the
  * user's act, not a tool call.
+ *
+ * It also **releases the issue back to the queue**, which is the part that is easy to
+ * forget and expensive to omit: without it the issue stays `in_progress` with a live
+ * `workerId`, so nothing can re-work it and its worktree is never collected --- a
+ * stranded worker, which is what the earlier version of this function produced.
+ *
+ * The worktree is deliberately **kept**. Stopping a turn is not abandoning the work:
+ * the branch and any uncommitted changes are still the worker's, and re-working the
+ * issue reuses the same path (worktree creation is idempotent for a canonical path).
+ * Collection belongs to release --- `done`, `cancelled`, or a merged pull request.
  */
 export async function stopWorkerForTool(
   deps: WorkerToolDeps,
@@ -292,6 +302,38 @@ export async function stopWorkerForTool(
   // `{ kind: 'user' }` exactly: only the `hook` cause carries a reason, so a
   // reason here would be an invented field. The caller's text is echoed instead.
   live.handle.agent.cancel?.({ kind: 'user' })
+
+  // Release the issue so the work is not stranded. A failure here is reported
+  // rather than thrown: the turn was already cancelled, and pretending the stop
+  // did not happen would invite a second stop that cancels nothing.
+  let released = ''
+  try {
+    const store = await deps.store.get()
+    const stored = await store.workers.get(args.workerId)
+    if (stored === undefined) {
+      released = 'No worker record was found, so no issue was released.'
+    } else {
+      const worker = normalizeWorker(stored)
+      const issueStored = await store.issues.get(worker.issueId)
+      if (issueStored === undefined) {
+        released = `Its issue ${worker.issueId} is missing, so nothing was released.`
+      } else {
+        const issue = normalizeIssue(issueStored)
+        await store.issues.put(issue.id, releaseWorker(issue, 'requeue'))
+        released =
+          `${issue.id} is back in the queue as \`open\`, free for another worker. ` +
+          `Its worktree at ${worker.worktreePath} was kept: stopping a turn is not abandoning the work.`
+      }
+    }
+  } catch (error) {
+    released = `The issue could not be released: ${error instanceof Error ? error.message : String(error)}`
+  }
+  deps.live?.forget(args.workerId)
+
   const why = args.reason && args.reason.trim() !== '' ? ` (${args.reason.trim()})` : ''
-  return `Stopped ${args.workerId}'s active turn${why}. Its session is untouched.`
+  return [
+    `Stopped ${args.workerId}'s active turn${why}. Its session is untouched.`,
+    '',
+    released,
+  ].join('\n')
 }

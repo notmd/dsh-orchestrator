@@ -97,6 +97,10 @@ test('forget drops one reference and touches nothing else', () => {
 
 async function workerDeps(live = createLiveWorkers()) {
   const store = createMemoryFactStore()
+  await store.issues.put('iss-1', {
+    id: 'iss-1', number: 1, repoId: 'repo-1', title: 'Task', state: 'in_progress',
+    workerId: 'wrk-1', createdAt: 1, updatedAt: 1,
+  })
   await store.workers.put('wrk-1', {
     id: 'wrk-1',
     issueId: 'iss-1',
@@ -179,4 +183,51 @@ test('stop cancels the turn with the real cause shape and leaves the session', a
 test('stop with no live handle says there is no turn to stop', async () => {
   const deps = await workerDeps()
   assert.match(await stopWorkerForTool(deps as never, { workerId: 'wrk-1' }), /no turn to stop/)
+})
+
+
+test('stopping releases the issue, so the work is not stranded', async () => {
+  // Without this the issue stays in_progress with a live workerId: nothing can
+  // re-work it and its worktree is never collected. That is what the earlier version
+  // of this tool produced, and it is the failure the release closes.
+  const live = createLiveWorkers()
+  live.register({ workerId: 'wrk-1', sessionId: 'dsho-wrk-1', handle: fakeHandle().handle })
+  const deps = await workerDeps(live)
+
+  const text = await stopWorkerForTool(deps as never, { workerId: 'wrk-1', reason: 'superseded' })
+  assert.match(text, /back in the queue as `open`/)
+  assert.match(text, /worktree at \/p was kept/)
+
+  const issue = (await deps.raw.issues.get('iss-1')) as { state: string; workerId?: string }
+  assert.equal(issue.state, 'open', 'free for another worker')
+  assert.equal(issue.workerId, undefined, 'and no longer bound to the stopped one')
+  assert.equal(live.byWorker('wrk-1'), undefined, 'the handle is forgotten')
+})
+
+test('stopping keeps the worktree, because stopping is not abandoning', async () => {
+  // The branch and any uncommitted changes are still the worker\'s, and re-working
+  // the issue reuses the same canonical path. Collection belongs to release -- done,
+  // cancelled, or a merged pull request.
+  const live = createLiveWorkers()
+  live.register({ workerId: 'wrk-1', sessionId: 'dsho-wrk-1', handle: fakeHandle().handle })
+  const deps = await workerDeps(live)
+  const text = await stopWorkerForTool(deps as never, { workerId: 'wrk-1' })
+  assert.match(text, /was kept/)
+  assert.ok(!/removed/i.test(text), 'nothing was removed')
+})
+
+test('a stop whose release fails still reports the stop', async () => {
+  // The turn was already cancelled. Pretending the stop did not happen would invite a
+  // second stop that cancels nothing.
+  const live = createLiveWorkers()
+  const handle = fakeHandle()
+  live.register({ workerId: 'wrk-1', sessionId: 'dsho-wrk-1', handle: handle.handle })
+  const deps = await workerDeps(live)
+  const broken = { ...deps, store: lazyFactStore(async () => { throw new Error('backend offline') }) } as never
+
+  const text = await stopWorkerForTool(broken, { workerId: 'wrk-1' })
+  assert.match(text, /Stopped wrk-1's active turn/)
+  assert.match(text, /could not be released/)
+  assert.match(text, /backend offline/)
+  assert.deepEqual(handle.cancels, [{ kind: 'user' }], 'the turn was still cancelled')
 })
