@@ -23,6 +23,7 @@
  * | `orchestrator_config` | **shipped** | — |
  * | `orchestrator_repo_connect` | **shipped** | — |
  * | `orchestrator_issue_create` / `_list` / `_update` | **shipped** | — |
+ * | `orchestrator_worker_start` | **shipped** | — |
  * | `orchestrator_worker_start` / `_message` / `_stop` / `_attach_pr` | next | wiring the spawner into a tool |
  * | `orchestrator_board` | next | the issue + worker stores |
  * | `orchestrator_pr_sync` | next | the PR observer |
@@ -37,6 +38,8 @@ import { defineTool } from './tool.ts'
 import type { ToolDescriptor } from './tool.ts'
 import { connectRepo, describeRepoConnect } from './repo.ts'
 import { createIssueForTool, listIssuesForTool, updateIssueForTool } from './issues-service.ts'
+import { startWorkerForTool } from './workers-service.ts'
+import type { SpawnDeps } from './spawn.ts'
 import { IssuePriority, IssueState } from '../domain/issues.ts'
 import type { Repo } from './repo.ts'
 import type { LazyFactStore } from './store.ts'
@@ -70,8 +73,10 @@ export function buildOrchestratorTools(options: {
   run: RunCommand
   /** Opened on first use, so activation stays synchronous. */
   store: LazyFactStore
+  /** The spawn recipe's dependencies, bound to the real services. */
+  spawn: SpawnDeps
 }): Array<ToolDescriptor<never, unknown>> {
-  const { config, run, store } = options
+  const { config, run, store, spawn } = options
   const tools: Array<ToolDescriptor<never, unknown>> = [
     defineTool({
       name: 'orchestrator_config',
@@ -169,6 +174,22 @@ export function buildOrchestratorTools(options: {
       },
       outputType: 'string',
       execute: async (args) => updateIssueForTool({ store }, args as never),
+    }) as ToolDescriptor<never, unknown>,
+
+    defineTool({
+      name: 'orchestrator_worker_start',
+      description:
+        'Start a worker on an issue: creates its own git worktree and branch, spawns a DSH ' +
+        'session in it with the worker contract, and binds the two together. Pass an `issueId`, ' +
+        'or a `title` for an ad-hoc task. One issue has one worker at a time.',
+      parameters: {
+        issueId: { type: 'string', description: 'The issue to work, e.g. iss-01J8ZQ….' },
+        title: { type: 'string', description: 'For an ad-hoc task: what needs doing, in one line.' },
+        description: { type: 'string', description: 'For an ad-hoc task: the full description.' },
+        repoId: { type: 'string', description: 'For an ad-hoc task: which connected repository.' },
+      },
+      outputType: 'string',
+      execute: async (args) => startWorkerForTool({ run, store, spawn, config }, args as never),
     }) as ToolDescriptor<never, unknown>,
   ]
   return tools

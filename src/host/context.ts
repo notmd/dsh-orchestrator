@@ -17,6 +17,7 @@
 import type { ToolDescriptor } from './tool.ts'
 import type { SubprocessLike } from './exec.ts'
 import type { DomainFacilityLike } from './store.ts'
+import type { SpawnServices } from './spawn-deps.ts'
 
 /** The tool registry, as far as this plugin is concerned. */
 export interface ToolRegistryLike {
@@ -37,7 +38,7 @@ export interface ToolRegistryLike {
  * that registers outside `effect` leaks on unload, which is why the rule is
  * stated at the type level here.
  */
-export interface HostContext {
+export interface HostContext extends SpawnServices {
   tools: ToolRegistryLike
   /**
    * The subprocess capability seam, for git and `gh`.

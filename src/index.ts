@@ -31,6 +31,7 @@ import type { HostContext } from './host/context.ts'
 import { own } from './host/context.ts'
 import { buildOrchestratorTools } from './host/tools.ts'
 import { createRunCommand } from './host/exec.ts'
+import { createSpawnDeps } from './host/spawn-deps.ts'
 import { lazyFactStore, openFactStore } from './host/store.ts'
 import { FACT_SCHEMAS } from './host/schemas.ts'
 
@@ -51,7 +52,17 @@ export const name = 'dsh-orchestrator'
  * worker spawner and the board routes. Declaring them now would keep the plugin
  * inactive in a profile that has no use for the board yet.
  */
-export const inject = ['tools', 'subprocess', 'storageDomain']
+export const inject = [
+  'tools',
+  'subprocess',
+  'storageDomain',
+  // The spawn recipe's five, exactly as dsh-webhook uses them.
+  'agents',
+  'agentPresets',
+  'permissionPresets',
+  'workspaceRegistry',
+  'sessionTitle',
+]
 
 /**
  * Activates the plugin.
@@ -74,12 +85,13 @@ export function apply(ctx: HostContext, config?: PluginConfigInput): PluginConfi
   // act on it, rather than at load time where it would disable the plugin.
   const run = createRunCommand({ subprocess: ctx.subprocess, cwd: resolved.defaultRepo || process.cwd() })
   const store = lazyFactStore(() => openFactStore({ facility: ctx.storageDomain, schemas: FACT_SCHEMAS }))
+  const spawn = createSpawnDeps(ctx)
 
   own(
     ctx,
     () => {
       const disposers: Array<() => void> = []
-      const tools = buildOrchestratorTools({ config: resolved, run, store })
+      const tools = buildOrchestratorTools({ config: resolved, run, store, spawn })
       for (const tool of tools) {
         disposers.push(ctx.tools.register(tool as never))
       }

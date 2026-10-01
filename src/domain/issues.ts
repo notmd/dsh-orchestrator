@@ -60,6 +60,15 @@ export interface GithubIssueRef {
 /** One queue entry. */
 export interface Issue {
   id: string
+  /**
+   * The per-repository issue number.
+   *
+   * Load-bearing, not cosmetic: it is the `#<n>` in the worker session title (A2)
+   * and the `issue-<n>` segment of the branch (PRD §7.3). `0` means "not yet
+   * numbered", which is what a record written before this field reads as — the
+   * normalizer's Go zero value doing its job.
+   */
+  number: number
   repoId: string
   title: string
   body: string
@@ -103,6 +112,7 @@ export function normalizeIssue(raw: unknown): Issue {
   const record = (typeof raw === 'object' && raw !== null ? raw : {}) as Partial<Issue>
   const issue: Issue = {
     id: typeof record.id === 'string' ? record.id : '',
+    number: typeof record.number === 'number' && Number.isInteger(record.number) ? record.number : 0,
     repoId: typeof record.repoId === 'string' ? record.repoId : '',
     title: typeof record.title === 'string' ? record.title : '',
     body: typeof record.body === 'string' ? record.body : '',
@@ -183,6 +193,8 @@ export function normalizeLabels(labels: readonly string[] | undefined): string[]
 export function createIssue(
   input: {
     repoId: string
+    /** The per-repo sequence number. Assigned by the caller from the store. */
+    number: number
     title: string
     body?: string
     priority?: IssuePriority
@@ -196,6 +208,7 @@ export function createIssue(
   const now = context.now ?? Date.now()
   const issue: Issue = {
     id: context.id ?? newId('iss', now),
+    number: Number.isInteger(input.number) && input.number > 0 ? input.number : 0,
     repoId: input.repoId.trim(),
     title: assertTitle(input.title),
     body: input.body ?? '',
@@ -303,6 +316,21 @@ export function releaseWorker(issue: Issue, outcome: 'done' | 'cancelled' | 'req
   return next
 }
 
+/**
+ * The next issue number for a repository.
+ *
+ * `max + 1` rather than "count + 1": a cancelled issue keeps its number, so two
+ * issues can never share the `#3` in a session title or a branch name.
+ */
+export function nextIssueNumber(existing: readonly Issue[], repoId: string): number {
+  let max = 0
+  for (const issue of existing) {
+    if (issue.repoId !== repoId) continue
+    if (issue.number > max) max = issue.number
+  }
+  return max + 1
+}
+
 /** Queue order: priority first, then oldest first so nothing starves. */
 export function byQueueOrder(left: Issue, right: Issue): number {
   const rank = PRIORITY_ORDER.indexOf(left.priority) - PRIORITY_ORDER.indexOf(right.priority)
@@ -316,7 +344,8 @@ export function describeIssue(issue: Issue, detailed = false): string {
   const worker = issue.workerId ? ` worker=${issue.workerId}` : ''
   const github = issue.githubIssue ? ` github=#${issue.githubIssue.number}` : ''
   const labels = issue.labels.length > 0 ? ` [${issue.labels.join(', ')}]` : ''
-  const head = `${issue.id}  ${issue.state}  ${issue.priority}${worker}${github}${labels}  ${issue.title}`
+  const label = issue.number > 0 ? `#${issue.number}` : '(unnumbered)'
+  const head = `${label} ${issue.id}  ${issue.state}  ${issue.priority}${worker}${github}${labels}  ${issue.title}`
   if (!detailed) return head
   return [
     head,

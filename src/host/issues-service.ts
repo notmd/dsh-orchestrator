@@ -23,6 +23,7 @@ import {
   byQueueOrder,
   createIssue,
   describeIssue,
+  nextIssueNumber,
   normalizeIssue,
   updateIssue,
 } from '../domain/issues.ts'
@@ -113,11 +114,15 @@ export async function createIssueForTool(
   const resolved = await resolveRepoId(store, args.repoId)
   if ('message' in resolved) return resolved.message
 
+  const existing = await loadIssues(store)
   let issue: Issue
   try {
     issue = createIssue(
       {
         repoId: resolved.repoId,
+        // `max + 1`, so a cancelled issue keeps its number and two issues can never
+        // share the `#3` in a session title or a branch.
+        number: nextIssueNumber(existing, resolved.repoId),
         title: args.title,
         body: args.body ?? '',
         ...(args.priority ? { priority: args.priority } : {}),

@@ -25,6 +25,7 @@ import { compileParameters, defineTool } from '../../src/host/tool.ts'
 import type { HostContext } from '../../src/host/context.ts'
 import type { ToolDescriptor } from '../../src/host/tool.ts'
 import { createMemoryFactStore, lazyFactStore } from '../../src/host/store.ts'
+import { createSpawnDeps } from '../../src/host/spawn-deps.ts'
 import type { CommandResult, RunCommand } from '../../src/host/worktree.ts'
 
 /** A `ctx` that records what was registered and honours `effect` disposal. */
@@ -49,6 +50,33 @@ function fakeContext(): HostContext & {
       async open() {
         throw new Error('the activation tests do not open the domain')
       },
+    },
+    // The spawn recipe's five services. Stubs: these activation tests never spawn.
+    agents: {
+      async create() {
+        throw new Error('the activation tests do not spawn')
+      },
+    },
+    agentPresets: {
+      async resolve() {
+        return { id: 'standard' }
+      },
+      async acquireScope() {
+        return { dispose() {} }
+      },
+      async mount() {},
+    },
+    permissionPresets: {
+      resolve: () => undefined,
+      set() {},
+    },
+    workspaceRegistry: {
+      async create() {
+        throw new Error('the activation tests do not spawn')
+      },
+    },
+    sessionTitle: {
+      rename() {},
     },
     tools: {
       register(tool) {
@@ -85,13 +113,25 @@ test('the plugin declares the services it cannot function without', () => {
   // activate and fail at the first tool call. `storageDomain` is the facility
   // itself, which is the direct ctx key -- `ctx.storage.domain` is the same object
   // reached through the form hub.
-  assert.deepEqual([...inject], ['tools', 'subprocess', 'storageDomain'])
+  assert.deepEqual([...inject], [
+    'tools',
+    'subprocess',
+    'storageDomain',
+    // The spawn recipe's five, exactly as dsh-webhook uses them. Verified
+    // satisfiable in the web profile: dsh-base enables storage, storage-json,
+    // storage-domain, dsh-subprocess-local, and the agent/workspace services.
+    'agents',
+    'agentPresets',
+    'permissionPresets',
+    'workspaceRegistry',
+    'sessionTitle',
+  ])
 })
 
 test('apply registers the orchestrator tools and returns the resolved config', () => {
   const ctx = fakeContext()
   const config = apply(ctx, {})
-  assert.equal(ctx.registered.length, 5)
+  assert.equal(ctx.registered.length, 6)
   assert.equal(ctx.registered[0]!.name, 'orchestrator_config')
   assert.equal(ctx.registered[1]!.name, 'orchestrator_repo_connect')
   assert.equal(config.autoReview, true, 'the requested flow is on by default')
@@ -101,7 +141,7 @@ test('apply owns every registration through ctx.effect, so unload disposes it', 
   const ctx = fakeContext()
   apply(ctx, {})
   assert.deepEqual(ctx.effects, ['dsh-orchestrator: orchestrator tools'])
-  assert.equal(ctx.registered.length, 5)
+  assert.equal(ctx.registered.length, 6)
   ctx.disposeAll()
   assert.deepEqual(ctx.registered, [], 'the tool is removed on disposal')
 })
@@ -158,6 +198,7 @@ test('the tool table stays in step with the tools actually built', () => {
     config: apply(fakeContext(), {}),
     run: (async () => ({ exitCode: 0, stdout: '', stderr: '' })) as RunCommand,
     store: lazyFactStore(async () => createMemoryFactStore()),
+    spawn: createSpawnDeps(fakeContext()),
   })
   const names = tools.map((tool) => tool.name)
   assert.deepEqual(names, [
@@ -166,6 +207,7 @@ test('the tool table stays in step with the tools actually built', () => {
     'orchestrator_issue_create',
     'orchestrator_issue_list',
     'orchestrator_issue_update',
+    'orchestrator_worker_start',
   ])
   // Every registered tool must carry a real schema, because the registry feeds it
   // to the model: a tool with empty `parameters` and no schema would be rejected
@@ -538,4 +580,262 @@ test('issue tools report a storage failure instead of pretending to work', async
     assert.match(text, /could not open its storage/)
     assert.match(text, /backend offline/)
   }
+})
+
+// ---------------------------------------------------------------------------
+// orchestrator_worker_start
+// ---------------------------------------------------------------------------
+
+import { startWorkerForTool } from '../../src/host/workers-service.ts'
+import type { SpawnDeps } from '../../src/host/spawn.ts'
+
+/** A git that answers the worktree calls, recording argv. */
+function worktreeGit(): { run: RunCommand; readonly calls: string[][]; setAddFails(e: Error): void } {
+  const calls: string[][] = []
+  let addError: Error | undefined
+  // Stateful, because git is: `worktree add` changes what `worktree list` reports.
+  // A fake that always reported an empty list would make `remove` a silent no-op
+  // and hide a missing cleanup -- which is exactly what it did the first time.
+  const existing = new Map<string, string>()
+  const run: RunCommand = async (argv) => {
+    calls.push([...argv])
+    const joined = argv.join(' ')
+    if (joined.startsWith('git worktree list')) {
+      const stdout = [...existing]
+        .map(([path, branch]) => `worktree ${path}\nHEAD ${'0'.repeat(40)}\nbranch refs/heads/${branch}\n`)
+        .join('\n')
+      return { exitCode: 0, stdout, stderr: '' }
+    }
+    if (joined.startsWith('git show-ref')) return { exitCode: 1, stdout: '', stderr: '' }
+    if (joined.startsWith('git worktree add')) {
+      if (addError) return { exitCode: 1, stdout: '', stderr: addError.message }
+      const withBranch = argv[3] === '-b'
+      const path = withBranch ? argv[5]! : argv[3]!
+      existing.set(path, withBranch ? argv[4]! : argv[4]!)
+      return { exitCode: 0, stdout: '', stderr: '' }
+    }
+    if (joined.startsWith('git worktree remove')) {
+      existing.delete(argv[argv.length - 1]!)
+      return { exitCode: 0, stdout: '', stderr: '' }
+    }
+    return { exitCode: 0, stdout: '', stderr: '' }
+  }
+  return {
+    run,
+    get calls() {
+      return calls
+    },
+    setAddFails(error) {
+      addError = error
+    },
+  }
+}
+
+/** A spawn recipe that records its request and returns a handle, or throws. */
+function fakeSpawn(): {
+  deps: SpawnDeps
+  /** Recorded on create: the identity and the cwd the session was actually given. */
+  readonly requests: Array<{ sessionId: string; worktreePath: string }>
+  /** Recorded on rename: the session title. */
+  readonly titles: string[]
+  /** Recorded on followup: the admitted messages. */
+  readonly prompted: Array<{ content: Array<{ text: string }> }>
+  /** The admitted prompt as one string. */
+  prompt(index?: number): string
+  setFails(e: Error): void
+} {
+  const requests: Array<{ sessionId: string; worktreePath: string }> = []
+  const titles: string[] = []
+  const prompted: Array<{ content: Array<{ text: string }> }> = []
+  let failure: Error | undefined
+  const deps: SpawnDeps = {
+    permissionPresets: { resolve: () => undefined, set() {} },
+    agentPresets: {
+      async resolve() {
+        return { id: 'standard' }
+      },
+      async acquireScope() {
+        return { dispose() {} }
+      },
+      async mount() {},
+    },
+    workspaceRegistry: {
+      async create(path) {
+        return { path, async attachSession() {} }
+      },
+    },
+    sessionTitle: {
+      rename(_session, title) {
+        titles.push(title)
+      },
+    },
+    agents: {
+      async create(options) {
+        if (failure) throw failure
+        // The recipe calls create with `meta.cwd`, so this is what the session was
+        // actually pointed at -- the property under test, not the hoped-for path.
+        requests.push({ sessionId: options.sessionId, worktreePath: options.meta.cwd })
+        const handle = {
+          agent: {
+            session: { id: options.sessionId },
+            followup(message: { content: Array<{ text: string }> }) {
+              prompted.push(message)
+            },
+          },
+          async dispose() {},
+        }
+        return handle
+      },
+    },
+    userMessage: (text) => ({ content: [{ type: 'text', text }], source: { kind: 'user' } }),
+  }
+  return {
+    deps,
+    requests,
+    titles,
+    prompted,
+    prompt(index = 0) {
+      return prompted[index]?.content.map((block) => block.text).join('\n') ?? ''
+    },
+    setFails(error) {
+      failure = error
+    },
+  }
+}
+
+async function workerDeps() {
+  const store = createMemoryFactStore()
+  await store.repos.put('repo-1', {
+    id: 'repo-1',
+    rootPath: '/repos/r1',
+    defaultBranch: 'main',
+    verifyCommands: ['pnpm test'],
+  })
+  const git = worktreeGit()
+  const spawn = fakeSpawn()
+  const lazy = lazyFactStore(async () => store)
+  const deps = {
+    store: lazy,
+    run: git.run,
+    spawn: spawn.deps,
+    config: apply(fakeContext(), {}),
+  }
+  const created = await createIssueForTool({ store: lazy }, { title: 'Fix the flaky auth test' })
+  const issueId = /Created (\S+)/.exec(created)![1]!
+  return { deps, store, git, spawn, issueId }
+}
+
+test('worker_start: creates a worktree, spawns a session, binds the two', async () => {
+  const { deps, store, git, spawn, issueId } = await workerDeps()
+  const text = await startWorkerForTool(deps, { issueId })
+
+  assert.match(text, /Started wrk-/)
+  assert.match(text, new RegExp(`on ${issueId}`))
+  // A2: the session is titled `#<n> <title>`.
+  assert.match(text, /title:\s+#1 Fix the flaky auth test/)
+  // PRD 7.3: the branch carries the issue number and a slug of the title.
+  assert.match(text, /dsho\/issue-1-fix-the-flaky-auth-test/)
+
+  // The worktree was created before the session, because the session's cwd must
+  // point at it.
+  const addIndex = git.calls.findIndex((argv) => argv.includes('worktree') && argv.includes('add'))
+  assert.ok(addIndex >= 0, 'worktree add was called')
+  assert.equal(spawn.requests.length, 1)
+  assert.deepEqual(spawn.titles, ['#1 Fix the flaky auth test'])
+  // The session was pointed at the worktree that was just created -- the whole
+  // reason the worktree comes first.
+  assert.equal(
+    spawn.requests[0]!.worktreePath,
+    '/repos/r1/.dsho/worktrees/issue-1-fix-the-flaky-auth-test',
+  )
+  // The contract is in the admitted prompt, not only in a system section.
+  assert.match(spawn.prompt(), /You are an implementation worker/)
+  assert.match(spawn.prompt(), /Issue context \(untrusted\)/)
+  assert.equal(spawn.prompted.length, 1, 'the worker was woken exactly once')
+
+  const worker = (await store.workers.list())[0] as { issueId: string; phase: string; branch: string }
+  assert.equal(worker.issueId, issueId)
+  assert.equal(worker.phase, 'queued')
+  assert.equal(worker.branch, 'dsho/issue-1-fix-the-flaky-auth-test')
+  const issue = (await store.issues.get(issueId)) as { workerId?: string; state: string }
+  assert.ok(issue.workerId, 'the issue records its worker')
+  assert.equal(issue.state, 'in_progress')
+})
+
+test('worker_start: one issue has one worker at a time', async () => {
+  const { deps, issueId } = await workerDeps()
+  await startWorkerForTool(deps, { issueId })
+  const second = await startWorkerForTool(deps, { issueId })
+  assert.match(second, /already worked by/)
+  assert.match(second, /one issue has one worker at a time/)
+})
+
+test('worker_start: a finished or cancelled issue is refused', async () => {
+  const { deps, store, issueId } = await workerDeps()
+  await updateIssueForTool({ store: deps.store }, { id: issueId, state: 'cancelled' })
+  const text = await startWorkerForTool(deps, { issueId })
+  assert.match(text, /is cancelled, so there is nothing to work/)
+})
+
+test('worker_start: an ad-hoc title creates the issue first, so there is one path after', async () => {
+  const { deps, store } = await workerDeps()
+  const text = await startWorkerForTool(deps, { title: 'Investigate the flaky test', description: 'It fails 1 in 5.' })
+  assert.match(text, /Started wrk-/)
+  assert.match(text, /title:\s+#2 Investigate the flaky test/)
+  const issues = await store.issues.list()
+  assert.equal(issues.length, 2, 'the issue was created and then worked')
+})
+
+test('worker_start: neither an issueId nor a title says what to pass', async () => {
+  const { deps } = await workerDeps()
+  assert.match(await startWorkerForTool(deps, {}), /either an `issueId` to work, or a `title`/)
+})
+
+test('worker_start: an unknown issue lists what exists', async () => {
+  const { deps, issueId } = await workerDeps()
+  const text = await startWorkerForTool(deps, { issueId: 'iss-nope' })
+  assert.match(text, /No issue with id/)
+  assert.match(text, new RegExp(issueId))
+})
+
+test('worker_start: an issue whose repository is not connected is refused', async () => {
+  const { deps, store, issueId } = await workerDeps()
+  await store.repos.delete('repo-1')
+  assert.match(await startWorkerForTool(deps, { issueId }), /is not connected/)
+})
+
+test('worker_start: a failed spawn removes the worktree it just made', async () => {
+  // Without this, every failed spawn strands a full working tree, and R4's disk
+  // bound is only enforced by cleanup that never runs.
+  const { deps, store, git, spawn, issueId } = await workerDeps()
+  spawn.setFails(new Error('model unavailable'))
+  const text = await startWorkerForTool(deps, { issueId })
+
+  assert.match(text, /Could not start a worker/)
+  assert.match(text, /model unavailable/)
+  assert.match(text, /was removed, so nothing was left behind/)
+  assert.ok(
+    git.calls.some((argv) => argv.includes('remove') && argv.includes('--force')),
+    'the worktree was force-removed',
+  )
+  assert.deepEqual(await store.workers.list(), [], 'no worker was recorded')
+  assert.equal(
+    ((await store.issues.get(issueId)) as { workerId?: string }).workerId,
+    undefined,
+    'the issue was not bound',
+  )
+})
+
+test('worker_start: a failed worktree creation never reaches the spawn', async () => {
+  const { deps, git, spawn, issueId } = await workerDeps()
+  git.setAddFails(new Error('fatal: invalid reference'))
+  const text = await startWorkerForTool(deps, { issueId })
+  assert.match(text, /Could not create a worktree/)
+  assert.equal(spawn.requests.length, 0, 'no session was created')
+})
+
+test('worker_start: verify commands reach the worker', async () => {
+  const { deps, spawn, issueId } = await workerDeps()
+  await startWorkerForTool(deps, { issueId })
+  assert.match(spawn.prompt(), /pnpm test/)
 })
