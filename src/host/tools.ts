@@ -26,6 +26,7 @@
  * | `orchestrator_worker_start` | **shipped** | — |
  * | `orchestrator_report` (worker-side) | **shipped** | — |
  * | `orchestrator_worker_message` / `_stop` | **shipped** | — |
+ * | `orchestrator_review_verdict` / `_review_failed` (reviewer-side) | **shipped** | — |
  * | `orchestrator_worker_start` / `_message` / `_stop` / `_attach_pr` | next | wiring the spawner into a tool |
  * | `orchestrator_board` | next | the issue + worker stores |
  * | `orchestrator_pr_sync` | next | the PR observer |
@@ -43,6 +44,7 @@ import { createIssueForTool, listIssuesForTool, updateIssueForTool } from './iss
 import { messageWorkerForTool, startWorkerForTool, stopWorkerForTool } from './workers-service.ts'
 import type { LiveWorkers } from './handle-registry.ts'
 import { reportForTool } from './reports-service.ts'
+import { reportReviewFailure, submitVerdict } from './reviewer-service.ts'
 import { OutputKind, ReportState } from '../domain/reports.ts'
 import type { SpawnDeps } from './spawn.ts'
 import { IssuePriority, IssueState } from '../domain/issues.ts'
@@ -270,6 +272,53 @@ export function buildOrchestratorTools(options: {
       outputType: 'string',
       execute: async (args) =>
         stopWorkerForTool({ run, store, spawn, config, ...(live ? { live } : {}) }, args as never),
+    }) as ToolDescriptor<never, unknown>,
+
+    defineTool({
+      name: 'orchestrator_review_verdict',
+      description:
+        'Submit the machine verdict for the commit you reviewed. This is the ONLY thing that moves the ' +
+        'board — prose is ignored, however clear it is. The commit is pinned by the plugin: a verdict ' +
+        'naming another commit is rejected.',
+      parameters: {
+        verdict: {
+          type: 'string',
+          required: true,
+          enum: ['approved', 'changes_requested'],
+          description: 'approved | changes_requested.',
+        },
+        summary: { type: 'string', description: 'One paragraph of rationale.' },
+        findings: {
+          type: 'array',
+          description: 'One entry per finding. Prefer a few high-confidence findings over nitpicks.',
+          items: {
+            type: 'object',
+            properties: {
+              severity: { type: 'string', required: true, description: 'high | medium | low.' },
+              path: { type: 'string', description: 'File the finding is on.' },
+              line: { type: 'number', description: 'Line number.' },
+              summary: { type: 'string', required: true, description: 'One line.' },
+              detail: { type: 'string', required: true, description: 'What is wrong and why it matters.' },
+            },
+          },
+        },
+        githubReviewId: { type: 'string', description: 'The id of the PR review you posted.' },
+        headSha: { type: 'string', description: 'The commit you reviewed. Must match the pinned one.' },
+      },
+      outputType: 'string',
+      execute: async (args, exec) =>
+        submitVerdict({ store, spawn, config, ...(live ? { live } : {}) }, args as never, exec?.agent?.session?.id),
+    }) as ToolDescriptor<never, unknown>,
+
+    defineTool({
+      name: 'orchestrator_review_failed',
+      description:
+        'Report that you could not complete the review. The pass is retried (up to a limit per commit) ' +
+        'rather than hanging the loop.',
+      parameters: { reason: { type: 'string', description: 'Why the review could not be completed.' } },
+      outputType: 'string',
+      execute: async (args, exec) =>
+        reportReviewFailure({ store, spawn, config, ...(live ? { live } : {}) }, args as never, exec?.agent?.session?.id),
     }) as ToolDescriptor<never, unknown>,
   ]
   return tools

@@ -9,9 +9,9 @@ bloated status file costs the next agent more than it saves.
 |---|---|
 | **Goal** | Implement [PRD.md](PRD.md) |
 | **Plan source** | [PRD.md §16 Milestones](PRD.md#16-milestones), verified against [docs/dsh-plugin-contract.md](docs/dsh-plugin-contract.md) |
-| **Last updated** | 2026-10-01, chunk 6n (the PR observer) |
+| **Last updated** | 2026-10-01, chunk 6o (the auto-review pass) |
 | **Verify** | `npm run verify` → `tsc` (src + test) + `node --test` + build · **all green** |
-| **Current state** | **612 tests, 0 type errors. Nine tools, the control-room loop closed, and the PR observer polling on its own tick.** A card can now move out of `Building` on real provider facts. The board's read model, configuration, the host plane's low-level layers (spawn, worktree, exec, GitHub access), **persistence, and the repository preflight** are done and verified — worktrees against real git, activation in a real GUI. **The storage question is settled** (see decisions 20–21). Still missing: `/dsho/api/*` + `/dsho/events`, the entire client half, the auto-review loop's plumbing, restricting `orchestrator_report` to worker sessions, and worktree cleanup on archive. The next step is 6o. |
+| **Current state** | **628 tests, 0 type errors. Eleven tools. The auto-review pass exists end to end:** a PR head gets a read-only reviewer session pinned to that commit, the verdict is head-checked, and findings are routed back to the worker. **The requested feature's loop is now implementable — it is not yet driven by a tick.** The board's read model, configuration, the host plane's low-level layers (spawn, worktree, exec, GitHub access), **persistence, and the repository preflight** are done and verified — worktrees against real git, activation in a real GUI. **The storage question is settled** (see decisions 20–21). Still missing: **a tick that actually calls `startReviewPass`** (the pieces exist, nothing schedules them yet), `/dsho/api/*` + `/dsho/events`, the client half, restricting the protocol tools to their session kinds, and worktree cleanup on archive. The next step is 6p. |
 
 ---
 
@@ -42,6 +42,7 @@ everything else inherits.
 | 6d | **The worktree manager** — branch naming, `.dsho/worktrees`, add/remove/list, porcelain parsing, `check-ignore` preflight | 28 unit + **12 real-git subtests** |
 | 6e | **The command seam** — argv over `ctx.subprocess`, bounded in time and output, failure classification | 33 tests |
 | 6f | **GitHub credential chain** (`AO_GITHUB_TOKEN` → `GITHUB_TOKEN` → `gh auth token`) and every `gh`/`git` argv | 30 tests |
+| 6o | **The auto-review pass.** The reviewer contract (PRD §12.5, with "prefer a few high-confidence findings over nitpicks" quoted because that line is what stops every PR hitting the round cap), the read-only reviewer session in the worker's **own worktree**, the pinned-head `ReviewRun`, the head-checked verdict, finding routing, and the failed-pass retry budget | 16 tests |
 | 6n | **The PR observer.** The `PrSnapshot` record and the `gh pr view --json` parser, plus the per-repository serialised poll. R13's invariant is the substance: a failed observation writes `fetched: false` **with the prior facts**, so even a caller that ignores the flag cannot see a fabricated `CLOSED` | 18 tests |
 | 6m | **The outbox delivers.** A tick calls `planDelivery` and delivers each batch into the session that created the issue, via `ctx.agents.get()` — reached through the registry, not an owned handle, because the plugin does not own the user's session. Claim-before-send, with the claim released on failure | 9 tests |
 | 6l | **Worker control.** `orchestrator_worker_message` / `_stop` over a **live handle registry** — the in-process cache of `AgentHandle`s that `spawnWorker` returns and `worker_start` used to discard | 9 tests |
@@ -136,6 +137,13 @@ canonicalization: **a fake cannot catch a wrong API, because it implements whate
 interface the author imagined.** The tests were green throughout — which is why the
 fix was verified against reality rather than against another fake.
 
+**A verdict is bound to a commit, and the plugin pins it.** The reviewer does not
+choose which commit it judged: the pass records the pinned `headSha` on the
+`ReviewRun`, and a verdict naming anything else is **rejected** (A16). Without it, a
+worker pushing mid-review could have its *old* head's approval applied to its *new*
+one — the exact race head-scoped runs exist to prevent. A rejected verdict leaves the
+run `running` so the pass can still complete correctly.
+
 **The dangerous failure is data that looks like a state change, not absent data.**
 An empty PR payload reads as `CLOSED` to the reducer — and a closed PR archives a
 live worker. So a failed observation writes `fetched: false` **carrying the prior
@@ -204,6 +212,7 @@ happened. Read the log after the session closes, or watch the GUI.
 | Chunk | Work | PRD | Why now |
 |---|---|---|---|
 | 6g\.2 | **Wire `orchestrator_repo_connect` as a tool.** The preflight and the store both exist and are tested; what is missing is the wiring. It needs `inject` to gain `subprocess` and `storage`, and **`apply()` to become async** (opening the store is async), which is why it is its own step rather than a footnote — that change also touches the activation tests. | §12.1 | Makes the second real tool live, and proves the store against a real backend rather than a fake. |
+| 6p | **A tick that schedules review passes** — call `startReviewPass` for workers whose head has no current pass, so the loop turns without a human. Then `orchestrator_run_review` for the forced path. | §7.5, M3 | The pass is complete and tested but nothing schedules it, so no card ever enters `Validating`'s review loop.
 | 6o | **The reviewer spawner** — the auto-review pass (M3): spawn a `read-only` reviewer at the PR's exact head, `orchestrator_review_verdict` → `ReviewRun` → route findings to the worker → re-review on the new head. The loop's bounds and the stale-head rule are already written and tested (`src/review/`). | §7.5, M3 | This is the feature the request calls out, and every piece under it — spawn, outbox, observer, reducer — now exists. |
 | 6p | **Worktree cleanup on archive**, and `orchestrator_board` / `orchestrator_pr_sync` / `orchestrator_run_review`. | §9.3, §12.1 | R4's disk bound is only real if cleanup runs; the board tool is what the client will read. |
 | 6l2 | **Restrict `orchestrator_report` to worker sessions** via `ctx.tools.restrict()` on the worker agent's ctx (Appendix A3.5), so a non-worker never sees it. Today it is registered globally and *refuses* at runtime, which is functionally equivalent but not the same as not offering it. | §12.2, A3.5 | Cheap, and it is the difference between "cannot" and "must not". |
