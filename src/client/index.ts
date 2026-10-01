@@ -117,7 +117,7 @@ const FALLBACK: Record<string, string> = {
   'orchestrator.lane.needs_review': 'In review',
   'orchestrator.lane.ready': 'Ready',
   'orchestrator.lane.empty': 'Nothing here.',
-  'orchestrator.archive': '{count} archived session(s), not a lane.',
+  'orchestrator.archive.summary': 'Archived ({count})',
   'orchestrator.card.details': 'Details for {title}',
   'orchestrator.card.reviewRound': 'auto review round {round}/{max}',
   'orchestrator.card.automationStopped': 'automation stopped: {reason}',
@@ -352,7 +352,22 @@ loader.load({
 .dsho-empty__title { font-size: 0.9375rem; font-weight: 600; }
 .dsho-empty__body { max-width: 34rem; font-size: 0.8125rem; line-height: 1.5;
   color: var(--dsw-alias-label-primary-dimmed, inherit); }
-.dsho-archive { margin-top: 16px; font-size: 0.8125rem; color: var(--dsw-alias-label-primary-dimmed, inherit); }
+/* The reference keeps the archive as a collapsible panel rather than a line of text.
+   The details element gives that natively -- keyboard operable, no JS state, and the
+   browser announces it -- so the count is a summary you can open instead of a fact you
+   cannot act on.
+   NOTE: no backticks in these comments. This stylesheet is a template literal, so a
+   backtick in PROSE closes the string and the following words become code -- which is
+   exactly how the word "details" ended up parsed as an identifier. */
+.dsho-archive { flex: none; margin-top: 12px; font-size: 0.8125rem;
+  color: var(--dsw-alias-label-primary-dimmed, inherit); }
+.dsho-archive > summary { cursor: pointer; padding: 4px 0; font-weight: 600; }
+.dsho-archive > summary:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--dsw-alias-state-business-primary, #4c8dff);
+  border-radius: 4px; }
+.dsho-archive__list { max-height: 12rem; overflow-y: auto; margin-top: 8px; }
+.dsho-archive__row { display: flex; align-items: baseline; gap: 10px; padding: 4px 0;
+  border-top: 1px solid var(--dsw-alias-border-l1, rgba(127,127,127,0.16)); }
+.dsho-archive__row > .dsho-card__title { flex: 1; min-width: 0; font-weight: 500; }
 .dsho-btn { font: inherit; padding: 4px 10px; border-radius: 6px; cursor: pointer;
   border: 1px solid var(--dsw-alias-border-l2, rgba(127,127,127,0.24)); background: transparent; color: inherit; }
 .dsho-btn:hover { background: var(--dsw-alias-button-ghost-active-fill, rgba(127,127,127,0.2)); }
@@ -868,7 +883,24 @@ loader.load({
           return card ? h(Inspector, { card, onClose: () => setOpenId(undefined) }) : null
         })(),
         board.lenses.archive.length > 0
-          ? h('p', { className: 'dsho-archive' }, translate('orchestrator.archive', { count: board.lenses.archive.length }))
+          ? h(
+              'details',
+              { className: 'dsho-archive' },
+              h('summary', null, translate('orchestrator.archive.summary', { count: board.lenses.archive.length })),
+              h(
+                'ul',
+                { className: 'dsho-list dsho-archive__list' },
+                ...board.lenses.archive.map((card) =>
+                  h(
+                    'li',
+                    { key: card.id, className: 'dsho-archive__row' },
+                    h('span', { className: 'dsho-card__title', title: card.title }, card.title),
+                    h('span', { className: 'dsho-card__meta' }, card.displayStatus),
+                    h('span', { className: 'dsho-card__meta' }, formatAge(card.updatedAt, Date.now())),
+                  ),
+                ),
+              ),
+            )
           : null,
       )
     }

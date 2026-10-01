@@ -688,3 +688,79 @@ test('the presented card carries the reviewers through', () => {
     { name: 'alice', state: 'APPROVED' },
   ])
 })
+
+
+// ---------------------------------------------------------------------------
+// The archive column was UNREACHABLE
+// ---------------------------------------------------------------------------
+
+test('a finished worker reaches the ARCHIVE, which nothing could before', async () => {
+  // `isTerminated` short-circuits both derivations, and `buildCard` hardcoded it false --
+  // so the archive column and the Terminated/Merged statuses were structurally
+  // unreachable, and the board fetched `lenses.archive` every poll to render a count
+  // that was always 0.
+  const store = createMemoryFactStore()
+  await store.issues.put('iss-done', {
+    id: 'iss-done', number: 2, repoId: 'repo-1', title: 'Landed', state: 'done', workerId: 'wrk-done',
+    createdAt: 1, updatedAt: 1,
+  })
+  await store.workers.put('wrk-done', {
+    id: 'wrk-done', issueId: 'iss-done', sessionId: 's', branch: 'b', worktreePath: '/p', workspaceId: 'w',
+    phase: WorkerPhase.merged, phaseHistory: [], lastSignalAt: NOW - 1, createdAt: 1, updatedAt: 1,
+    pr: { number: 9, url: 'pr/9', headSha: 'sha-1' },
+  })
+  await store.prSnapshots.put('wrk-done', snapshot({ number: 9, url: 'pr/9', state: 'MERGED', headSha: 'sha-1' }))
+
+  const board = await buildBoard({
+    store: lazyFactStore(async () => store), config: CONFIG, now: () => NOW, activityOf: () => 'idle',
+  })
+  assert.equal(board.counts.byLane[KanbanColumn.archive] ?? 0, 0, 'the archive is not a lane')
+  assert.equal(board.lenses.archive.length, 1, 'but it now has content')
+  assert.equal(board.lenses.archive[0]!.column, KanbanColumn.archive)
+  // `Terminated`, not `Merged` -- and that is the ported contract's behaviour, not a bug
+  // I fixed here: the kanban derivation returns Terminated for ANY terminated session
+  // (kanban.ts:475), while only the STATUS derivation distinguishes merged from closed
+  // (status.ts:190). So the archive loses the landed/abandoned distinction that the
+  // status keeps. Recorded rather than changed, because the kanban rule is ported and
+  // tested, and A17's gating depends on it.
+  assert.equal(board.lenses.archive[0]!.displayStatus, DisplayStatus.terminated)
+  assert.equal(board.counts.total, 1, 'and it is still counted')
+})
+
+test('a worker that closed without merging ALSO reads Terminated', async () => {
+  const store = createMemoryFactStore()
+  await store.issues.put('iss-x', {
+    id: 'iss-x', number: 3, repoId: 'repo-1', title: 'Abandoned', state: 'cancelled', workerId: 'wrk-x',
+    createdAt: 1, updatedAt: 1,
+  })
+  await store.workers.put('wrk-x', {
+    id: 'wrk-x', issueId: 'iss-x', sessionId: 's', branch: 'b', worktreePath: '/p', workspaceId: 'w',
+    phase: WorkerPhase.closed, phaseHistory: [], lastSignalAt: NOW - 1, createdAt: 1, updatedAt: 1,
+  })
+  const board = await buildBoard({
+    store: lazyFactStore(async () => store), config: CONFIG, now: () => NOW, activityOf: () => 'idle',
+  })
+  assert.equal(board.lenses.archive[0]!.displayStatus, DisplayStatus.terminated)
+})
+
+test('an ACTIVE worker is not archived -- the fix did not archive everything', async () => {
+  // The risk of deriving a flag is over-applying it. A working, a blocked, and a
+  // merge-ready worker must all stay on the board.
+  const store = createMemoryFactStore()
+  const phases = [WorkerPhase.implementing, WorkerPhase.awaitingHuman, WorkerPhase.mergeReady] as const
+  for (const [index, phase] of phases.entries()) {
+    await store.issues.put(`iss-${index}`, {
+      id: `iss-${index}`, number: 10 + index, repoId: 'repo-1', title: `T${index}`, state: 'in_progress',
+      workerId: `wrk-${index}`, createdAt: 1, updatedAt: 1,
+    })
+    await store.workers.put(`wrk-${index}`, {
+      id: `wrk-${index}`, issueId: `iss-${index}`, sessionId: 's', branch: 'b', worktreePath: '/p',
+      workspaceId: 'w', phase, phaseHistory: [], lastSignalAt: NOW - 1, createdAt: 1, updatedAt: 1,
+    })
+  }
+  const board = await buildBoard({
+    store: lazyFactStore(async () => store), config: CONFIG, now: () => NOW, activityOf: () => 'idle',
+  })
+  assert.equal(board.lenses.archive.length, 0, 'none of these are finished')
+  assert.equal(board.counts.total, 3)
+})

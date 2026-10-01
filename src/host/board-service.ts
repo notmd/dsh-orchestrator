@@ -30,7 +30,7 @@ import { deriveStatus, prStatusFacts, sessionFacts } from '../contract/status.ts
 import { archiveSheet, groupIntoLanes, orderCards, presentCard } from '../board/presentation.ts'
 import type { BoardCard, BoardCardView } from '../board/presentation.ts'
 import { normalizeIssue } from '../domain/issues.ts'
-import { WorkerPhase, normalizeWorker, workerSessionTitle } from '../domain/workers.ts'
+import { WorkerPhase, isTerminalPhase, normalizeWorker, workerSessionTitle } from '../domain/workers.ts'
 import type { Worker } from '../domain/workers.ts'
 import { snapshotKey } from './observer-service.ts'
 import { changesRequestedCycles, summarizeReviewRuns } from '../review/runs.ts'
@@ -169,12 +169,20 @@ export function buildCard(options: {
   now: number
 }): BoardCard {
   const { worker, config } = options
+  // DERIVED, once, because hardcoding `false` made two documented behaviours
+  // unreachable. `session.isTerminated` short-circuits BOTH derivations -- kanban.ts:475
+  // sends the card to the `archive` column, status.ts:190 returns the `Terminated` or
+  // `Merged` status -- so with it always false the archive sheet was always empty and
+  // those two statuses could never be displayed. The board was fetching
+  // `lenses.archive` every poll and rendering a count that was always 0.
+  const terminated = isTerminalPhase(worker.phase)
+
   const session = sessionFacts({
     activity: options.activity,
     lastActivityAt: worker.lastSignalAt,
     hasSignal: worker.lastSignalAt > 0,
     signalExpected: true,
-    isTerminated: false,
+    isTerminated: terminated,
     autoReview: config.autoReview,
     autoInjectReview: config.autoInjectReview,
     autoInjectCI: config.autoInjectCI,
@@ -192,7 +200,7 @@ export function buildCard(options: {
     // worker exists, and inventing a `checking` phase here would suppress attention
     // for every card.
     activity: options.activity,
-    isTerminated: false,
+    isTerminated: terminated,
     lastActivityAt: worker.lastSignalAt,
     hasSignal: worker.lastSignalAt > 0,
     signalExpected: true,

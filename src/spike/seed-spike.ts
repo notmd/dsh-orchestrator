@@ -135,6 +135,26 @@ async function run(ctx: HostContext): Promise<void> {
         { severity: 'medium', path: 'src/auth/session.test.ts', summary: 'no test covers the retry path', detail: 'The flake it fixes is not asserted anywhere.' },
       ],
     })
+    // A SECOND, FINISHED worker, so the archive has content to render. Until the
+    // `isTerminated` fix the archive column was unreachable, so this could not have been
+    // seeded observably at all.
+    await store.issues.put('iss-seed-2', {
+      id: 'iss-seed-2', number: 8, repoId: 'repo-seed-1', title: 'Already landed',
+      state: 'done', createdAt: now, updatedAt: now,
+    })
+    await store.workers.put('wrk-seed-2', {
+      id: 'wrk-seed-2', issueId: 'iss-seed-2', sessionId: 'dsho-wrk-seed-2', branch: 'dsho/issue-8-landed',
+      worktreePath: `${REPO}/.dsho/worktrees/issue-8`, workspaceId: 'w', phase: 'merged',
+      phaseHistory: [], lastSignalAt: now, createdAt: now, updatedAt: now,
+      pr: { number: 127, url: 'https://github.com/acme/widgets/pull/127', headSha: 'sha-' + 'd'.repeat(12) },
+    })
+    await store.prSnapshots.put('wrk-seed-2', {
+      number: 127, url: 'https://github.com/acme/widgets/pull/127', state: 'MERGED', isDraft: false,
+      mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN', reviewDecision: '', ciState: 'passing',
+      headSha: 'sha-' + 'd'.repeat(12), headRefName: 'dsho/issue-8-landed', reviews: [], comments: [],
+      lastCommentId: '', updatedAt: new Date(now).toISOString(), observedAt: now, fetched: true,
+    })
+
     record('seeded', { workerId: 'wrk-seed-1', head: HEAD, config: normalizePluginConfig().maxReviewRounds })
     finish(true)
   } catch (error) {

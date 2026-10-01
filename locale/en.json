@@ -14,7 +14,7 @@
   "orchestrator.lane.needs_review": "In review",
   "orchestrator.lane.ready": "Ready",
   "orchestrator.lane.empty": "Nothing here.",
-  "orchestrator.archive": "{count} archived session(s) — not a lane.",
+  "orchestrator.archive.summary": "Archived ({count})",
   "orchestrator.card.details": "Details for {title}",
   "orchestrator.card.reviewRound": "auto review round {round}/{max}",
   "orchestrator.card.automationStopped": "automation stopped: {reason}",

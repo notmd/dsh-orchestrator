@@ -14,7 +14,7 @@
   "orchestrator.lane.needs_review": "待审查",
   "orchestrator.lane.ready": "可合并",
   "orchestrator.lane.empty": "暂无内容。",
-  "orchestrator.archive": "{count} 个已归档会话——不属于泳道。",
+  "orchestrator.archive.summary": "已归档 ({count})",
   "orchestrator.card.details": "{title} 的详情",
   "orchestrator.card.reviewRound": "自动审查第 {round}/{max} 轮",
   "orchestrator.card.automationStopped": "自动化已停止：{reason}",
