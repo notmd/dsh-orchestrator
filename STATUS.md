@@ -262,6 +262,10 @@ counted as done.
 **AUDIT THE SPEC AGAINST THE CODE, NOT AGAINST YOUR OWN NARRATION.** Recent rounds implied only A4 and §12.2 remained. Re-reading the milestones against `src/` found `maxConcurrentWorkers` **validated, displayed, and never enforced** — the plugin started unbounded workers — plus an absent human feedback loop (M4) and an empty `locale/` (M7). A long session drifts toward believing its own summaries; the spec does not drift.
 
 
+**A DIVERGENCE FROM 11.2, RECORDED RATHER THAN GLOSSED.** The PRD says clicking a card body opens the WORKER'S DSH SESSION -- "the real working room, not a plugin-drawn chat". The card click opens the inspector instead, which is a plugin-drawn detail view. The inspector earns its place (it is where a machine review becomes inspectable), but the working room is NOT one click away, and that is a real gap against the spec rather than a design preference.
+
+**AND CHECK BEFORE REMOVING: THE DEAD RULE WAS ALREADY GONE.** I went to delete two now-unused CSS classes and the edit reported the anchor missing -- because the earlier patch had already replaced them. A removal that reports nothing to remove is a correct outcome, not a failure to retry; the grep afterwards confirmed zero references.
+
 **THE ARCHIVE COLUMN WAS STRUCTURALLY UNREACHABLE.** `isTerminated` short-circuits BOTH the kanban and the status derivation, and `buildCard` hardcoded it false — so the archive sheet could never hold anything and `Terminated`/`Merged` could never be displayed. The board had been fetching `lenses.archive` every poll to render a count that was always 0. Derived now, with a test asserting that active workers STAY on the board, because the risk of deriving a flag is over-applying it. **Fifth instance of this session's shape: a behaviour configured or displayed with nothing that can make it true.**
 
 **AND PROSE PUNCTUATION IS CODE INSIDE A TEMPLATE LITERAL.** The stylesheet is one 100-line template literal; a backtick in a comment closed it and the following word was parsed as an identifier. Worth knowing before writing a comment in that block.

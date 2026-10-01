@@ -241,8 +241,18 @@ loader.load({
 .dsho-panel, .dsho-panel * { box-sizing: border-box; }
 .dsho-panel { height: 100%; display: flex; flex-direction: column; overflow: hidden;
   padding: var(--dsh-frame-top-clearance, 48px) 24px 24px; color: var(--dsw-alias-label-primary, inherit); }
-.dsho-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 16px; }
-.dsho-title { font-size: 1.125rem; font-weight: 600; margin: 0; }
+/* The reference's board topbar: a fixed-height row with an icon and a title, a flexible
+   spacer, and actions at the right, closed by a BOTTOM BORDER so the chrome and the board
+   are visibly different surfaces. It is flex-none, so it does not scroll away with the
+   cards -- the board scrolls beneath it.
+   It sits BELOW the frame clearance, which the panel keeps: a non-conversation main panel
+   must clear the window chrome or its first row lands under it. */
+.dsho-topbar { display: flex; align-items: center; gap: 10px; flex: none;
+  padding-bottom: 10px; margin-bottom: 12px;
+  border-bottom: 1px solid var(--dsw-alias-border-l2, rgba(127,127,127,0.24)); }
+.dsho-topbar__icon { flex: none; color: var(--dsw-alias-label-primary-dimmed, inherit); }
+.dsho-topbar__title { font-size: 1rem; font-weight: 600; margin: 0; }
+.dsho-topbar__spacer { flex: 1; min-width: 8px; }
 .dsho-sub { font-size: 0.8125rem; color: var(--dsw-alias-label-primary-dimmed, inherit); }
 .dsho-note { color: var(--dsw-alias-label-primary-dimmed, inherit); }
 .dsho-note--error { color: var(--dsw-alias-state-error-primary, #e5484d); font-weight: 500; }
@@ -806,8 +816,15 @@ loader.load({
       const style = h('style', null, CSS)
       const header = h(
         'header',
-        { className: 'dsho-head' },
-        h('h2', { className: 'dsho-title' }, translate('orchestrator.title')),
+        { className: 'dsho-topbar' },
+        h(
+          'svg',
+          { className: 'dsho-topbar__icon', width: 15, height: 15, viewBox: '0 0 16 16', 'aria-hidden': 'true' },
+          h('rect', { x: 1.5, y: 1.5, width: 13, height: 13, rx: 2, fill: 'none', stroke: 'currentColor', strokeWidth: 1.4 }),
+          h('path', { d: 'M6 1.5v13M10.5 1.5v13', fill: 'none', stroke: 'currentColor', strokeWidth: 1.4, opacity: 0.55 }),
+        ),
+        h('h2', { className: 'dsho-topbar__title' }, translate('orchestrator.title')),
+        h('span', { className: 'dsho-topbar__spacer' }),
         view.kind === 'ready'
           ? h(
               'p',
