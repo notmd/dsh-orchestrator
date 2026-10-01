@@ -39,13 +39,9 @@ flowchart LR
 
 **The review order is the point:** the plugin's own read-only reviewer passes over every PR head first and the worker iterates on its findings until that pass approves — *then* the card moves to `In review` and waits for you. A PR never reaches a human unreviewed, and never reaches `Ready` without a human approval.
 
-## Status
-
-Draft for review. No implementation has been written. The next step is the M0 spike list in [PRD.md §16](PRD.md#16-milestones) — four short spikes that de-risk the panel seat, the session spawn, the host↔client route, and PR observation.
+## Four findings that changed the design
 
 The design is grounded in a **local clone of AO's `main`** (`53ba1e8`), not just its documentation. Where prose and code disagreed, the code won — see [Appendix B §B15](docs/agent-orchestrator-reference.md) for the code-level findings and the list of verified constants.
-
-### Four findings that changed the design
 
 **Their local daemon has no webhook code at all.** `grep -ril webhook backend/` matches three `doc.go` files, each listing webhook ingestion as *out of scope*; no HMAC or `X-Hub-Signature-256` appears anywhere in `backend/`. Webhooks live only in their cloud — and even there a 30-second poller exists to recover when *"GitHub webhooks fail or remain silent."* So this design polls, with a webhook as an optional accelerator rather than the source of truth.
 
