@@ -315,3 +315,29 @@ test('agentOptions are passed only when the caller supplied them', async () => {
   await spawnWorker(h.deps, { ...REQUEST, agentOptions: { provider: 'deepseek' } })
   assert.deepEqual(seen, [undefined, { provider: 'deepseek' }])
 })
+
+
+// ---------------------------------------------------------------------------
+// hideWorktreeWorkspaces (R2)
+// ---------------------------------------------------------------------------
+
+test('R2: hiding a worker from the sidebar means SKIPPING THE ATTACH, not hiding it', async () => {
+  // The mechanism is what made this look unimplementable: the workspace registry offers no
+  // way to hide an entry (`create(path, title)`, `list()`), so a search for a hiding API
+  // finds nothing. The PRD is specific instead: "keeps worker workspaces out of the repo\'s
+  // session grouping by NOT ATTACHING them".
+  const hidden = harness()
+  const worker = await spawnWorker(hidden.deps, { ...REQUEST, hideFromWorkspace: true })
+  assert.ok(
+    !hidden.calls.includes('workspace.attachSession'),
+    `attachSession must be skipped, got: ${hidden.calls.join(', ')}`,
+  )
+  assert.equal(worker.worktreePath, REQUEST.worktreePath, 'the session still works in its worktree')
+  assert.ok(hidden.calls.includes('agents.create'), 'and the worker is still spawned')
+
+  // The default is attach, because the PRD names the cost: without it the worker has no
+  // DSH workspace grouping and the board is the only way to reach it.
+  const attached = harness()
+  await spawnWorker(attached.deps, REQUEST)
+  assert.ok(attached.calls.includes('workspace.attachSession'))
+})

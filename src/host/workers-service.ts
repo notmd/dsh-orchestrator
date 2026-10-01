@@ -213,6 +213,7 @@ export async function startWorkerForTool(
         draftPrs: deps.config.draftPrs,
         ...(deps.config.prBodyTemplate ? { prBodyTemplate: deps.config.prBodyTemplate } : {}),
       })}`,
+      hideFromWorkspace: deps.config.hideWorktreeWorkspaces,
       permissionPreset: deps.config.workerPermissionPreset,
       agentPreset: deps.config.workerAgentPreset,
     })

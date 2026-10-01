@@ -111,6 +111,8 @@ export interface SpawnRequest {
   sessionId: string
   /** Absolute path to the worker's own worktree. Its `cwd`, and its workspace. */
   worktreePath: string
+  /** Skip `attachSession`, so the worker stays out of the sidebar's grouping (R2). */
+  hideFromWorkspace?: boolean
   /** The session title, e.g. `#3 Fix the flaky auth test`. */
   title: string
   /** The admitted first message: the worker contract plus the task. */
@@ -184,7 +186,17 @@ export async function spawnWorker(deps: SpawnDeps, request: SpawnRequest): Promi
 
   // 6. Publish: attach, permission, title — in that order.
   try {
-    await workspace.attachSession(request.sessionId)
+    // `hideWorktreeWorkspaces` — and the mechanism is NOT hiding, which is why this was
+    // dead for so long. The PRD is specific: "keeps worker workspaces out of the repo's
+    // session grouping by NOT ATTACHING them". The workspace registry offers no way to
+    // hide an entry (`create(path, title)`, `list()`), so a search for a hiding API finds
+    // nothing; the setting is obeyed by omitting the ATTACH.
+    //
+    // The cost is named in the PRD and is the reason the default is `false`: the worker
+    // then has no DSH workspace grouping, so the board is the only way to reach it.
+    if (request.hideFromWorkspace !== true) {
+      await workspace.attachSession(request.sessionId)
+    }
   } catch (cause) {
     // A spawn that cannot publish must not leave a live agent behind. The
     // original error survives any rollback failure: it is the one the user can
