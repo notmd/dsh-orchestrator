@@ -25,6 +25,7 @@
  * | `orchestrator_issue_create` / `_list` / `_update` | **shipped** | — |
  * | `orchestrator_worker_start` | **shipped** | — |
  * | `orchestrator_report` (worker-side) | **shipped** | — |
+ * | `orchestrator_worker_message` / `_stop` | **shipped** | — |
  * | `orchestrator_worker_start` / `_message` / `_stop` / `_attach_pr` | next | wiring the spawner into a tool |
  * | `orchestrator_board` | next | the issue + worker stores |
  * | `orchestrator_pr_sync` | next | the PR observer |
@@ -39,7 +40,8 @@ import { defineTool } from './tool.ts'
 import type { ToolDescriptor } from './tool.ts'
 import { connectRepo, describeRepoConnect } from './repo.ts'
 import { createIssueForTool, listIssuesForTool, updateIssueForTool } from './issues-service.ts'
-import { startWorkerForTool } from './workers-service.ts'
+import { messageWorkerForTool, startWorkerForTool, stopWorkerForTool } from './workers-service.ts'
+import type { LiveWorkers } from './handle-registry.ts'
 import { reportForTool } from './reports-service.ts'
 import { OutputKind, ReportState } from '../domain/reports.ts'
 import type { SpawnDeps } from './spawn.ts'
@@ -78,8 +80,10 @@ export function buildOrchestratorTools(options: {
   store: LazyFactStore
   /** The spawn recipe's dependencies, bound to the real services. */
   spawn: SpawnDeps
+  /** Live handles, so a running worker can be messaged or stopped. */
+  live?: LiveWorkers
 }): Array<ToolDescriptor<never, unknown>> {
-  const { config, run, store, spawn } = options
+  const { config, run, store, spawn, live } = options
   const tools: Array<ToolDescriptor<never, unknown>> = [
     defineTool({
       name: 'orchestrator_config',
@@ -237,6 +241,35 @@ export function buildOrchestratorTools(options: {
       },
       outputType: 'string',
       execute: async (args, exec) => reportForTool({ store }, args as never, exec?.agent?.session?.id),
+    }) as ToolDescriptor<never, unknown>,
+
+    defineTool({
+      name: 'orchestrator_worker_message',
+      description:
+        'Send a follow-up turn to a worker: review feedback, a correction, an answer to its question. ' +
+        'Queues an ordinary turn and wakes the worker. Only workers spawned in this process can be ' +
+        'reached; a worker from before a restart must be reattached first.',
+      parameters: {
+        workerId: { type: 'string', required: true, description: 'The worker id, e.g. wrk-01J8ZQ….' },
+        message: { type: 'string', required: true, description: 'What to tell the worker.' },
+      },
+      outputType: 'string',
+      execute: async (args) =>
+        messageWorkerForTool({ run, store, spawn, config, ...(live ? { live } : {}) }, args as never),
+    }) as ToolDescriptor<never, unknown>,
+
+    defineTool({
+      name: 'orchestrator_worker_stop',
+      description:
+        "Stop a worker's active turn. Its session and worktree are left intact — stopping work is not " +
+        'terminating a session, which is the user\'s act.',
+      parameters: {
+        workerId: { type: 'string', required: true, description: 'The worker id.' },
+        reason: { type: 'string', description: 'Why, for the record.' },
+      },
+      outputType: 'string',
+      execute: async (args) =>
+        stopWorkerForTool({ run, store, spawn, config, ...(live ? { live } : {}) }, args as never),
     }) as ToolDescriptor<never, unknown>,
   ]
   return tools

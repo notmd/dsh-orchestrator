@@ -50,6 +50,15 @@ export interface AgentLike {
   readonly session: { readonly id?: string }
   readonly status?: 'idle' | 'running'
   followup(message: unknown): void
+  /**
+   * Cancels the active turn.
+   *
+   * The cause is the installed `AgentCancelCause`, read rather than guessed:
+   * `{ kind: 'user' } | { kind: 'parent' } | { kind: 'hook', reason } |
+   * { kind: 'disposed' }`. Note that **only `hook` carries a reason** — a
+   * "reason" on a user cancellation is not part of the shape, so it is not passed.
+   */
+  cancel?(cause: { kind: string; reason?: string }, options?: unknown): void
 }
 
 /** The slice of a DSH Workspace this module uses. */

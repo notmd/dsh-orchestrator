@@ -32,6 +32,7 @@ import { own } from './host/context.ts'
 import { buildOrchestratorTools } from './host/tools.ts'
 import { createRunCommand } from './host/exec.ts'
 import { createSpawnDeps } from './host/spawn-deps.ts'
+import { createLiveWorkers } from './host/handle-registry.ts'
 import { lazyFactStore, openFactStore } from './host/store.ts'
 import { FACT_SCHEMAS } from './host/schemas.ts'
 
@@ -86,18 +87,23 @@ export function apply(ctx: HostContext, config?: PluginConfigInput): PluginConfi
   const run = createRunCommand({ subprocess: ctx.subprocess, cwd: resolved.defaultRepo || process.cwd() })
   const store = lazyFactStore(() => openFactStore({ facility: ctx.storageDomain, schemas: FACT_SCHEMAS }))
   const spawn = createSpawnDeps(ctx)
+  const live = createLiveWorkers()
 
   own(
     ctx,
     () => {
       const disposers: Array<() => void> = []
-      const tools = buildOrchestratorTools({ config: resolved, run, store, spawn })
+      const tools = buildOrchestratorTools({ config: resolved, run, store, spawn, live })
       for (const tool of tools) {
         disposers.push(ctx.tools.register(tool as never))
       }
       log(ctx, 'info', `${name}: registered ${tools.length} orchestrator tool(s)`)
       return () => {
         for (const dispose of disposers) dispose()
+        // A9: unloading leaves sessions and worktrees INTACT. Disposing an agent
+        // handle stops and removes its session, so this drops the references and
+        // disposes nothing -- the sessions keep running and a reload reattaches.
+        live.clear()
         // Best effort: a disposal failure must not mask the unload.
         void store.close().catch((error: unknown) => {
           log(ctx, 'warn', `${name}: releasing storage failed during unload: ${String(error)}`)

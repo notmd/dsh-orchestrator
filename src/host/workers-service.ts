@@ -24,7 +24,7 @@
 import { newId } from '../domain/ids.ts'
 import { IssueState, assignWorker, normalizeIssue } from '../domain/issues.ts'
 import type { Issue } from '../domain/issues.ts'
-import { WorkerPhase, workerSessionTitle } from '../domain/workers.ts'
+import { WorkerPhase, normalizeWorker, workerSessionTitle } from '../domain/workers.ts'
 import type { Worker } from '../domain/workers.ts'
 import { createIssueForTool } from './issues-service.ts'
 import type { IssueToolDeps } from './issues-service.ts'
@@ -34,12 +34,18 @@ import { createMemoryFactStore } from './store.ts'
 import { WorktreeManager } from './worktree.ts'
 import { workerTaskMessage, workerSystemPrompt } from '../domain/worker-contract.ts'
 import type { PluginConfig } from '../config/validate.ts'
+import type { LiveWorkers } from './handle-registry.ts'
 import type { LazyFactStore } from './store.ts'
 import type { RunCommand } from './worktree.ts'
 
 /** Everything `orchestrator_worker_start` needs. */
 export interface WorkerToolDeps extends IssueToolDeps {
   run: RunCommand
+  /**
+   * The live handles. Optional because a caller that only starts workers does not
+   * need one, and because a host without them still lists and records correctly.
+   */
+  live?: LiveWorkers
   /** The recipe's dependencies, injected so the flow is testable. */
   spawn: SpawnDeps
   config: PluginConfig
@@ -200,6 +206,10 @@ export async function startWorkerForTool(
   await store.workers.put(worker.id, worker)
   const bound = assignWorker(issue, worker.id, at)
   await store.issues.put(bound.id, bound)
+  // Retain the handle so the worker can later be messaged or stopped. Kept in
+  // memory only: the durable spine is the session id, and a handle does not survive
+  // a restart (see `./handle-registry.ts`).
+  deps.live?.register({ workerId: worker.id, sessionId, handle: spawned.handle, ...(spawned.scope ? { scope: spawned.scope } : {}) })
 
   return [
     `Started ${worker.id} on ${issue.id}`,
@@ -217,3 +227,71 @@ export async function startWorkerForTool(
 
 /** Used by tests and by a host without storage, so nothing here needs a real one. */
 export { createMemoryFactStore }
+
+/**
+ * Sends a follow-up turn to a worker (`orchestrator_worker_message`).
+ *
+ * `followup()` rather than `steer()` or `inject()`: it queues an ordinary turn and
+ * wakes the driver, which is what "here is feedback, act on it" means. `inject()`
+ * would sit until other input arrived; `steer()` is consumed at the next step
+ * boundary of a *running* turn, which may not exist.
+ */
+export async function messageWorkerForTool(
+  deps: WorkerToolDeps,
+  args: { workerId: string; message: string },
+): Promise<string> {
+  const text = (args.message ?? '').trim()
+  if (text === '') return 'A message is required — an empty follow-up would wake the worker with nothing to do.'
+
+  const live = deps.live?.byWorker(args.workerId)
+  if (!live) {
+    // Not an error the caller can fix by retrying: after a restart the handle is
+    // gone and the worker has to be reattached first.
+    return (
+      `No live handle for ${args.workerId}, so it cannot be messaged from here.\n\n` +
+      'The worker\'s session is durable and still exists — a handle is only available for workers ' +
+      'spawned in this process. Reattach the worker to message it.'
+    )
+  }
+  live.handle.agent.followup(deps.spawn.userMessage(text))
+
+  try {
+    const store = await deps.store.get()
+    const stored = await store.workers.get(args.workerId)
+    if (stored !== undefined) {
+      const worker = normalizeWorker(stored)
+      const at = (deps.now ?? Date.now)()
+      // A message is a sign of life in the other direction, and it clears a pending
+      // question: the person has answered.
+      const next: Worker = { ...worker, lastSignalAt: at, updatedAt: at }
+      delete next.pendingQuestion
+      await store.workers.put(next.id, next)
+    }
+  } catch {
+    // The message was queued; failing to record that must not look like the message
+    // failed, or the caller would send it twice.
+  }
+  return `Queued a follow-up turn for ${args.workerId}.`
+}
+
+/**
+ * Stops a worker's active turn (`orchestrator_worker_stop`).
+ *
+ * Cancels the **turn**, not the session: PRD §12.1 says "cancel a worker's active
+ * turn", and A9 says unloading leaves sessions intact. Terminating a session is the
+ * user's act, not a tool call.
+ */
+export async function stopWorkerForTool(
+  deps: WorkerToolDeps,
+  args: { workerId: string; reason?: string },
+): Promise<string> {
+  const live = deps.live?.byWorker(args.workerId)
+  if (!live) {
+    return `No live handle for ${args.workerId}, so there is no turn to stop.`
+  }
+  // `{ kind: 'user' }` exactly: only the `hook` cause carries a reason, so a
+  // reason here would be an invented field. The caller's text is echoed instead.
+  live.handle.agent.cancel?.({ kind: 'user' })
+  const why = args.reason && args.reason.trim() !== '' ? ` (${args.reason.trim()})` : ''
+  return `Stopped ${args.workerId}'s active turn${why}. Its session is untouched.`
+}
