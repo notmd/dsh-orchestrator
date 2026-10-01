@@ -207,6 +207,11 @@ export async function startWorkerForTool(
         repoRoot,
         branch: created.branch,
         verifyCommands,
+        // Two settings the plugin cannot obey on the worker's behalf: it never opens the
+        // pull request itself, so `draftPrs` and `prBodyTemplate` are only real if the
+        // worker is told. Until this existed both were validated and reached no one.
+        draftPrs: deps.config.draftPrs,
+        ...(deps.config.prBodyTemplate ? { prBodyTemplate: deps.config.prBodyTemplate } : {}),
       })}`,
       permissionPreset: deps.config.workerPermissionPreset,
       agentPreset: deps.config.workerAgentPreset,

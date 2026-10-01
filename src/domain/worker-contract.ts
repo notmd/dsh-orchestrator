@@ -157,6 +157,17 @@ export function workerTaskMessage(input: {
   repoRoot: string
   branch: string
   verifyCommands: readonly string[]
+  /**
+   * Open the pull request as a draft (`draftPrs`).
+   *
+   * Read here because the PLUGIN NEVER OPENS THE PULL REQUEST -- the worker does, from
+   * its own session. A setting that says "open drafts" can therefore only be obeyed by
+   * telling the worker, and until this existed `draftPrs` appeared in the config
+   * interface, was validated, and reached no one.
+   */
+  draftPrs?: boolean
+  /** The body to use (`prBodyTemplate`), verbatim, when the repository configures one. */
+  prBodyTemplate?: string
 }): string {
   const verify =
     input.verifyCommands.length > 0
@@ -180,6 +191,16 @@ export function workerTaskMessage(input: {
     '',
     verify,
     '',
+    ...(input.prBodyTemplate && input.prBodyTemplate.trim() !== ''
+      ? ['## Pull-request body', '', 'Use this as the body of the pull request:', '', input.prBodyTemplate.trim(), '']
+      : []),
     'When the work is done, open a pull request and report it with `orchestrator_report`.',
+    ...(input.draftPrs === true
+      ? [
+          '',
+          '**Open it as a DRAFT** (`gh pr create --draft`). This repository is configured to review',
+          'before a pull request is ready, and a draft is how that is expressed to reviewers.',
+        ]
+      : []),
   ].join('\n')
 }
