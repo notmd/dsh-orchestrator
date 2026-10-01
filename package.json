@@ -8,7 +8,8 @@
   "exports": {
     ".": "./dist/index.js",
     "./package.json": "./package.json",
-    "./locale/*.json": "./locale/*.json"
+    "./locale/*.json": "./locale/*.json",
+    "./client": "./dist/client/index.js"
   },
   "files": [
     "dist",
@@ -21,13 +22,18 @@
     "test:watch": "node --test --watch",
     "typecheck": "tsc -p tsconfig.src.json",
     "typecheck:all": "tsc -p tsconfig.json",
-    "build": "tsc -p tsconfig.build.json",
+    "build": "tsc -p tsconfig.build.json && tsc -p tsconfig.client.json",
     "build:spike": "tsc -p tsconfig.spike.json",
-    "verify": "npm run typecheck && npm test && npm run build"
+    "verify": "npm run typecheck && npm test && npm run build",
+    "build:client": "tsc -p tsconfig.client.json"
   },
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true
     }
   },
   "devDependencies": {
