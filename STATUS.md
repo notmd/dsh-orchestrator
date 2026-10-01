@@ -71,6 +71,49 @@ Scaffolding: `package.json` (bundle manifest, `dsh.bundle.patch`), `cordis.patch
 
 ## 3. Findings worth not rediscovering
 
+> **Read this index first.** The section below is the largest part of this file (~280
+> lines) and is written as prose, because each finding is a story. But **ten of the
+> findings are one lesson wearing different clothes**, and knowing the shape saves
+> reading them all:
+
+> ### The one lesson, in one line
+>
+> **A failure that is silent looks like success. Only reality — a live run, the real
+> tool, the real type, the real file on disk — says otherwise. Not a fake, not a
+> string assertion, not a compile that passes, and not your own summary of the work.**
+>
+> The instances, each of which cost a chunk:
+>
+> | Instance | What was silently wrong |
+> |---|---|
+> | The storage adapter | Called a method that did not exist; fakes agreed with it |
+> | `git worktree list` | Returns realpath paths, so `remove` silently did nothing |
+> | A worktree fake | Reported an empty list, so removal was a no-op — **twice, six rounds apart** |
+> | `gh repo view .` | Resolves to `<owner>/.`; the argv test could only assert what its author intended |
+> | The observer's snapshot key | Written by `workerId`, read by url — two green halves that disagreed with each other |
+> | `ctx.agentRegistry` | A service I invented; **crashed the host** at the first tick |
+> | `agent/created` payload | Read the payload *as* the agent, so the listener restricted nothing |
+> | `ctx.locale` | **Throws when not injected**, even though the type said optional |
+> | `normalizeWorker` | A field added to the type is dropped on read — the dedup never held |
+> | `isBotAuthor` on a parsed record | Reads `__typename` from a raw payload; returned `undefined` for every review |
+
+> ### Three rules that follow
+>
+> 1. **Prove a probe can detect what it looks for before trusting it.** A probe that
+>    agrees with every hypothesis is a mirror, not an instrument. Three instruments in a
+>    row failed to measure one boolean (§12.2) and each was plausible.
+> 2. **Reading the right log is the whole of the diagnosis.** The host log was quiet
+>    while the browser console reported the failure all along.
+> 3. **Audit the spec against the code, not against your own narration.** It found
+>    `maxConcurrentWorkers` validated, displayed, and never enforced.
+
+> ### A second, distinct lesson
+>
+> **A boundary relaxed to make a test easier is a boundary that was protecting
+> something.** A spike that joined the plugin's storage domain did not merely add rows —
+> it broke the plugin (`domain 'dsho' is already open`). Isolation is load-bearing.
+
+
 Each of these cost real time or would have shipped a silent bug. They are the most
 valuable thing in this file.
 
