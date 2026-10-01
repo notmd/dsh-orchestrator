@@ -122,11 +122,16 @@ export function assertOutputs(value: readonly ReportOutput[] | undefined): Repor
  * like the whole message. The marker is included in the cap, so the result is
  * never longer than promised.
  */
-export function truncateNote(note: string, max = MAX_REPORT_CHARACTERS): { note: string; truncated: boolean } {
+export function truncateNote(
+  note: string,
+  /** The configured bound, or the module default when a caller has no config. */
+  max: number | undefined = MAX_REPORT_CHARACTERS,
+): { note: string; truncated: boolean } {
+  const limit = typeof max === 'number' && max > 0 ? max : MAX_REPORT_CHARACTERS
   const text = note ?? ''
-  if (text.length <= max) return { note: text, truncated: false }
+  if (text.length <= limit) return { note: text, truncated: false }
   const marker = ' …[truncated]'
-  return { note: text.slice(0, Math.max(0, max - marker.length)) + marker, truncated: true }
+  return { note: text.slice(0, Math.max(0, limit - marker.length)) + marker, truncated: true }
 }
 
 /** Reports whether a state means a person is the unblocker. */

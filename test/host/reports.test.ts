@@ -302,3 +302,60 @@ test('findWorkerBySession resolves the caller', async () => {
   assert.equal(worker?.id, 'wrk-1')
   assert.equal(await findWorkerBySession(await deps.store.get(), 'nope'), undefined)
 })
+
+
+// ---------------------------------------------------------------------------
+// maxReportCharacters is OBEYED, not merely offered
+// ---------------------------------------------------------------------------
+
+test('the configured bound is used, not the module default', () => {
+  // The setting existed, was validated, and was IGNORED: `truncateNote(note)` always
+  // used the module's own constant, so a user who lowered `maxReportCharacters` got the
+  // default anyway. A setting that is offered and then not applied is worse than no
+  // setting, because the user believes they configured something.
+  const long = 'x'.repeat(500)
+  const tight = truncateNote(long, 60)
+  assert.equal(tight.truncated, true)
+  assert.ok(tight.note.length <= 60, `expected <= 60, got ${tight.note.length}`)
+  assert.ok(tight.note.length < truncateNote(long).note.length, 'tighter than the default')
+})
+
+test('a caller with no config still gets the default, not an unlimited note', () => {
+  // `undefined` must mean "the default", not "no limit" -- the opposite reading would
+  // silently uncap every report from a host that did not pass the setting.
+  const long = 'x'.repeat(50_000)
+  assert.deepEqual(truncateNote(long, undefined), truncateNote(long), 'identical to the default call')
+  assert.equal(truncateNote(long, undefined).truncated, true, 'still bounded')
+})
+
+test('a nonsensical bound falls back rather than disabling the cap', () => {
+  // Longer than the DEFAULT too, so "fell back to the default" is distinguishable from
+  // "the cap was disabled" -- a shorter note would pass either way.
+  const long = 'x'.repeat(50_000)
+  for (const bad of [0, -1, Number.NaN]) {
+    assert.equal(truncateNote(long, bad).truncated, true, `bound ${bad} must not mean unlimited`)
+  }
+})
+
+test('a short note is untouched, whatever the bound', () => {
+  assert.deepEqual(truncateNote('short', 10), { note: 'short', truncated: false })
+})
+
+test('the report tool passes the configured bound through', async () => {
+  // The end-to-end half: the constant was correctable and the CALL was not passing
+  // anything, which is where the setting was lost.
+  const store = createMemoryFactStore()
+  await store.workers.put('wrk-1', {
+    id: 'wrk-1', issueId: 'iss-1', sessionId: 'dsho-wrk-1', branch: 'b', worktreePath: '/p', workspaceId: 'w',
+    phase: 'implementing', phaseHistory: [], lastSignalAt: 1, createdAt: 1, updatedAt: 1,
+  } as never)
+  const reply = await reportForTool(
+    { store: lazyFactStore(async () => store), now: () => 50, maxReportCharacters: 40 } as never,
+    { state: 'checkpoint' as never, note: 'y'.repeat(400) },
+    'dsho-wrk-1',
+  )
+  assert.ok(!/y{100}/.test(reply), 'the reply does not carry the untruncated note')
+  const stored = (await store.reports.list())[0] as { note: string; truncated?: boolean }
+  assert.ok(stored.note.length <= 40, `stored ${stored.note.length} characters`)
+  assert.equal(stored.truncated, true)
+})

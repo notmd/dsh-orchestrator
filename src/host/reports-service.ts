@@ -53,6 +53,16 @@ export interface ReportToolDeps {
    * out should record the report rather than refuse it.
    */
   run?: RunCommand
+  /**
+   * The configured bound on a report's note (PRD §13).
+   *
+   * Passed in rather than defaulted, because the setting EXISTED and was ignored:
+   * `truncateNote(note)` used the module's own constant, so a user who lowered
+   * `maxReportCharacters` got the default anyway. A setting that is validated, offered,
+   * and then not applied is worse than no setting -- the user believes they configured
+   * something.
+   */
+  maxReportCharacters?: number
 }
 
 /**
@@ -169,7 +179,7 @@ export async function reportForTool(
 
   const now = deps.now ?? Date.now
   const at = now()
-  const { note, truncated } = truncateNote(args.note ?? '')
+  const { note, truncated } = truncateNote(args.note ?? '', deps.maxReportCharacters)
   const report: Report = {
     id: newId('rpt', at),
     workerId: worker.id,
