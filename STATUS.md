@@ -103,6 +103,45 @@ Chunk numbers are this file's own; milestone letters are the PRD's.
 **Recommended next step:** chunk 5, then 6. Verification and installation are both
 solved — see the box immediately below before writing any UI or host code.
 
+### ✅ M0 spike 1 DONE — the panel seat is proven, and R1 is closed
+
+**The PRD's highest-uncertainty item is verified end to end, in a real GUI, with a
+real third-party bundle.** Not read from types — executed.
+
+Fixture: [`fixtures/panel-spike/`](fixtures/panel-spike) — a four-file bundle that
+registers `main` (key `spike`) and `sidebar.panellist` (id `spike`, order 3) using
+the exact shape copied from the one shipped plugin that does it
+(`@deepseek-ai/dsh-client-ui-schedule`).
+
+Procedure (see [docs/verification-harness.md](docs/verification-harness.md)):
+
+```bash
+dsh plugin --profile web add ./fixtures/panel-spike   # installs AND registers the bundle
+dsh --profile web --port 0 --no-open --host 127.0.0.1 # then open the printed tokenised URL
+```
+
+Observed in the page:
+
+| Signal | Result |
+|---|---|
+| `window.__DSH_BOOT__.entries` | contains `{ id: '@local/panel-spike', url: 'plugins/??@local/panel-spike/client.js&rev=8938748466e9', immediately: true }` — entry count went 65 → **66** |
+| `window.__DSH_PANEL_SPIKE_CLIENT__` | `true` — the client half's `apply()` **ran**, so both registrations were accepted without throwing |
+| Sidebar accessibility tree | `navigation "Global panels"` → `button "Plugins"`, `button "Spike"` — the row rendered, labelled from our `label` |
+| After clicking the row | `heading "panel-spike"` + `StaticText "The main keyed slot renders a third-party panel."` — **the `main` keyed slot rendered our component** |
+
+**Two things this settles, and one it does not.** It settles that a third-party
+bundle may (a) register into the root-scoped `sidebar.panellist` list and (b) take
+a **key** in the root-scoped `main` keyed slot, with the row's `id` addressing the
+panel. It does **not** settle that a *second* occupant is refused gracefully, nor
+anything about the host plane (`ctx.agents`, `ctx.storage`, `ctx.subprocess`) —
+those remain M0 spikes 2–4.
+
+**Also verified: `dsh plugin --profile <name> add <dir>` is the full
+`install_bundle` equivalent.** It performed *both* steps — added the package as a
+dependency **and** appended it to `dsh.profile.bundles` in the profile manifest —
+so no hand-editing of the profile was needed and no `plugin_manager` tool was
+required. Remove it with `dsh plugin --profile web remove @local/panel-spike`.
+
 ### ✅ The verification/install problem is SOLVED — see [docs/verification-harness.md](docs/verification-harness.md)
 
 Earlier rounds recorded this as blocked. It is not. **The full procedure is
@@ -123,12 +162,8 @@ that before touching the browser.** In brief:
   the procedure is repeatable.
 - **Prove the boot** with `document.title === 'DeepSeek Harness'` plus
   `window.__DSH_BOOT__` existing, and enumerate loaded client modules from
-  `window.__DSH_BOOT__.entries` (65 entries in the `web` profile).
-
-Still **not** provable without a real install: whether a *third-party* bundle is
-accepted into the root-scoped `main` keyed slot at activation. Everything else
-about the client half can be asserted in Node against a React shim and a fake
-`ctx.slots`.
+  `window.__DSH_BOOT__.entries` (66 entries in the `web` profile with the spike
+  installed).
 
 **What was done instead, and why it is still real progress:** the slot
 declarations were verified **from the installed artifacts**, which is evidence the
@@ -244,6 +279,32 @@ should not "fix" them by accident.
    expects Go-style zero values on every field, so the public card boundary maps
    through `prFacts()` rather than trusting its caller. Without this the reducer
    throws on a hand-written card — which is how the omission was found.
+
+13. **🔴 HARD REQUIREMENT (set by the user, round 2): all first-party code is
+   TypeScript.** This supersedes decision 1 below, which chose plain ESM
+   JavaScript specifically to avoid a build step. Reasons TypeScript was chosen
+   over JS: it is a hard requirement, so it is not up for re-litigation.
+
+   What this changes, and the honest cost:
+
+   | | Before (JS) | Now (TS) |
+   |---|---|---|
+   | Source | `src/**/*.js`, JSDoc types | `src/**/*.ts`, erased-type annotations |
+   | Tests | `node --test` on `.js` | `node --test` on `.ts` — **still zero dependencies**, because Node 24 strips types natively (verified: `node /tmp/t.ts` runs) |
+   | Build | none | `tsc` → `dist/`; `package.json` `exports` points at `dist/` |
+   | Client half | hand-written classic script | authored in TS, compiled to the `window.__ModuleLoader__` **classic-script** form — it is *not* an ES module, so it needs its own `tsconfig` (`module: none`, `lib: DOM`) |
+   | DSH guidance | "**A Host-only bundle needs no dependencies, install scripts, or build tool**" | this now needs `tsc` at build time, so the bundle gains a build step |
+
+   **Two constraints to respect during the migration**, both discovered by testing
+   rather than assuming:
+   - `node --test` type-stripping only accepts **erasable** syntax. No `enum`, no
+     `namespace`, no parameter properties. Constants stay `const` objects plus
+     union types — which is what the ported code already uses, so this is free.
+   - `tsc` is available globally (v6.0.3) and Node is v24.11.1. **Do not add a
+     `typescript` devDependency unless the registry is reachable** — check first.
+
+   Migration is mechanical (rename, annotate, add `tsconfig`, repoint `exports`,
+   re-run the 342 tests plus `tsc --noEmit`). It is chunk 5 in the plan below.
 
 ---
 

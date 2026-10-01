@@ -1,0 +1,3 @@
+- insert:
+    - id: panel-spike
+      name: '@local/panel-spike'

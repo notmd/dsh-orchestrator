@@ -1,0 +1,26 @@
+{
+  "name": "@local/panel-spike",
+  "version": "0.0.1",
+  "private": true,
+  "description": "M0 spike: prove a third-party bundle may take the main keyed slot + a sidebar.panellist row.",
+  "type": "module",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true
+    }
+  }
+}
