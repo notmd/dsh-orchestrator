@@ -9,9 +9,9 @@ bloated status file costs the next agent more than it saves.
 |---|---|
 | **Goal** | Implement [PRD.md](PRD.md) |
 | **Plan source** | [PRD.md §16 Milestones](PRD.md#16-milestones), verified against [docs/dsh-plugin-contract.md](docs/dsh-plugin-contract.md) |
-| **Last updated** | 2026-10-01, chunk 6s (the client half is written) |
+| **Last updated** | 2026-10-01, chunk 6t (the panel renders in a real GUI) |
 | **Verify** | `npm run verify` → `tsc` (src + test) + `node --test` + build · **all green** |
-| **Current state** | **655 tests, 0 type errors. Twelve tools, and the requested flow runs end to end on its own ticks:** issue → worker → worktree → PR → observer → review pass → findings back to the worker → verdict → `Needs human review`. The board assembles into lanes and `orchestrator_board` reads it. **The host surface now exists**: `/dsho/api/board` answers a real request in a live host (verified: 200, `application/json`, `no-store`, four lanes). **The client half is written and builds, but has NEVER been loaded in a browser** (see §4). Also open: the protocol tools are not yet restricted to their session kinds, and worktree cleanup on archive does not exist. |
+| **Current state** | **655 tests, 0 type errors. Twelve tools, and the requested flow runs end to end on its own ticks:** issue → worker → worktree → PR → observer → review pass → findings back to the worker → verdict → `Needs human review`. The board assembles into lanes and `orchestrator_board` reads it. **The host surface now exists**: `/dsho/api/board` answers a real request in a live host (verified: 200, `application/json`, `no-store`, four lanes). **The panel renders in a real GUI** (verified: nav row, selection, `Orchestrator` heading, `0 worker(s)`, empty state). Only the empty state has been seen: no worker has ever existed, so the four-lane path is unit-tested but **not yet seen live**. Also open: the protocol tools are not yet restricted to their session kinds, and worktree cleanup on archive does not exist. |
 
 ---
 
@@ -43,7 +43,8 @@ everything else inherits.
 | 6e | **The command seam** — argv over `ctx.subprocess`, bounded in time and output, failure classification | 33 tests |
 | 6f | **GitHub credential chain** (`AO_GITHUB_TOKEN` → `GITHUB_TOKEN` → `gh auth token`) and every `gh`/`git` argv | 30 tests |
 | 6q | **The board assembly.** `buildBoard` joins the stores, the reducer and the presentation layer — the only place that does, so the agent's view and the GUI's cannot disagree. Plus `orchestrator_board` | 1 test file |
-| 6s | **The client half.** `src/client/index.ts` registers the `sidebar.panellist` row and the `main` keyed panel, polls `/dsho/api/board`, and renders four lanes with loading/empty/error states. Its own `tsconfig.client.json` emits a **classic script** (`module: none`), since that is what `window.__ModuleLoader__` requires | builds; **not browser-verified** |
+| 6t | **The panel renders in a real GUI.** Module loaded, nav row present, selection works, and the panel shows its heading, count and empty state | **live** |
+| 6s | **The client half.** `src/client/index.ts` registers the `sidebar.panellist` row and the `main` keyed panel, polls `/dsho/api/board`, and renders four lanes with loading/empty/error states. Its own `tsconfig.client.json` emits a **classic script** (`module: none`), since that is what `window.__ModuleLoader__` requires | builds |
 | 6p | **The review sweep, and a real activity gate.** A tick schedules a pass for every worker whose head has none, and the gate now reads the **live** `AgentStatus` rather than assuming the worker is quiet | 5 tests |
 | 6o | **The auto-review pass.** The reviewer contract (PRD §12.5, with "prefer a few high-confidence findings over nitpicks" quoted because that line is what stops every PR hitting the round cap), the read-only reviewer session in the worker's **own worktree**, the pinned-head `ReviewRun`, the head-checked verdict, finding routing, and the failed-pass retry budget | 16 tests |
 | 6n | **The PR observer.** The `PrSnapshot` record and the `gh pr view --json` parser, plus the per-repository serialised poll. R13's invariant is the substance: a failed observation writes `fetched: false` **with the prior facts**, so even a caller that ignores the flag cannot see a fabricated `CLOSED` | 18 tests |
@@ -139,6 +140,13 @@ This is the **second** bug of exactly this shape, after the worktree
 canonicalization: **a fake cannot catch a wrong API, because it implements whatever
 interface the author imagined.** The tests were green throughout — which is why the
 fix was verified against reality rather than against another fake.
+
+**A diagnostic must not look for furniture the empty state does not have.** I checked for
+`[data-lane]` and `.dsho-panel` and concluded the panel was broken — but the empty state
+renders no lanes, and I had removed every className when switching to inline styles, so
+`.dsho-panel` cannot match by construction. Checking by *visible text* found the panel
+working immediately. This is the second wrong-diagnostic-in-one-session; the pattern is
+that a failed check is more often a bad probe than a bad system.
 
 **A classic script is not a module, and the emitter decides which.** `window.__ModuleLoader__`
 loads a **classic script** — that is what the host contract says — while this package is
