@@ -28,7 +28,7 @@
  */
 
 import type { PrReview, PrSnapshot } from '../domain/pr-snapshot.ts'
-import { normalizeWorker } from '../domain/workers.ts'
+import { isBlockedWorker, normalizeWorker } from '../domain/workers.ts'
 import type { Worker } from '../domain/workers.ts'
 import type { PluginConfig } from '../config/validate.ts'
 import type { LiveWorkers } from './handle-registry.ts'
@@ -136,6 +136,15 @@ export async function routeHumanFeedback(
   }
   if (nudgedAtHead >= deps.config.reviewMaxNudge) {
     return { workerId: worker.id, routed: 0, reason: 'nudge-limit', capped: true }
+  }
+
+  // R14 / Guardrail 3: a blocked worker is never injected into. Input arriving while a
+  // permission prompt is pending can read as an ANSWER to it, which is why the PRD
+  // rates this High. The feedback is HELD rather than dropped -- nothing is recorded, so
+  // the next sweep after the block clears sends it. That is "queues until the block
+  // clears", and recording it here would silently discard a person's review instead.
+  if (isBlockedWorker(worker)) {
+    return { workerId: worker.id, routed: 0, reason: 'blocked' }
   }
 
   const live = deps.live?.byWorker(worker.id)

@@ -57,6 +57,23 @@ export const TERMINAL_PHASES: readonly WorkerPhase[] = [
 ]
 
 /** Reports whether a phase is terminal. */
+/**
+ * Whether a worker is BLOCKED on a human decision (R14, Guardrail 3).
+ *
+ * One definition, because two would diverge and the divergence would be a
+ * security-relevant bug: `blocked` sessions must never be injected into, since input
+ * arriving while a permission prompt is pending can read as an ANSWER to it.
+ *
+ * Blockage is explicit rather than inferred. `AgentStatus` is only `idle | running`, so
+ * a session waiting on a person is indistinguishable from an idle one at that level --
+ * which is why R9 has the protocol record it: a `pendingQuestion`, or the
+ * `awaiting_human` phase, is the fact, and this reads exactly those.
+ */
+export function isBlockedWorker(worker: Worker): boolean {
+  if (worker.pendingQuestion !== undefined) return true
+  return worker.phase === WorkerPhase.awaitingHuman
+}
+
 export function isTerminalPhase(phase: WorkerPhase): boolean {
   return TERMINAL_PHASES.includes(phase)
 }

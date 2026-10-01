@@ -17,10 +17,11 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 import { actionableFeedback, renderFeedback, routeHumanFeedback, sweepHumanFeedback } from '../../src/host/feedback-service.ts'
+import { readFileSync } from 'node:fs'
 import { createMemoryFactStore, lazyFactStore } from '../../src/host/store.ts'
 import { createLiveWorkers } from '../../src/host/handle-registry.ts'
 import { normalizePluginConfig } from '../../src/config/validate.ts'
-import { WorkerPhase, normalizeWorker } from '../../src/domain/workers.ts'
+import { WorkerPhase, isBlockedWorker, normalizeWorker } from '../../src/domain/workers.ts'
 import type { PrSnapshot, PrReview } from '../../src/domain/pr-snapshot.ts'
 
 const NOW = 10_000_000
@@ -215,4 +216,78 @@ test('the sweep contains a failure and reports only what it routed', async () =>
     config: normalizePluginConfig(),
   })
   assert.deepEqual(outcomes, [])
+})
+
+
+// ---------------------------------------------------------------------------
+// R14 — a blocked worker is never injected into
+// ---------------------------------------------------------------------------
+
+test('blockage is explicit: a pending question, or the awaiting-human phase', () => {
+  // `AgentStatus` is only `idle | running`, so a session waiting on a person looks like
+  // an idle one at that level. R9 has the protocol record it instead, and this reads
+  // exactly those two facts rather than inferring from a timer.
+  const base = { id: 'w', issueId: 'i', sessionId: 's', branch: 'b', worktreePath: '/p', workspaceId: 'ws', phaseHistory: [], lastSignalAt: 1, createdAt: 1, updatedAt: 1 }
+  assert.equal(isBlockedWorker(normalizeWorker({ ...base, phase: WorkerPhase.awaitingHuman })), true)
+  assert.equal(
+    isBlockedWorker(normalizeWorker({ ...base, phase: WorkerPhase.implementing, pendingQuestion: { id: 'q', text: 'which branch?', at: 1 } })),
+    true,
+  )
+  assert.equal(isBlockedWorker(normalizeWorker({ ...base, phase: WorkerPhase.implementing })), false)
+  assert.equal(isBlockedWorker(normalizeWorker({ ...base, phase: WorkerPhase.merged })), false)
+})
+
+test('R14: a blocked worker is not injected into, and the feedback is HELD not dropped', async () => {
+  // The failure is rated High because input arriving while a permission prompt is
+  // pending can read as an ANSWER to it. The held-not-dropped half matters just as much:
+  // recording it would silently discard a person's review.
+  const { store, deps, sent } = await feedbackFixture()
+  await store.workers.put('w', {
+    ...(await store.workers.get('w') as object),
+    phase: WorkerPhase.awaitingHuman,
+  })
+
+  const outcome = await routeHumanFeedback(
+    deps,
+    normalizeWorker(await store.workers.get('w')),
+    snapshot({ reviews: [review('r1', 'CHANGES_REQUESTED', { body: 'fix this' })] }),
+  )
+  assert.equal(outcome.routed, 0)
+  assert.equal(outcome.reason, 'blocked')
+  assert.equal(sent.length, 0, 'nothing was injected')
+  assert.equal(
+    (await store.workers.get('w') as { feedback?: unknown }).feedback,
+    undefined,
+    'and nothing was recorded, so it is retried once the block clears',
+  )
+})
+
+test('once the block clears, the held feedback is delivered', async () => {
+  const { store, deps, sent } = await feedbackFixture()
+  await store.workers.put('w', { ...(await store.workers.get('w') as object), phase: WorkerPhase.awaitingHuman })
+  const snap = snapshot({ reviews: [review('r1', 'CHANGES_REQUESTED', { body: 'fix this' })] })
+  await routeHumanFeedback(deps, normalizeWorker(await store.workers.get('w')), snap)
+  assert.equal(sent.length, 0)
+
+  // The person answered, so the worker is running again.
+  await store.workers.put('w', { ...(await store.workers.get('w') as object), phase: WorkerPhase.addressingFeedback })
+  const outcome = await routeHumanFeedback(deps, normalizeWorker(await store.workers.get('w')), snap)
+  assert.equal(outcome.routed, 1, 'the review was never lost')
+  assert.equal(sent.length, 1)
+})
+
+test('the guard is on the INBOUND path only — the outbox still delivers a blocked worker\'s own reports', async () => {
+  // The outbox delivers a worker's reports into the ORCHESTRATOR's session, which is the
+  // opposite direction. Guarding it would hold the `needs_input` report that IS the
+  // blockage, so nobody would see the question and the block could never clear. Seven
+  // outbox tests failed when this guard was briefly applied there, which is how the
+  // distinction was found.
+  const { store } = await feedbackFixture()
+  await store.workers.put('w', { ...(await store.workers.get('w') as object), phase: WorkerPhase.awaitingHuman })
+  const worker = normalizeWorker(await store.workers.get('w'))
+  assert.equal(isBlockedWorker(worker), true, 'the worker is blocked...')
+  // ...and the outbox does not consult this predicate at all, asserted at the source
+  // because the *absence* of a guard is the property.
+  const outbox = readFileSync(new URL('../../src/host/outbox-service.ts', import.meta.url), 'utf8')
+  assert.ok(!/isBlockedWorker/.test(outbox), 'the outbox must not hold a blocked worker\'s outgoing reports')
 })

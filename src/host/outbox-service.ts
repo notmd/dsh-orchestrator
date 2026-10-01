@@ -88,6 +88,13 @@ export async function deliverPendingReports(deps: OutboxServiceDeps): Promise<De
     const mine = reports.filter((report) => report.workerId === worker.id)
     if (mine.length === 0) continue
 
+    // R14 / Guardrail 3 applies to injections INTO a blocked worker, and this is the
+    // opposite direction: the outbox delivers a worker's reports into the ORCHESTRATOR's
+    // session. Guarding here would hold the worker's own question -- the `needs_input`
+    // report that IS the blockage -- so nobody would ever see it and the block could
+    // never clear. Seven tests failed on exactly that. The guard belongs on the path
+    // that injects into the worker (`feedback-service.ts`), and only there.
+
     try {
       const lastInterruptAt = mine
         .filter((report) => report.state === 'stuck' && report.deliveredAt !== undefined)
