@@ -93,7 +93,16 @@ async function run(ctx: HostContext): Promise<void> {
 
     const config = normalizePluginConfig()
     const run0 = createRunCommand({ subprocess: ctx.subprocess, cwd: REPO })
-    const store = lazyFactStore(() => openFactStore({ facility: ctx.storageDomain, schemas: FACT_SCHEMAS }))
+    // A domain of its own, so the spike is isolated from whatever the real plugin
+    // and the other spikes have stored. Sharing the plugin's domain is what made the
+    // first attempt stop on "several repositories are connected" -- a correct refusal
+    // to guess, but a refusal the spike has no business provoking. Isolation is the
+    // fix; naming a repository explicitly would only have worked around it.
+    //
+    // The name must match `/^[a-z][a-z0-9_]*$/`, because it is the backend's unit name.
+    const store = lazyFactStore(() =>
+      openFactStore({ facility: ctx.storageDomain, schemas: FACT_SCHEMAS, name: 'dsho_lane_spike' }),
+    )
     const spawn = createSpawnDeps(ctx)
     const live = createLiveWorkers()
 

@@ -30,6 +30,7 @@ import { archiveSheet, groupIntoLanes, orderCards, presentCard } from '../board/
 import type { BoardCard, BoardCardView } from '../board/presentation.ts'
 import { normalizeIssue } from '../domain/issues.ts'
 import { normalizeWorker, workerSessionTitle } from '../domain/workers.ts'
+import { snapshotKey } from './observer-service.ts'
 import { summarizeReviewRuns } from '../review/runs.ts'
 import type { ReviewRun } from '../review/runs.ts'
 import { isBotAuthor } from '../domain/pr-snapshot.ts'
@@ -172,13 +173,24 @@ export async function buildBoard(deps: BoardDeps): Promise<BoardSnapshot> {
   const normalizedRuns = runs.filter(
     (candidate): candidate is ReviewRun => typeof candidate === 'object' && candidate !== null,
   )
+  // Keyed by worker id, which is how the OBSERVER writes them (`snapshotKey`). An
+  // earlier version matched by URL instead, and the two disagreed the moment a
+  // worker's `pr.url` differed from the snapshot's -- so a real pull request never
+  // moved a card, silently, even though both halves were individually tested. A live
+  // end-to-end run is what surfaced it; a unit test on either side could not.
   const snapshotByWorker = new Map<string, PrSnapshot>()
   for (const worker of workers.map(normalizeWorker)) {
-    const snapshot = snapshots.find(
-      (candidate) =>
-        typeof candidate === 'object' && candidate !== null && (candidate as PrSnapshot).url === worker.pr?.url,
+    const snapshot = await store.prSnapshots.get(snapshotKey(worker.id))
+    if (snapshot && typeof snapshot === 'object') {
+      snapshotByWorker.set(worker.id, snapshot as PrSnapshot)
+      continue
+    }
+    // Tolerate a snapshot written under another key by matching the URL, so a record
+    // from an older build still shows on the board rather than vanishing.
+    const byUrl = snapshots.find(
+      (candidate) => typeof candidate === 'object' && candidate !== null && (candidate as PrSnapshot).url === worker.pr?.url,
     )
-    if (snapshot) snapshotByWorker.set(worker.id, snapshot as PrSnapshot)
+    if (byUrl) snapshotByWorker.set(worker.id, byUrl as PrSnapshot)
   }
 
   const bounds = {

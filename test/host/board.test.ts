@@ -15,6 +15,7 @@ import { BOARD_ROUTE_PATH, createBoardRoute, handleBoardRequest } from '../../sr
 import { presentCard } from '../../src/board/presentation.ts'
 import type { BoardDeps } from '../../src/host/board-service.ts'
 import { createMemoryFactStore, lazyFactStore } from '../../src/host/store.ts'
+import { snapshotKey } from '../../src/host/observer-service.ts'
 import { normalizePluginConfig } from '../../src/config/validate.ts'
 import { normalizeWorker } from '../../src/domain/workers.ts'
 import { WorkerPhase } from '../../src/domain/workers.ts'
@@ -413,4 +414,44 @@ test('the handler never throws, whatever the store does', async () => {
       response,
     ),
   )
+})
+
+
+test('the board reads the snapshot the way the OBSERVER writes it', () => {
+  // The bug this guards: the observer writes under `snapshotKey(workerId)` and the
+  // board used to look up by matching `url`. Those disagree as soon as a worker's
+  // `pr.url` differs from the snapshot's url -- which is the normal case, since one
+  // is set by the worker's report and the other by the provider. A real pull request
+  // then never moved a card, silently, with both halves individually green.
+  //
+  // A live end-to-end run found it. Neither unit test could: each side agreed with
+  // itself.
+  const workerUrl = 'https://github.com/acme/widgets/pull/42'
+  const providerUrl = 'https://github.com/acme/widgets/pull/42?diff=split'
+  assert.notEqual(workerUrl, providerUrl, 'the two urls must differ for this to test anything')
+
+  return (async () => {
+    const store = createMemoryFactStore()
+    await store.issues.put('iss-0', {
+      id: 'iss-0', number: 1, repoId: 'repo-1', title: 'Task', state: 'in_progress', workerId: 'wrk-1',
+      createdAt: 1, updatedAt: 1,
+    })
+    await store.workers.put('wrk-1', {
+      id: 'wrk-1', issueId: 'iss-0', sessionId: 's1', branch: 'b', worktreePath: '/p', workspaceId: 'w',
+      phase: 'shipping', phaseHistory: [], lastSignalAt: NOW - 1, createdAt: 1, updatedAt: 1,
+      pr: { number: 42, url: workerUrl, headSha: 'sha-1' },
+    })
+    // Exactly how `observeWorker` stores it.
+    await store.prSnapshots.put(snapshotKey('wrk-1'), snapshot({ url: providerUrl }))
+
+    const board = await buildBoard({
+      store: lazyFactStore(async () => store),
+      config: CONFIG,
+      now: () => NOW,
+      activityOf: () => 'idle',
+    })
+    assert.equal(board.counts.byLane[KanbanColumn.building], 0, 'the PR is seen')
+    assert.equal(board.counts.byLane[KanbanColumn.validating], 1)
+    assert.equal(board.lenses.lanes[KanbanColumn.validating]![0]!.displayStatus, DisplayStatus.reviewScheduled)
+  })()
 })
