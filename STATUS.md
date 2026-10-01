@@ -9,9 +9,9 @@ bloated status file costs the next agent more than it saves.
 |---|---|
 | **Goal** | Implement [PRD.md](PRD.md) |
 | **Plan source** | [PRD.md §16 Milestones](PRD.md#16-milestones), verified against [docs/dsh-plugin-contract.md](docs/dsh-plugin-contract.md) |
-| **Last updated** | 2026-10-01, chunk 5e (type-clean) |
+| **Last updated** | 2026-10-01, chunk 6a (host entry activates) |
 | **Verify** | `npm run verify` → typecheck (src) + `node --test` + build · **all three green** |
-| **Current state** | **All first-party source and tests are TypeScript and fully type-clean.** 342 tests pass; `tsc` reports **0 errors across `src/` *and* `test/`**; `npm run build` emits `dist/`. M0 spike 1 is done (the panel seat is proven). No host half or client half exists yet. |
+| **Current state** | **The plugin installs and activates in DSH.** 358 tests pass; `tsc` reports **0 errors across `src/` and `test/`**; `npm run build` emits `dist/`. M0 spike 1 is done (panel seat proven) and the host entry is live with one real tool. The services behind it (issue store, spawner, observer, routes) and the whole client half are still to come. |
 
 ---
 
@@ -94,15 +94,56 @@ Chunk numbers are this file's own; milestone letters are the PRD's.
 
 | Chunk | Work | PRD | Why now |
 |---|---|---|---|
-| 6 | **Host half**: `src/index.ts` → `apply()`; `OrchestratorService` over `ctx.storageDomain`; `WorkerSpawner` using the exact `ctx.agents.create()` recipe; `WorktreeManager`; `GitHubGateway` over `ctx.subprocess` + `gh`; `PrObserver` loop; the tool table; `/dsho/api/*` + `/dsho/events` on `ctx.webServer`. | §6, §12, M1 | The first code that needs a live profile. |
+| 6b | **Host services** behind the entry: `WorkerSpawner` (`ctx.agents.create()` per Appendix A3.1), `WorktreeManager` (`git worktree` via `ctx.subprocess`), `OrchestratorService` + the issue/worker stores over `ctx.storageDomain`, `GitHubGateway` (`gh`), `PrObserver`, and the rest of the tool table. Each tool ships **with** its service. | §6, §12, M1 | The entry is proven; this is the substance. |
 | 7 | **Client half**: `src/client/**/*.ts` → `dist/client.js` in the `window.__ModuleLoader__` **classic-script** form, plus the `sidebar.panellist` row and the `main` keyed panel, lanes/cards/inspector, themes, locale, keyboard access. | §11, M2 | Needs the routes from chunk 6. |
 | 8 | **M0 spikes 2–4**: `ctx.agents.create()` outside `dsh-webhook`; `attachSession` against a worktree; a `/dsho/api/*` route + SSE from a slot component. | §16 | Spike 1 is done; these are the remaining unknowns. |
 | 9 | **Feedback classification** (actionability, bot detection by `__typename`/`User.Type` never a login substring, per-comment dedup, re-arm only on a definitive clear) and the **report outbox** (§10.5, A23). | §10.3, §10.5 | M4's logic, testable offline. Can be interleaved with 6. |
 
-**Recommended next step: chunk 6.** `src/index.ts` is the last piece that makes the
-package installable at all, and both the build and the install path are now
-verified: `npm run build` → `dsh plugin --profile web add <dir>` → the harness in
-[docs/verification-harness.md](docs/verification-harness.md).
+**Recommended next step: chunk 6b**, starting with `WorkerSpawner` — it is the one
+host service whose uncertainty is still open (M0 spike 2: `ctx.agents.create()`
+outside `dsh-webhook`, and `attachSession` against a worktree). The install loop is
+now cheap and fully documented in [docs/verification-harness.md](docs/verification-harness.md).
+
+### ✅ Chunk 6a DONE — the plugin installs and activates
+
+**Verified in a real GUI, not inferred.** The package was built, installed into the
+`web` profile and booted:
+
+```bash
+npm run build
+dsh plugin --profile web add /Users/notmd/dev/game/dsh-orchestrator
+dsh --profile web --port 0 --no-open --host 127.0.0.1   # then open the tokenised URL
+```
+
+| Evidence | Result |
+|---|---|
+| Loader composition (`dsh --profile web --dump-config`) | `# == @local/dsh-orchestrator` → `- id: orchestrator`, `name: '@local/dsh-orchestrator'` |
+| Server boot | clean — **no activation error** |
+| GUI → Settings → Plugins | **`Installed  1` → `@local/dsh-orchestrator`** with its manifest description, read without activating the plugin (Appendix A1.2) |
+| The spike, removed with `dsh plugin --profile web remove` | its "Spike" `sidebar.panellist` row is **gone** from `navigation "Global panels"` |
+
+| File | What it is |
+|---|---|
+| [`src/index.ts`](src/index.ts) | The plugin entry: `name`, `inject: ['tools']`, `apply()`. Validates config loudly, then registers the tool table under one `ctx.effect`. |
+| [`src/host/context.ts`](src/host/context.ts) | The host `Context` slice, declared **structurally** — so activation is testable against a fake `ctx`, and the plugin's host-plane footprint is one reviewable file. |
+| [`src/host/tool.ts`](src/host/tool.ts) | A local `defineTool` equivalent, compiling the schema DSL to the JSON Schema the registry stores. |
+| [`src/host/tools.ts`](src/host/tools.ts) | The tool table — **one tool today**, `orchestrator_config`, the only one fully backed by existing code. |
+| [`test/host/index.test.ts`](test/host/index.test.ts) | 16 tests: registration, `ctx.effect` disposal, loud config rejection, and the tool compiler. |
+
+**Why `defineTool` is not imported, and why that is not laziness:** the package is
+installed as a **symlink**, so a bare `@deepseek-ai/*` specifier resolves by walking
+up from this package's *real* path — the developer's checkout — and never reaches
+`~/.dsh/profiles/node_modules`, where the peers live. On top of that, the registry's
+`@deepseek-ai/dsh-tools` is `0.0.1-rc.1` while the installed host is `0.1.7-rc.2`, so
+installing it would put a second, mismatched copy in the tree. Both facts were
+measured. The descriptors are transcribed from the installed `defineTool`, so the
+registry sees exactly what it would have seen otherwise.
+
+**The tool table is deliberately one tool, not eleven.** The other ten need services
+that do not exist yet, and shipping a tool whose body says "not implemented" is worse
+than not shipping it: the model would call it and the user would get a
+plausible-looking failure. The table grows with its services; the mapping from tool →
+blocking service is written down in `src/host/tools.ts`.
 
 ### ✅ M0 spike 1 DONE — the panel seat is proven, and R1 is closed
 

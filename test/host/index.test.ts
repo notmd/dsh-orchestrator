@@ -1,0 +1,218 @@
+/**
+ * The host half: activation, registration, disposal, and the config tool.
+ *
+ * These run against a **fake `ctx`**, which is only possible because
+ * `src/host/context.ts` declares the host surface structurally instead of
+ * importing cordis. That is the point of it: the plugin's host-plane footprint is
+ * one reviewable file, and activation is testable without a live profile.
+ *
+ * What this suite does *not* prove: that a real host accepts these registrations.
+ * Only an install does that. See docs/verification-harness.md.
+ */
+
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+
+import { apply, inject, name } from '../../src/index.ts'
+import { ConfigError } from '../../src/config/validate.ts'
+import { REQUESTED_FLOW_FLAGS, buildOrchestratorTools, describeConfig } from '../../src/host/tools.ts'
+import { compileParameters, defineTool } from '../../src/host/tool.ts'
+import type { HostContext } from '../../src/host/context.ts'
+import type { ToolDescriptor } from '../../src/host/tool.ts'
+
+/** A `ctx` that records what was registered and honours `effect` disposal. */
+function fakeContext(): HostContext & {
+  readonly registered: ToolDescriptor<never, unknown>[]
+  readonly effects: string[]
+  disposeAll(): void
+} {
+  const registered: ToolDescriptor<never, unknown>[] = []
+  const effects: string[] = []
+  const cleanups: Array<() => void> = []
+  return {
+    tools: {
+      register(tool) {
+        registered.push(tool as ToolDescriptor<never, unknown>)
+        return () => {
+          const index = registered.indexOf(tool as ToolDescriptor<never, unknown>)
+          if (index >= 0) registered.splice(index, 1)
+        }
+      },
+    },
+    effect(callback, label) {
+      effects.push(label ?? '(unlabelled)')
+      const cleanup = callback()
+      if (typeof cleanup === 'function') cleanups.push(cleanup)
+      return () => {
+        for (const fn of cleanups) fn()
+      }
+    },
+    get registered() {
+      return registered
+    },
+    get effects() {
+      return effects
+    },
+    disposeAll() {
+      for (const fn of cleanups) fn()
+    },
+  }
+}
+
+test('the plugin declares a name and a minimal inject list', () => {
+  assert.equal(name, 'dsh-orchestrator')
+  assert.deepEqual([...inject], ['tools'])
+})
+
+test('apply registers the orchestrator tools and returns the resolved config', () => {
+  const ctx = fakeContext()
+  const config = apply(ctx, {})
+  assert.equal(ctx.registered.length, 1)
+  assert.equal(ctx.registered[0]!.name, 'orchestrator_config')
+  assert.equal(config.autoReview, true, 'the requested flow is on by default')
+})
+
+test('apply owns every registration through ctx.effect, so unload disposes it', () => {
+  const ctx = fakeContext()
+  apply(ctx, {})
+  assert.deepEqual(ctx.effects, ['dsh-orchestrator: orchestrator tools'])
+  assert.equal(ctx.registered.length, 1)
+  ctx.disposeAll()
+  assert.deepEqual(ctx.registered, [], 'the tool is removed on disposal')
+})
+
+test('apply validates configuration loudly, before registering anything', () => {
+  const ctx = fakeContext()
+  assert.throws(
+    () => apply(ctx, { planGate: 'whenever' } as never),
+    ConfigError,
+    'a bad planGate must fail activation',
+  )
+  assert.deepEqual(ctx.registered, [], 'nothing is registered when config is rejected')
+  assert.deepEqual(ctx.effects, [], 'no effect is even opened')
+})
+
+test('apply works without a logger', () => {
+  // `logger` is optional on the host context; activation must not require it.
+  const ctx = fakeContext()
+  assert.doesNotThrow(() => apply(ctx, {}))
+})
+
+test('describeConfig names the three requested-flow flags and their defaults', () => {
+  const config = apply(fakeContext(), {})
+  const text = describeConfig(config)
+  for (const flag of REQUESTED_FLOW_FLAGS) {
+    assert.match(text, new RegExp(`${flag}: true \\(default\\)`), flag)
+  }
+  assert.match(text, /maxReviewRounds: 3/)
+  assert.match(text, /reviewerPermissionPreset: read-only/)
+})
+
+test('describeConfig distinguishes an overridden flag from a defaulted one', () => {
+  const config = apply(fakeContext(), { autoReview: false, maxConcurrentWorkers: 4 })
+  const text = describeConfig(config)
+  assert.match(text, /autoReview: false \(overridden\)/)
+  assert.match(text, /autoInjectReview: true \(default\)/)
+  assert.match(text, /maxConcurrentWorkers: 4/)
+})
+
+test('describeConfig explains the divergence, so the gate is never a mystery', () => {
+  const text = describeConfig(apply(fakeContext(), {}))
+  assert.match(text, /documented divergence/)
+  assert.match(text, /Needs human review/)
+})
+
+test('describeConfig reports an unconfigured repo and a disabled webhook plainly', () => {
+  const text = describeConfig(apply(fakeContext(), {}))
+  assert.match(text, /defaultRepo: \(none configured\)/)
+  assert.match(text, /webhook: disabled/)
+})
+
+test('the tool table stays in step with the tools actually built', () => {
+  const tools = buildOrchestratorTools(apply(fakeContext(), {}))
+  const names = tools.map((tool) => tool.name)
+  assert.deepEqual(names, ['orchestrator_config'])
+  // Every registered tool must carry a real schema, because the registry feeds it
+  // to the model: a tool with empty `parameters` and no schema would be rejected
+  // there rather than here.
+  for (const tool of tools) {
+    assert.equal(tool.parameters.type, 'object')
+    assert.equal(typeof tool.description, 'string')
+    assert.ok(tool.description.length > 40, `${tool.name} needs a usable description`)
+  }
+})
+
+test('the config tool actually executes and renders text', async () => {
+  const ctx = fakeContext()
+  apply(ctx, {})
+  const tool = ctx.registered[0]!
+  const value = await tool.execute({} as never, {})
+  const rendered = tool.output.render({} as never, value)
+  assert.equal(rendered.length, 1)
+  assert.equal(rendered[0]!.type, 'text')
+  assert.match(rendered[0]!.text, /resolved configuration/)
+})
+
+// ---------------------------------------------------------------------------
+// The tool compiler — the shapes the registry consumes
+// ---------------------------------------------------------------------------
+
+test('compileParameters separates required from optional parameters', () => {
+  const schema = compileParameters({
+    title: { type: 'string', required: true, description: 'Issue title' },
+    body: { type: 'string' },
+  })
+  assert.deepEqual(schema.required, ['title'])
+  assert.equal(schema.additionalProperties, false)
+  assert.equal(schema.properties.title!.type, 'string')
+  assert.equal(schema.properties.title!.description, 'Issue title')
+})
+
+test('compileParameters carries an enum through', () => {
+  const schema = compileParameters({
+    priority: { type: 'string', enum: ['high', 'normal', 'low'], required: true },
+  })
+  assert.deepEqual(schema.properties.priority!.enum, ['high', 'normal', 'low'])
+})
+
+test('compileParameters compiles an array of objects, required flags included', () => {
+  const schema = compileParameters({
+    outputs: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          kind: { type: 'string', enum: ['artifact', 'pr_created', 'pr_reviewed'], required: true },
+          ref: { type: 'string', required: true },
+        },
+      },
+    },
+  })
+  const items = schema.properties.outputs!.items!
+  assert.equal(items.type, 'object')
+  assert.deepEqual(items.required, ['kind', 'ref'])
+})
+
+test('defineTool rejects a nonsense timeout rather than accepting it', () => {
+  const base = {
+    name: 't',
+    description: 'd',
+    parameters: {},
+    execute: () => 'ok',
+  } as const
+  assert.throws(() => defineTool({ ...base, timeoutMs: 0 }), /timeoutMs/)
+  assert.throws(() => defineTool({ ...base, timeoutMs: -1 }), /timeoutMs/)
+  assert.throws(() => defineTool({ ...base, timeoutMs: Number.POSITIVE_INFINITY }), /timeoutMs/)
+  assert.equal(defineTool({ ...base, timeoutMs: 1_000 }).timeoutMs, 1_000)
+})
+
+test('defineTool defaults its renderer to indented JSON', async () => {
+  const tool = defineTool({
+    name: 't',
+    description: 'd',
+    parameters: {},
+    execute: () => ({ a: 1 }),
+  })
+  const rendered = tool.output.render({} as never, await tool.execute({} as never, {}))
+  assert.equal(rendered[0]!.text, '{\n  "a": 1\n}')
+})
