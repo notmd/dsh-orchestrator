@@ -9,9 +9,9 @@ bloated status file costs the next agent more than it saves.
 |---|---|
 | **Goal** | Implement [PRD.md](PRD.md) |
 | **Plan source** | [PRD.md §16 Milestones](PRD.md#16-milestones), verified against [docs/dsh-plugin-contract.md](docs/dsh-plugin-contract.md) |
-| **Last updated** | 2026-10-01, chunk 6d (worktrees, verified against real git) |
+| **Last updated** | 2026-10-01, chunk 6e (command seam) |
 | **Verify** | `npm run verify` → typecheck (src) + `node --test` + build · **all three green** |
-| **Current state** | **The plugin installs and activates in DSH; the spawn and worktree layers exist and are verified — worktrees against real git.** 411 tests pass; `tsc` reports **0 errors across `src/` and `test/`**; `npm run build` emits `dist/`. M0 spike 1 is done (panel seat proven) and the host entry is live with one real tool. The services behind it (issue store, spawner, observer, routes) and the whole client half are still to come. |
+| **Current state** | **The plugin installs and activates in DSH; the spawn, worktree, and command layers exist and are verified — worktrees against real git.** 444 tests pass; `tsc` reports **0 errors across `src/` and `test/`**; `npm run build` emits `dist/`. M0 spike 1 is done (panel seat proven) and the host entry is live with one real tool. The services behind it (issue store, spawner, observer, routes) and the whole client half are still to come. |
 
 ---
 
@@ -94,25 +94,59 @@ Chunk numbers are this file's own; milestone letters are the PRD's.
 
 | Chunk | Work | PRD | Why now |
 |---|---|---|---|
+| 6f | **`orchestrator_repo_connect`** — now unblocked: the gate every other tool depends on. Register a local checkout, verify it is a git work tree, warn when `.dsho/` is not ignored (R4), preflight `gh auth` (R3), and read repo identity. It needs the `Repo` store (or returns the record for a later store), plus the `gh` argv builders and the token-precedence chain (`AO_GITHUB_TOKEN` → `GITHUB_TOKEN` → `gh auth token`, memoised, invalidated on 401/403). | §12.1, R3, R4 | It is the gate every other tool depends on: nothing can be spawned until a repo is connected. |
 | 6e | **`orchestrator_repo_connect`** — the first tool backed by real code now that git exists: register a local checkout, verify it is a git work tree, warn when `.dsho/` is not ignored (R4), and preflight `gh auth` (R3). Needs the `ctx.shell` adapter (`resolve` → `execute` → `run.result()`) that supplies the `RunCommand` seam. | §12.1, R3, R4 | The gate every other tool depends on: nothing can be spawned until a repo is connected. |
 | 7 | **Client half**: `src/client/**/*.ts` → `dist/client.js` in the `window.__ModuleLoader__` **classic-script** form, plus the `sidebar.panellist` row and the `main` keyed panel, lanes/cards/inspector, themes, locale, keyboard access. | §11, M2 | Needs the routes from chunk 6. |
 | 8 | **M0 spikes 2–4**: `ctx.agents.create()` outside `dsh-webhook`; `attachSession` against a worktree; a `/dsho/api/*` route + SSE from a slot component. | §16 | Spike 1 is done; these are the remaining unknowns. |
 | 9 | **Feedback classification** (actionability, bot detection by `__typename`/`User.Type` never a login substring, per-comment dedup, re-arm only on a definitive clear) and the **report outbox** (§10.5, A23). | §10.3, §10.5 | M4's logic, testable offline. Can be interleaved with 6. |
 
-**Recommended next step: chunk 6e — `orchestrator_repo_connect`.** It is the gate
-every other tool depends on, and both layers beneath it now exist and are verified:
-the spawner (spike 2) and the worktrees (real git). It also forces the `ctx.shell`
-adapter into existence, which is the last host seam before the issue store. Two
-smaller things stay queued: confirm the admitted prompt actually produces a turn (the
-residual in spike 2), and settle whether the preset lease should be released by the
-caller or owned by the worker's context.
-it: does the real `ctx.agents.create()` accept a non-`dsh-webhook` caller, and does
-`attachSession` tolerate a worktree whose repository root is a different workspace?
-Append a spawn to `fixtures/panel-spike`'s host half (or a sibling fixture), install
-it, boot, and look for the new titled session in the GUI sidebar. The install loop
-is cheap and documented in [docs/verification-harness.md](docs/verification-harness.md).
-outside `dsh-webhook`, and `attachSession` against a worktree). The install loop is
-now cheap and fully documented in [docs/verification-harness.md](docs/verification-harness.md).
+**Recommended next step: chunk 6f — `orchestrator_repo_connect`.** The exec seam
+landed this round, so the gate every other tool depends on is now unblocked: it
+needs the `gh` argv builders, the token-precedence chain, and the repo preflight,
+all three of which sit directly on top of code that already exists and is tested.
+Two smaller things stay queued: confirm the admitted prompt actually produces a
+turn (the residual in spike 2), and settle whether the preset lease should be
+released by the caller or owned by the worker's context.
+
+### ✅ Chunk 6e — the command seam (the exec layer under everything)
+
+[`src/host/exec.ts`](src/host/exec.ts) puts `ctx.subprocess` behind a
+promise-returning `RunCommand`, so the bounded-work NFR ("every `gh`/`git` call has
+a deadline and an output cap") is enforced in **one** place instead of remembered
+at each call site.
+
+**Why `ctx.subprocess` and not `ctx.shell`.** `ctx.shell.resolve()` takes a *command
+string*, which would mean shell-quoting argv built from user-controlled text:
+branch names, titles, file paths. `ctx.subprocess.spawn()` takes an **argv array**,
+so there is no shell and therefore nothing to quote. Injection becomes
+unrepresentable rather than escaped — the same reasoning `slugify` uses, and there
+is a test with `a b; rm -rf /` in a path that asserts it arrives as *one* argument.
+
+**Why `truncated` is propagated.** The collected stream reports `lossy` when it hit
+its byte cap, and a truncated `gh pr view --json` is **invalid JSON that looks like
+valid input**. A caller that ignored the flag would parse half a document and act on
+it, so the flag is carried out and callers must check it before trusting a parse.
+
+**TDD caught a real bug.** A test asserting "a command that exceeds its deadline is
+terminated" failed: when `handle.done` **rejects** on abort — which is a normal way
+for it to surface — the code after the `await` never ran and the child was never
+terminated. Investigating that produced a second, more important decision: a
+deadline now **arrives as a result, never as a throw**, however the child reports
+it. Callers branch on `timedOut`; if the same condition sometimes threw, every caller
+would need a try/catch as well, and the ones that forgot would read a timeout as an
+unknown crash. Both paths are now asserted.
+
+`classifyCommandFailure` + `retryAfterMs` + `describeFailure` cover what a caller
+does next. Two orderings are load-bearing and tested:
+
+- **Rate limit before forbidden.** GitHub answers 403 for both, and only the body
+  distinguishes them. Getting it backwards means retrying a rate limit in a tight
+  loop — the exact failure the NFR names.
+- **`check-ignore`'s exit 128 is not "ignored"** (in the worktree module, same
+  family): a git failure must never read as a positive answer.
+
+Only `unauthorized` and `forbidden` invalidate a memoised credential; a rate limit
+and a 404 do not.
 
 ### ✅ Chunk 6d — the worktree manager, verified against real git
 
