@@ -19,14 +19,15 @@
  * @module dsho/review/planner
  */
 
-import { ActivityState } from '../contract/activity.js'
+import { ActivityState } from '../contract/activity.ts'
 import {
   REVIEW_BOUND_DEFAULTS,
   ReviewRunStatus,
   ReviewVerdict,
   changesRequestedCycles,
   isVerdict,
-} from './runs.js'
+} from './runs.ts'
+import type { ReviewBounds, ReviewRun } from './runs.ts'
 
 /**
  * The current review state for one pull-request head. Ported from
@@ -42,7 +43,10 @@ export const AOReviewState = Object.freeze({
   upToDate: 'up_to_date',
   changesRequested: 'changes_requested',
   ineligible: 'ineligible',
-})
+} as const)
+
+/** The union of every per-head review state. */
+export type AOReviewState = (typeof AOReviewState)[keyof typeof AOReviewState]
 
 /**
  * Why the automated loop may not run for a session at all. Verbatim from the
@@ -54,7 +58,7 @@ export const SessionGateReason = Object.freeze({
   terminated: 'terminated',
   notIdle: 'not_idle',
   idleThresholdNotMet: 'idle_threshold_not_met',
-})
+} as const)
 
 /**
  * Why the loop may not run for one head. Verbatim from the reference's
@@ -79,10 +83,21 @@ export const HeadSkipReason = Object.freeze({
    * changes-requested PR forever.
    */
   reviewRoundLimit: 'review-round-limit',
-})
+} as const)
+
+/** Every reason string the scheduler can report. */
+export type ReasonCode =
+  | (typeof SessionGateReason)[keyof typeof SessionGateReason]
+  | (typeof HeadSkipReason)[keyof typeof HeadSkipReason]
+  | 'missing_reviewer_harness'
+  | 'no_pr'
+  | 'planner_ineligible'
+  | 'triggered'
 
 /** The reference's defaults, restated so they are visible where they are used. */
-export const REVIEW_LOOP_DEFAULTS = Object.freeze({
+export const REVIEW_LOOP_DEFAULTS: Readonly<
+  Required<ReviewBounds> & { idleThresholdMs: number; sweepIntervalMs: number }
+> = Object.freeze({
   /** A worker must be idle at least this long before a pass may start. */
   idleThresholdMs: 60_000,
   /** How often the sweep re-evaluates live sessions. */
@@ -90,27 +105,27 @@ export const REVIEW_LOOP_DEFAULTS = Object.freeze({
   ...REVIEW_BOUND_DEFAULTS,
 })
 
-/**
- * @typedef {object} PRFactsForPlan
- * @property {string} url
- * @property {number} [number]
- * @property {string} [title]
- * @property {string} headSha
- * @property {boolean} [merged]
- * @property {boolean} [closed]
- * @property {boolean} [draft]
- */
+/** The PR facts the planner reads. */
+export interface PRFactsForPlan {
+  url: string
+  number?: number
+  title?: string
+  headSha: string
+  merged?: boolean
+  closed?: boolean
+  draft?: boolean
+}
 
-/**
- * @typedef {object} PRReviewState
- * @property {string} prUrl
- * @property {number|undefined} prNumber
- * @property {string|undefined} title
- * @property {string} targetSha
- * @property {string} status         {@link AOReviewState} value.
- * @property {import('./runs.js').ReviewRun} [latestRun]
- * @property {import('./runs.js').ReviewRun} [previousRun]
- */
+/** One PR-scoped review decision for a worker session. */
+export interface PRReviewState {
+  prUrl: string
+  prNumber: number | undefined
+  title: string | undefined
+  targetSha: string
+  status: AOReviewState
+  latestRun?: ReviewRun
+  previousRun?: ReviewRun
+}
 
 /**
  * Computes per-PR review work from the currently observed PRs and existing review
@@ -119,17 +134,15 @@ export const REVIEW_LOOP_DEFAULTS = Object.freeze({
  * Ported from `func Plan(prs, runs) []PRReviewState`. Two faithful details worth
  * naming: only the **latest** run per `(PR, head)` is consulted, and the output is
  * sorted by `(prNumber, prUrl)` so iteration order is deterministic.
- *
- * @param {PRFactsForPlan[]|undefined|null} prs
- * @param {import('./runs.js').ReviewRun[]|undefined|null} runs
- * @returns {PRReviewState[]}
  */
-export function plan(prs, runs) {
+export function plan(
+  prs: readonly PRFactsForPlan[] | undefined | null,
+  runs: readonly ReviewRun[] | undefined | null,
+): PRReviewState[] {
   const latest = latestRunsByPRAndHead(runs)
-  const reviews = []
+  const reviews: PRReviewState[] = []
   for (const pr of prs ?? []) {
-    /** @type {PRReviewState} */
-    const review = {
+    const review: PRReviewState = {
       prUrl: pr.url ?? '',
       prNumber: pr.number,
       title: pr.title,
@@ -150,21 +163,17 @@ export function plan(prs, runs) {
     const run = latest.get(headKey(review.prUrl, review.targetSha))
     if (run) {
       review.latestRun = run
-      switch (true) {
-        case run.status === ReviewRunStatus.running:
-          review.status = AOReviewState.running
-          break
-        case run.verdict === ReviewVerdict.approved:
-          review.status = AOReviewState.upToDate
-          break
-        case run.verdict === ReviewVerdict.changesRequested:
-          review.status = AOReviewState.changesRequested
-          break
-        default:
-          // `failed`, `cancelled`, and a settled run with no verdict all read as
-          // still needing review: a head we tried and could not judge still owes
-          // the PR the pass auto review promised it.
-          review.status = AOReviewState.needsReview
+      if (run.status === ReviewRunStatus.running) {
+        review.status = AOReviewState.running
+      } else if (run.verdict === ReviewVerdict.approved) {
+        review.status = AOReviewState.upToDate
+      } else if (run.verdict === ReviewVerdict.changesRequested) {
+        review.status = AOReviewState.changesRequested
+      } else {
+        // `failed`, `cancelled`, and a settled run with no verdict all read as
+        // still needing review: a head we tried and could not judge still owes
+        // the PR the pass auto review promised it.
+        review.status = AOReviewState.needsReview
       }
     }
     reviews.push(review)
@@ -179,7 +188,7 @@ export function plan(prs, runs) {
 }
 
 /** The `(PR, head)` key. The reference uses `\x00`; a NUL cannot appear in a URL. */
-function headKey(prUrl, headSha) {
+function headKey(prUrl: string, headSha: string): string {
   return `${prUrl}\x00${headSha}`
 }
 
@@ -188,12 +197,11 @@ function headKey(prUrl, headSha) {
  *
  * Ported from `latestRunsByPRAndSHA`. Runs with no PR URL or no head are dropped:
  * an unpinned pass must never be attributed to a head.
- *
- * @param {import('./runs.js').ReviewRun[]|undefined|null} runs
- * @returns {Map<string, import('./runs.js').ReviewRun>}
  */
-export function latestRunsByPRAndHead(runs) {
-  const latest = new Map()
+export function latestRunsByPRAndHead(
+  runs: readonly ReviewRun[] | undefined | null,
+): Map<string, ReviewRun> {
+  const latest = new Map<string, ReviewRun>()
   for (const run of runs ?? []) {
     if (!run || !run.prUrl || !run.headSha) continue
     const key = headKey(run.prUrl, run.headSha)
@@ -207,16 +215,14 @@ export function latestRunsByPRAndHead(runs) {
  * The latest settled, judged pass recorded for a head *other* than the target.
  *
  * Ported from `latestCompletedRunForOtherSHA`.
- *
- * @param {import('./runs.js').ReviewRun[]|undefined|null} runs
- * @param {string} prUrl
- * @param {string} targetSha
- * @returns {import('./runs.js').ReviewRun|undefined}
  */
-export function latestCompletedRunForOtherHead(runs, prUrl, targetSha) {
+export function latestCompletedRunForOtherHead(
+  runs: readonly ReviewRun[] | undefined | null,
+  prUrl: string,
+  targetSha: string,
+): ReviewRun | undefined {
   if (!prUrl || !targetSha) return undefined
-  /** @type {import('./runs.js').ReviewRun|undefined} */
-  let latest
+  let latest: ReviewRun | undefined
   for (const run of runs ?? []) {
     if (!run || run.prUrl !== prUrl || !run.headSha || run.headSha === targetSha) continue
     if (run.status !== ReviewRunStatus.complete && run.status !== ReviewRunStatus.delivered) continue
@@ -226,15 +232,19 @@ export function latestCompletedRunForOtherHead(runs, prUrl, targetSha) {
   return latest
 }
 
-/**
- * @typedef {object} GateSession
- * @property {boolean} [autoReview]
- * @property {string} [kind]          `worker` for a worker session.
- * @property {boolean} [isTerminated]
- * @property {string} [activity]      {@link ActivityState} value.
- * @property {number} [lastActivityAt] Epoch ms.
- * @property {string} [reviewerHarness] Non-empty when a reviewer is resolvable.
- */
+/** The session facts the gate reads. */
+export interface GateSession {
+  autoReview?: boolean
+  /** `worker` for a worker session. */
+  kind?: string
+  isTerminated?: boolean
+  /** An {@link ActivityState} value. */
+  activity?: string
+  /** Epoch ms. */
+  lastActivityAt?: number
+  /** Non-empty when a reviewer is resolvable. */
+  reviewerHarness?: string
+}
 
 /**
  * The session gate. Runs **before any planner work**, in this order, because the
@@ -250,12 +260,9 @@ export function latestCompletedRunForOtherHead(runs, prUrl, targetSha) {
  * `missing_reviewer_harness` rather than being discovered later, so the caller
  * cannot start a pass it has no reviewer for.
  *
- * @param {GateSession} session
- * @param {number} now                 Epoch ms.
- * @param {number} idleThresholdMs
- * @returns {string} A reason code, or `''` when the gate passes.
+ * Returns a reason code, or `''` when the gate passes.
  */
-export function sessionGate(session, now, idleThresholdMs) {
+export function sessionGate(session: GateSession, now: number, idleThresholdMs: number): string {
   if (!session.autoReview) return SessionGateReason.disabled
   if (session.kind !== 'worker') return SessionGateReason.notWorker
   if (session.isTerminated) return SessionGateReason.terminated
@@ -273,15 +280,16 @@ export function sessionGate(session, now, idleThresholdMs) {
  * Ported from `existingHeadReason`. This is the rule that stops the loop spinning
  * on one commit: a judged head is not re-judged, and a cancelled one is respected.
  *
- * @param {import('./runs.js').ReviewRun[]|undefined|null} runs
- * @param {string} prUrl
- * @param {string} targetSha
- * @param {object} [bounds]
- * @param {number} [bounds.autoReviewFailedRetryLimit]
- * @returns {string} A reason code, or `''` when the head may be reviewed.
+ * Returns a reason code, or `''` when the head may be reviewed.
  */
-export function existingHeadReason(runs, prUrl, targetSha, bounds) {
-  const retryLimit = bounds?.autoReviewFailedRetryLimit ?? REVIEW_BOUND_DEFAULTS.autoReviewFailedRetryLimit
+export function existingHeadReason(
+  runs: readonly ReviewRun[] | undefined | null,
+  prUrl: string,
+  targetSha: string,
+  bounds?: ReviewBounds,
+): string {
+  const retryLimit =
+    bounds?.autoReviewFailedRetryLimit ?? REVIEW_BOUND_DEFAULTS.autoReviewFailedRetryLimit
   let failedAutoRuns = 0
   for (const run of runs ?? []) {
     if (!run || run.prUrl !== prUrl || run.headSha !== targetSha) continue
@@ -299,12 +307,11 @@ export function existingHeadReason(runs, prUrl, targetSha, bounds) {
  * Why a PR is ineligible for review at all.
  *
  * Ported from `ineligibleReason`.
- *
- * @param {PRFactsForPlan[]|undefined|null} prs
- * @param {string} url
- * @returns {string}
  */
-export function ineligibleReason(prs, url) {
+export function ineligibleReason(
+  prs: readonly PRFactsForPlan[] | undefined | null,
+  url: string,
+): string {
   for (const pr of prs ?? []) {
     if (pr.url !== url) continue
     if (pr.draft) return HeadSkipReason.draftPr
@@ -316,24 +323,30 @@ export function ineligibleReason(prs, url) {
   return 'planner_ineligible'
 }
 
-/**
- * @typedef {object} EvaluateInput
- * @property {GateSession} session
- * @property {PRFactsForPlan[]|undefined|null} prs
- * @property {import('./runs.js').ReviewRun[]|undefined|null} runs
- * @property {number} now
- * @property {object} [bounds]  {@link REVIEW_LOOP_DEFAULTS} overrides.
- */
+/** Everything {@link evaluateSession} reads. */
+export interface EvaluateInput {
+  session: GateSession
+  prs: readonly PRFactsForPlan[] | undefined | null
+  runs: readonly ReviewRun[] | undefined | null
+  now: number
+  bounds?: ReviewBounds & { idleThresholdMs?: number }
+}
 
-/**
- * @typedef {object} EvaluateResult
- * @property {boolean} trigger            A new pass may be started.
- * @property {string} reason              Why, or why not. Always set.
- * @property {string[]} headsToReview     The heads a pass may start for. Empty
- *   when `trigger` is false. This is the useful output: it is what the spawner
- *   iterates, and it is exactly the set the gate permitted.
- * @property {PRReviewState[]} plans      Per-head state, for the board and the API.
- */
+/** The scheduler's answer for one worker session. */
+export interface EvaluateResult {
+  /** A new pass may be started. */
+  trigger: boolean
+  /** Why, or why not. Always set. */
+  reason: string
+  /**
+   * The heads a pass may start for. Empty when `trigger` is false. This is the
+   * useful output: it is what the spawner iterates, and it is exactly the set the
+   * gate permitted.
+   */
+  headsToReview: string[]
+  /** Per-head state, for the board and the API. */
+  plans: PRReviewState[]
+}
 
 /**
  * Evaluates one worker session against the current activity, PR, and review-run
@@ -348,20 +361,17 @@ export function ineligibleReason(prs, url) {
  * **At most one `ReviewRun` per `(prNumber, headSha)`** falls out of this: a head
  * with a running pass, an approval, a changes-requested verdict, or a cancelled
  * pass, and a head that has burned its retry budget, is never returned here.
- *
- * @param {EvaluateInput} input
- * @returns {EvaluateResult}
  */
-export function evaluateSession({ session, prs, runs, now, bounds }) {
-  const idleThresholdMs = bounds?.idleThresholdMs ?? REVIEW_LOOP_DEFAULTS.idleThresholdMs
-  const gate = sessionGate(session, now, idleThresholdMs)
+export function evaluateSession(input: EvaluateInput): EvaluateResult {
+  const idleThresholdMs = input.bounds?.idleThresholdMs ?? REVIEW_LOOP_DEFAULTS.idleThresholdMs
+  const gate = sessionGate(input.session, input.now, idleThresholdMs)
   if (gate) return { trigger: false, reason: gate, headsToReview: [], plans: [] }
 
-  if (!prs || prs.length === 0) {
+  if (!input.prs || input.prs.length === 0) {
     return { trigger: false, reason: 'no_pr', headsToReview: [], plans: [] }
   }
 
-  const plans = plan(prs, runs)
+  const plans = plan(input.prs, input.runs)
 
   // DIVERGENCE (DSHO-only). The reference has no round cap, so this check does
   // not exist in `EvaluateSession`. It must exist here as well as in the board
@@ -372,14 +382,14 @@ export function evaluateSession({ session, prs, runs, now, bounds }) {
   // The budget counts changes-requested cycles across the worker's successive
   // heads, so it is a worker-level bound rather than a head-level one. That
   // matches the 1:1 issue:worker model, where "the loop" is the worker's loop.
-  const maxReviewRounds = bounds?.maxReviewRounds ?? REVIEW_LOOP_DEFAULTS.maxReviewRounds
-  if (changesRequestedCycles(runs) >= maxReviewRounds) {
+  const maxReviewRounds = input.bounds?.maxReviewRounds ?? REVIEW_LOOP_DEFAULTS.maxReviewRounds
+  if (changesRequestedCycles(input.runs) >= maxReviewRounds) {
     return { trigger: false, reason: HeadSkipReason.reviewRoundLimit, headsToReview: [], plans }
   }
 
-  const headsToReview = []
+  const headsToReview: string[] = []
   let hasRunning = false
-  let reason = 'planner_ineligible'
+  let reason: string = 'planner_ineligible'
 
   for (const state of plans) {
     switch (state.status) {
@@ -394,10 +404,10 @@ export function evaluateSession({ session, prs, runs, now, bounds }) {
         reason = HeadSkipReason.changesRequestedSameSha
         break
       case AOReviewState.ineligible:
-        reason = ineligibleReason(prs, state.prUrl)
+        reason = ineligibleReason(input.prs, state.prUrl)
         break
       default: {
-        const blocked = existingHeadReason(runs, state.prUrl, state.targetSha, bounds)
+        const blocked = existingHeadReason(input.runs, state.prUrl, state.targetSha, input.bounds)
         if (blocked) {
           reason = blocked
           break
@@ -412,7 +422,12 @@ export function evaluateSession({ session, prs, runs, now, bounds }) {
   }
   // A pass already running is not a skip: the reference proceeds and reports the
   // reuse. Reporting `review_running` directly is the same observable answer.
-  return { trigger: false, reason: hasRunning ? HeadSkipReason.reviewRunning : reason, headsToReview, plans }
+  return {
+    trigger: false,
+    reason: hasRunning ? HeadSkipReason.reviewRunning : reason,
+    headsToReview,
+    plans,
+  }
 }
 
 /**
@@ -427,24 +442,23 @@ export function evaluateSession({ session, prs, runs, now, bounds }) {
  *
  * The caller must mark the resulting run `triggerSource: 'manual'` so it does not
  * consume the auto-retry budget (PRD §7.5).
- *
- * @param {object} input
- * @param {PRFactsForPlan[]|undefined|null} input.prs
- * @param {string} [input.prUrl]   Restrict to one PR. Omit for every open PR.
- * @param {string} [input.headSha] Restrict to one head. Omit for the current one.
- * @returns {{trigger: boolean, reason: string, headsToReview: string[]}}
  */
-export function evaluateManualRequest({ prs, prUrl, headSha }) {
-  const pinned = (prs ?? []).filter((pr) => pr && pr.url && pr.headSha)
-  const scoped = pinned.filter((pr) => (!prUrl || pr.url === prUrl) && (!headSha || pr.headSha === headSha))
+export function evaluateManualRequest(input: {
+  prs: readonly PRFactsForPlan[] | undefined | null
+  prUrl?: string
+  headSha?: string
+}): { trigger: boolean; reason: string; headsToReview: string[] } {
+  const pinned = (input.prs ?? []).filter((pr) => pr && pr.url && pr.headSha)
+  const scoped = pinned.filter(
+    (pr) => (!input.prUrl || pr.url === input.prUrl) && (!input.headSha || pr.headSha === input.headSha),
+  )
   const reviewable = scoped.filter((pr) => !pr.merged && !pr.closed && !pr.draft)
   if (reviewable.length > 0) {
     return { trigger: true, reason: 'triggered', headsToReview: reviewable.map((pr) => pr.headSha) }
   }
   const first = scoped[0]
-  const reason = !prs || prs.length === 0
-    ? 'no_pr'
-    : !first
+  const reason =
+    !input.prs || input.prs.length === 0 || !first
       ? 'no_pr'
       : first.draft
         ? HeadSkipReason.draftPr

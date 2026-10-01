@@ -13,15 +13,16 @@
  * @module dsho/board/presentation
  */
 
-import { ActivityState } from '../contract/activity.js'
+import { ActivityState } from '../contract/activity.ts'
 import {
   DisplayStatus,
   KANBAN_LANES,
   KanbanColumn,
   deriveKanbanPresentation,
   prFacts,
-} from '../contract/kanban.js'
-import { SessionStatus, sessionFacts } from '../contract/status.js'
+} from '../contract/kanban.ts'
+import { SessionStatus, sessionFacts } from '../contract/status.ts'
+import type { KanbanPRFacts, KanbanPRFactsInput } from '../contract/kanban.ts'
 
 /**
  * Startup verification, never a persisted status.
@@ -35,10 +36,13 @@ export const StatusReadiness = Object.freeze({
   checking: 'checking',
   ready: 'ready',
   unavailable: 'unavailable',
-})
+} as const)
+
+/** The union of every readiness value. */
+export type StatusReadiness = (typeof StatusReadiness)[keyof typeof StatusReadiness]
 
 /** Normalizes a missing readiness to `ready`; only a *known* non-ready suppresses. */
-export function normalizeStatusReadiness(value) {
+export function normalizeStatusReadiness(value: unknown): StatusReadiness {
   if (value === StatusReadiness.checking || value === StatusReadiness.unavailable) return value
   return StatusReadiness.ready
 }
@@ -57,7 +61,10 @@ export const AttentionZone = Object.freeze({
   pending: 'pending',
   merge: 'merge',
   done: 'done',
-})
+} as const)
+
+/** The union of every attention zone. */
+export type AttentionZone = (typeof AttentionZone)[keyof typeof AttentionZone]
 
 /**
  * Maps a session status to its attention zone. Ported from `attentionZone`.
@@ -66,11 +73,8 @@ export const AttentionZone = Object.freeze({
  * `changes_requested`, and — importantly — `unknown`. An unknown state is an
  * action item, because we cannot rule out that a person is needed. `working` and
  * `idle` are not.
- *
- * @param {string} status
- * @returns {string|undefined}
  */
-export function attentionZone(status) {
+export function attentionZone(status: string): AttentionZone | undefined {
   switch (status) {
     case SessionStatus.merged:
     case SessionStatus.approved:
@@ -104,42 +108,51 @@ export function attentionZone(status) {
  * waits on a person, but it is the *normal* resting place of a finished automated
  * loop, and pulsing on it would train the user to ignore the pulse (A28).
  */
-export const ATTENTION_DISPLAY_STATUSES = Object.freeze([
+export const ATTENTION_DISPLAY_STATUSES: readonly DisplayStatus[] = Object.freeze([
   DisplayStatus.blocked,
   DisplayStatus.ciFailing,
   DisplayStatus.changesRequested,
 ])
 
 /** The display statuses that mean the automated loop is still turning the PR. */
-export const IN_PROGRESS_DISPLAY_STATUSES = Object.freeze([
+export const IN_PROGRESS_DISPLAY_STATUSES: readonly DisplayStatus[] = Object.freeze([
   DisplayStatus.reviewPending,
   DisplayStatus.fixingCI,
   DisplayStatus.addressingComments,
   DisplayStatus.reviewing,
 ])
 
-/**
- * @typedef {object} BoardCard
- * @property {string} id                Stable identity, for keys and tie-breaks.
- * @property {string} sessionId
- * @property {string} title
- * @property {number} updatedAt         Epoch ms, for ordering.
- * @property {string} [statusReadiness] {@link StatusReadiness} value.
- * @property {string} [status]          {@link SessionStatus} value.
- * @property {string} [activity]        {@link ActivityState} value.
- * @property {boolean} [isTerminated]
- * @property {number} [lastActivityAt]
- * @property {boolean} [hasSignal]
- * @property {boolean} [signalExpected]
- * @property {string} [statusPresentation] Reference-only daemon override.
- * @property {string} [displayStatus]   A pre-derived display status, when the
- *   caller already ran the reducer. `presentCard` supplies it explicitly.
- * @property {boolean} [autoReview]
- * @property {boolean} [autoInjectReview]
- * @property {boolean} [autoInjectCI]
- * @property {boolean} [requireHumanApprovalBeforeReady]
- * @property {import('../contract/kanban.js').KanbanPRFacts[]} [prs]
- */
+/** One card's inputs. */
+export interface BoardCard {
+  /** Stable identity, for keys and tie-breaks. */
+  id: string
+  sessionId: string
+  title: string
+  /** Epoch ms, for ordering. */
+  updatedAt: number
+  /** A {@link StatusReadiness} value. */
+  statusReadiness?: string
+  /** A {@link SessionStatus} value. */
+  status?: string
+  /** An {@link ActivityState} value. */
+  activity?: string
+  isTerminated?: boolean
+  lastActivityAt?: number
+  hasSignal?: boolean
+  signalExpected?: boolean
+  /** Reference-only daemon override. */
+  statusPresentation?: unknown
+  /**
+   * A pre-derived display status, when the caller already ran the reducer.
+   * `presentCard` supplies it explicitly.
+   */
+  displayStatus?: DisplayStatus
+  autoReview?: boolean
+  autoInjectReview?: boolean
+  autoInjectCI?: boolean
+  requireHumanApprovalBeforeReady?: boolean
+  prs?: readonly KanbanPRFactsInput[]
+}
 
 /**
  * Reports whether a card should carry the needs-attention treatment.
@@ -158,12 +171,8 @@ export const IN_PROGRESS_DISPLAY_STATUSES = Object.freeze([
  * a daemon-side presentation override that this plugin never sets, so it is inert
  * here. It is kept so that a future port that does start setting it inherits the
  * reference's behaviour instead of silently losing it.
- *
- * @param {BoardCard} card
- * @param {string} [displayStatus] Override the derived display status.
- * @returns {boolean}
  */
-export function needsAttention(card, displayStatus) {
+export function needsAttention(card: BoardCard, displayStatus?: DisplayStatus): boolean {
   if (normalizeStatusReadiness(card.statusReadiness) !== StatusReadiness.ready) return false
   if (card.statusPresentation) return false
   const status = displayStatus ?? card.displayStatus
@@ -182,11 +191,8 @@ export function needsAttention(card, displayStatus) {
  * Ported from the card's `isFinishedForPullRequestProgress`. **Both** facts are
  * required: a live session can already read `merged` before it exits, and it may
  * still gain more PRs, so `merged` alone must not render as finished (A30).
- *
- * @param {BoardCard} card
- * @returns {boolean}
  */
-export function isFinished(card) {
+export function isFinished(card: BoardCard): boolean {
   return (
     card.status === SessionStatus.terminated ||
     (card.status === SessionStatus.merged && card.isTerminated === true)
@@ -205,12 +211,8 @@ export function isFinished(card) {
  *     session's *worst* open PR while `displayStatus` describes its *best* one, so
  *     keying the spinner off `status` spun a settled `Mergeable` card forever
  *     whenever a sibling PR was still review-pending (the reference's #5081).
- *
- * @param {BoardCard} card
- * @param {string} [displayStatus]
- * @returns {boolean}
  */
-export function showStatusLoader(card, displayStatus) {
+export function showStatusLoader(card: BoardCard, displayStatus?: DisplayStatus): boolean {
   const readiness = normalizeStatusReadiness(card.statusReadiness)
   if (readiness === StatusReadiness.checking) return true
   if (readiness === StatusReadiness.unavailable) return false
@@ -235,12 +237,13 @@ export function showStatusLoader(card, displayStatus) {
  * which A29 forbids. Comparing `id` last makes the result a pure function of the
  * card set, so a no-op refresh provably cannot reorder it.
  *
- * @param {BoardCard[]} cards
- * @param {(card: BoardCard) => string} [displayStatusOf]
- * @returns {BoardCard[]} A new array; the input is not mutated.
+ * Returns a new array; the input is not mutated.
  */
-export function orderCards(cards, displayStatusOf) {
-  const statusOf = displayStatusOf ?? ((card) => card.displayStatus)
+export function orderCards(
+  cards: readonly BoardCard[],
+  displayStatusOf?: (card: BoardCard) => DisplayStatus | undefined,
+): BoardCard[] {
+  const statusOf = displayStatusOf ?? ((card: BoardCard) => card.displayStatus)
   return [...cards].sort((left, right) => {
     const attention =
       Number(needsAttention(right, statusOf(right))) - Number(needsAttention(left, statusOf(left)))
@@ -250,35 +253,33 @@ export function orderCards(cards, displayStatusOf) {
   })
 }
 
-/**
- * @typedef {object} BoardCardView
- * @property {string} id
- * @property {string} sessionId
- * @property {string} title
- * @property {string} column            {@link KanbanColumn} value.
- * @property {string} displayStatus     {@link DisplayStatus} value.
- * @property {string} status            {@link SessionStatus} value.
- * @property {string} statusReadiness   {@link StatusReadiness} value.
- * @property {boolean} needsAttention
- * @property {boolean} showStatusLoader
- * @property {boolean} isFinished
- * @property {string} [escalationReason] Why the automated loop stopped, if it did.
- * @property {import('../contract/kanban.js').KanbanPRFacts[]} prs
- */
+/** One card's full derived presentation. */
+export interface BoardCardView {
+  id: string
+  sessionId: string
+  title: string
+  column: KanbanColumn
+  displayStatus: DisplayStatus
+  status: string
+  statusReadiness: StatusReadiness
+  needsAttention: boolean
+  showStatusLoader: boolean
+  isFinished: boolean
+  /** Why the automated loop stopped, if it did. */
+  escalationReason?: 'review-round-limit' | 'review-failed-retry-limit'
+  prs: readonly KanbanPRFacts[]
+}
 
 /**
  * Assembles one card's full presentation.
  *
  * The one place that reads every derived field, so the component cannot disagree
  * with the reducer.
- *
- * @param {BoardCard} card
- * @param {object} timing
- * @param {number} timing.now            Epoch ms.
- * @param {number} timing.noSignalGraceMs
- * @returns {BoardCardView}
  */
-export function presentCard(card, { now, noSignalGraceMs }) {
+export function presentCard(
+  card: BoardCard,
+  timing: { now: number; noSignalGraceMs: number },
+): BoardCardView {
   const session = sessionFacts({
     activity: card.activity,
     lastActivityAt: card.lastActivityAt,
@@ -291,12 +292,11 @@ export function presentCard(card, { now, noSignalGraceMs }) {
     requireHumanApprovalBeforeReady: card.requireHumanApprovalBeforeReady,
   })
   const prs = (card.prs ?? []).map(prFacts)
-  const derived = deriveKanbanPresentation(session, prs, now, noSignalGraceMs)
+  const derived = deriveKanbanPresentation(session, prs, timing.now, timing.noSignalGraceMs)
   const readiness = normalizeStatusReadiness(card.statusReadiness)
   const status = card.status ?? ''
 
-  /** @type {BoardCardView} */
-  const view = {
+  const view: BoardCardView = {
     id: card.id,
     sessionId: card.sessionId,
     title: card.title,
@@ -318,27 +318,18 @@ export function presentCard(card, { now, noSignalGraceMs }) {
  *
  * Archive is deliberately **not** a lane: terminated sessions belong in a
  * separate sheet, and the board stays one continuous four-lane grid (A30).
- *
- * @param {BoardCardView[]} views
- * @returns {Record<string, BoardCardView[]>} Keyed by {@link KanbanColumn}.
  */
-export function groupIntoLanes(views) {
-  /** @type {Record<string, BoardCardView[]>} */
-  const lanes = {}
+export function groupIntoLanes(views: readonly BoardCardView[]): Record<KanbanColumn, BoardCardView[]> {
+  const lanes = {} as Record<KanbanColumn, BoardCardView[]>
   for (const lane of KANBAN_LANES) lanes[lane] = []
   for (const view of views) {
     if (view.column === KanbanColumn.archive) continue
-    ;(lanes[view.column] ?? (lanes[view.column] = [])).push(view)
+    lanes[view.column].push(view)
   }
   return lanes
 }
 
-/**
- * The archive sheet's contents: terminated sessions, newest first.
- *
- * @param {BoardCardView[]} views
- * @returns {BoardCardView[]}
- */
-export function archiveSheet(views) {
+/** The archive sheet's contents: terminated sessions. */
+export function archiveSheet(views: readonly BoardCardView[]): BoardCardView[] {
   return views.filter((view) => view.column === KanbanColumn.archive)
 }

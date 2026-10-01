@@ -3,8 +3,8 @@
  *
  * PORTED from Agent Orchestrator `backend/pkg/contract/status.go`
  * (commit 53ba1e8, Apache-2.0). See NOTICE for the statement of modifications.
- * Only the subset the board needs is ported; `DeriveStatus` and the stack
- * helpers belong to AO's session list, not to this board.
+ * Only the subset the board needs is ported; the stack-aware session list
+ * helpers are included because the aggregate status depends on them.
  *
  * @module dsho/contract/status
  */
@@ -15,7 +15,7 @@ export const CIState = Object.freeze({
   pending: 'pending',
   passing: 'passing',
   failing: 'failing',
-})
+} as const)
 
 /** Aggregate review verdict on a pull request. Ported verbatim. */
 export const ReviewDecision = Object.freeze({
@@ -23,7 +23,7 @@ export const ReviewDecision = Object.freeze({
   approved: 'approved',
   changesRequested: 'changes_requested',
   required: 'review_required',
-})
+} as const)
 
 /** Whether a pull request can currently be merged. Ported verbatim. */
 export const Mergeability = Object.freeze({
@@ -32,72 +32,16 @@ export const Mergeability = Object.freeze({
   conflicting: 'conflicting',
   blocked: 'blocked',
   unstable: 'unstable',
-})
+} as const)
 
 /**
- * @typedef {object} SessionFacts
- * Durable-agnostic facts used to derive board placement.
- * @property {string} activity        {@link ActivityState} value.
- * @property {number} lastActivityAt  Epoch ms of the last observed activity.
- * @property {boolean} hasSignal      The runtime has reported at least once.
- * @property {boolean} signalExpected The runtime is expected to report activity.
- * @property {boolean} isTerminated   The session is finished and will not resume.
- */
-
-/**
- * @typedef {object} KanbanSessionFacts
- * @property {string} activity
- * @property {number} lastActivityAt
- * @property {boolean} hasSignal
- * @property {boolean} signalExpected
- * @property {boolean} isTerminated
- * @property {boolean} autoReview
- * @property {boolean} autoInjectReview
- * @property {boolean} autoInjectCI
- * @property {boolean} requireHumanApprovalBeforeReady  DSHO-only. Not in AO.
- */
-
-/**
- * Fills in Go's zero values for a session-facts object, so a caller that omits a
- * field behaves exactly like the Go struct's zero value.
+ * A value from one of the enums above, or `''`.
  *
- * @param {Partial<KanbanSessionFacts>} [facts]
- * @returns {KanbanSessionFacts}
+ * `''` is Go's zero value, and the ported reducers rely on it: a `ci` of `''`
+ * means "unknown", not "failing". Allowing it in the type is what keeps the port
+ * faithful rather than forcing every caller to invent a value.
  */
-export function sessionFacts(facts = {}) {
-  return {
-    activity: facts.activity ?? '',
-    lastActivityAt: facts.lastActivityAt ?? 0,
-    hasSignal: facts.hasSignal ?? false,
-    signalExpected: facts.signalExpected ?? false,
-    isTerminated: facts.isTerminated ?? false,
-    autoReview: facts.autoReview ?? false,
-    autoInjectReview: facts.autoInjectReview ?? false,
-    autoInjectCI: facts.autoInjectCI ?? false,
-    requireHumanApprovalBeforeReady: facts.requireHumanApprovalBeforeReady ?? false,
-  }
-}
-
-/**
- * Reports whether a session that should be reporting hook activity has never
- * reported and has been quiet longer than the grace period.
- *
- * Ported from `func silentPastGrace(...)`. Faithful to AO: it requires
- * `signalExpected && !hasSignal`, so it fires on a session that never produced a
- * *first* signal — not on an agent that merely had a quiet minute.
- *
- * @param {SessionFacts} session
- * @param {number} now    Epoch ms.
- * @param {number} grace  No-signal grace period in ms.
- * @returns {boolean}
- */
-export function silentPastGrace(session, now, grace) {
-  return (
-    session.signalExpected === true &&
-    session.hasSignal !== true &&
-    now - (session.lastActivityAt ?? 0) > grace
-  )
-}
+export type SCMValue = string
 
 /**
  * The derived display status of a session.
@@ -123,24 +67,82 @@ export const SessionStatus = Object.freeze({
   idle: 'idle',
   terminated: 'terminated',
   noSignal: 'no_signal',
-})
+} as const)
+
+/** The union of every session status, plus `''` for "nothing to say". */
+export type SessionStatus = (typeof SessionStatus)[keyof typeof SessionStatus] | ''
 
 /**
- * @typedef {object} PRFacts
- * @property {string} url
- * @property {boolean} draft
- * @property {boolean} merged
- * @property {boolean} closed
- * @property {string} ci               {@link CIState} value.
- * @property {string} review           {@link ReviewDecision} value.
- * @property {string} mergeability     {@link Mergeability} value.
- * @property {boolean} reviewComments
- * @property {string} sourceBranch
- * @property {string} targetBranch
+ * Durable-agnostic facts used to derive board placement.
+ *
+ * Every field is required and normalized by {@link sessionFacts}, which fills
+ * Go's zero values — so a caller that omits one behaves exactly like the Go
+ * struct's zero value.
  */
+export interface SessionFacts {
+  /** An {@link ActivityState} value. */
+  activity: string
+  /** Epoch ms of the last observed activity. */
+  lastActivityAt: number
+  /** The runtime has reported at least once. */
+  hasSignal: boolean
+  /** The runtime is expected to report activity. */
+  signalExpected: boolean
+  /** The session is finished and will not resume. */
+  isTerminated: boolean
+}
 
-/** Fills Go's zero values for a PR-facts object. @param {Partial<PRFacts>} [pr] @returns {PRFacts} */
-export function prStatusFacts(pr = {}) {
+/** Session facts plus the flags that decide which loops the plugin drives. */
+export interface KanbanSessionFacts extends SessionFacts {
+  autoReview: boolean
+  autoInjectReview: boolean
+  autoInjectCI: boolean
+  /** DSHO-only. Not in AO: the guaranteed human gate before Ready. */
+  requireHumanApprovalBeforeReady: boolean
+}
+
+/** What a caller may supply; every field is optional and defaulted. */
+export type SessionFactsInput = Partial<KanbanSessionFacts>
+
+/**
+ * Fills in Go's zero values for a session-facts object, so a caller that omits a
+ * field behaves exactly like the Go struct's zero value.
+ */
+export function sessionFacts(facts: SessionFactsInput = {}): KanbanSessionFacts {
+  return {
+    activity: facts.activity ?? '',
+    lastActivityAt: facts.lastActivityAt ?? 0,
+    hasSignal: facts.hasSignal ?? false,
+    signalExpected: facts.signalExpected ?? false,
+    isTerminated: facts.isTerminated ?? false,
+    autoReview: facts.autoReview ?? false,
+    autoInjectReview: facts.autoInjectReview ?? false,
+    autoInjectCI: facts.autoInjectCI ?? false,
+    requireHumanApprovalBeforeReady: facts.requireHumanApprovalBeforeReady ?? false,
+  }
+}
+
+/**
+ * The pull-request facts the session-status reducer reads.
+ *
+ * Distinct from `KanbanPRFacts` in `./kanban.ts`: this is the older, stack-aware
+ * reading, and it is what A30's finished gate consults.
+ */
+export interface PRFacts {
+  url: string
+  draft: boolean
+  merged: boolean
+  closed: boolean
+  ci: SCMValue
+  review: SCMValue
+  mergeability: SCMValue
+  reviewComments: boolean
+  sourceBranch: string
+  targetBranch: string
+}
+
+/** Fills Go's zero values for a PR-facts object. */
+export function prStatusFacts(pr: Partial<PRFacts> = {}): PRFacts {
   return {
     url: pr.url ?? '',
     draft: pr.draft ?? false,
@@ -156,20 +158,35 @@ export function prStatusFacts(pr = {}) {
 }
 
 /**
+ * Reports whether a session that should be reporting hook activity has never
+ * reported and has been quiet longer than the grace period.
+ *
+ * Ported from `func silentPastGrace(...)`. Faithful to AO: it requires
+ * `signalExpected && !hasSignal`, so it fires on a session that never produced a
+ * *first* signal — not on an agent that merely had a quiet minute.
+ */
+export function silentPastGrace(session: SessionFacts, now: number, grace: number): boolean {
+  return (
+    session.signalExpected === true &&
+    session.hasSignal !== true &&
+    now - (session.lastActivityAt ?? 0) > grace
+  )
+}
+
+/**
  * Derives the session display status from session and pull-request facts.
  *
  * Ported from `func DeriveStatus(...)`. Note the order: a terminated session is
  * decided first, then raw activity, and only then the SCM reading. So a running
  * worker reads `Working` even with a failing PR — the board's column reducer is
  * what reconciles that, and it deliberately reads different facts.
- *
- * @param {SessionFacts} session
- * @param {PRFacts[]|undefined|null} prs
- * @param {number} now
- * @param {number} noSignalGrace
- * @returns {string} A {@link SessionStatus} value.
  */
-export function deriveStatus(session, prs, now, noSignalGrace) {
+export function deriveStatus(
+  session: SessionFacts,
+  prs: readonly PRFacts[] | undefined | null,
+  now: number,
+  noSignalGrace: number,
+): SessionStatus {
   if (session.isTerminated) {
     if (openPRs(prs).length === 0 && anyMerged(prs)) return SessionStatus.merged
     return SessionStatus.terminated
@@ -198,15 +215,18 @@ export function deriveStatus(session, prs, now, noSignalGrace) {
  * Ported from `func DeriveSCMStatus(...)`. Returns `''` when there is nothing to
  * say, exactly as the reference does — the empty string is the caller's signal
  * that no SCM fact applies, and it is deliberately falsy rather than a status.
- *
- * @param {PRFacts[]|undefined|null} prs
- * @returns {string}
  */
-export function deriveSCMStatus(prs) {
+export function deriveSCMStatus(prs: readonly PRFacts[] | undefined | null): SessionStatus {
   const open = openPRs(prs)
   if (open.length > 0) return aggregatePRStatus(open)
   if (anyMerged(prs)) return SessionStatus.merged
   return ''
+}
+
+/** A stack position: blocked on a parent, or the bottom of its stack. */
+export interface StackPosition {
+  blocked: boolean
+  bottomOfStack: boolean
 }
 
 /**
@@ -215,16 +235,15 @@ export function deriveSCMStatus(prs) {
  * Ported from `func BuildStacks(...)`. Kept because the aggregate status depends
  * on it: a PR stacked on another open PR does not report its own non-actionable
  * signal, so a child waiting on its parent cannot make the parent look blocked.
- *
- * @param {PRFacts[]|undefined|null} prs
- * @returns {Map<string, {blocked: boolean, bottomOfStack: boolean}>}
  */
-export function buildStacks(prs) {
-  const openSources = new Set()
+export function buildStacks(
+  prs: readonly PRFacts[] | undefined | null,
+): Map<string, StackPosition> {
+  const openSources = new Set<string>()
   for (const pr of prs ?? []) {
     if (!pr.merged && !pr.closed && pr.sourceBranch) openSources.add(pr.sourceBranch)
   }
-  const positions = new Map()
+  const positions = new Map<string, StackPosition>()
   for (const pr of prs ?? []) {
     const blocked = Boolean(pr.targetBranch) && openSources.has(pr.targetBranch)
     positions.set(pr.url, { blocked, bottomOfStack: !blocked })
@@ -232,11 +251,11 @@ export function buildStacks(prs) {
   return positions
 }
 
-function openPRs(prs) {
+function openPRs(prs: readonly PRFacts[] | undefined | null): PRFacts[] {
   return (prs ?? []).filter((pr) => !pr.merged && !pr.closed)
 }
 
-function anyMerged(prs) {
+function anyMerged(prs: readonly PRFacts[] | undefined | null): boolean {
   return (prs ?? []).some((pr) => pr.merged)
 }
 
@@ -247,13 +266,10 @@ function anyMerged(prs) {
  * stacked on another open PR are skipped, so a child that is merely waiting on
  * its parent cannot make the session look blocked; if that leaves nothing, every
  * open PR counts again rather than the function returning an empty aggregate.
- *
- * @param {PRFacts[]} open
- * @returns {string}
  */
-function aggregatePRStatus(open) {
+function aggregatePRStatus(open: readonly PRFacts[]): SessionStatus {
   const stacks = buildStacks(open)
-  let candidates = []
+  let candidates: SessionStatus[] = []
   for (const pr of open) {
     const status = prPipelineStatus(pr)
     if (stacks.get(pr.url)?.blocked && !isActionableChildSignal(status)) continue
@@ -261,7 +277,7 @@ function aggregatePRStatus(open) {
   }
   if (candidates.length === 0) candidates = open.map(prPipelineStatus)
 
-  let worst = candidates[0]
+  let worst = candidates[0] ?? ''
   for (const status of candidates.slice(1)) {
     if (statusSeverity(status) < statusSeverity(worst)) worst = status
   }
@@ -269,7 +285,7 @@ function aggregatePRStatus(open) {
 }
 
 /** Ported from `isActionableChildSignal`. */
-function isActionableChildSignal(status) {
+function isActionableChildSignal(status: SessionStatus): boolean {
   return (
     status === SessionStatus.ciFailed ||
     status === SessionStatus.draft ||
@@ -278,7 +294,7 @@ function isActionableChildSignal(status) {
 }
 
 /** Lower is worse. Ported from `statusSeverity`. */
-function statusSeverity(status) {
+function statusSeverity(status: SessionStatus): number {
   switch (status) {
     case SessionStatus.ciFailed:
       return 0
@@ -300,23 +316,15 @@ function statusSeverity(status) {
 }
 
 /** Ported from `prPipelineStatus`. */
-function prPipelineStatus(pr) {
-  switch (true) {
-    case pr.ci === CIState.failing:
-      return SessionStatus.ciFailed
-    case pr.draft:
-      return SessionStatus.draft
-    case pr.review === ReviewDecision.changesRequested || pr.reviewComments:
-      return SessionStatus.changesRequested
-    case pr.mergeability === Mergeability.mergeable:
-      return SessionStatus.mergeable
-    case pr.review === ReviewDecision.required:
-      return SessionStatus.reviewPending
-    case pr.mergeability === Mergeability.blocked:
-      return SessionStatus.prOpen
-    case pr.review === ReviewDecision.approved:
-      return SessionStatus.approved
-    default:
-      return SessionStatus.prOpen
+function prPipelineStatus(pr: PRFacts): SessionStatus {
+  if (pr.ci === CIState.failing) return SessionStatus.ciFailed
+  if (pr.draft) return SessionStatus.draft
+  if (pr.review === ReviewDecision.changesRequested || pr.reviewComments) {
+    return SessionStatus.changesRequested
   }
+  if (pr.mergeability === Mergeability.mergeable) return SessionStatus.mergeable
+  if (pr.review === ReviewDecision.required) return SessionStatus.reviewPending
+  if (pr.mergeability === Mergeability.blocked) return SessionStatus.prOpen
+  if (pr.review === ReviewDecision.approved) return SessionStatus.approved
+  return SessionStatus.prOpen
 }

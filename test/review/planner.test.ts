@@ -17,7 +17,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { ActivityState } from '../../src/contract/activity.js'
+import { ActivityState } from '../../src/contract/activity.ts'
 import {
   AOReviewState,
   HeadSkipReason,
@@ -28,8 +28,8 @@ import {
   ineligibleReason,
   evaluateManualRequest,
   plan,
-} from '../../src/review/planner.js'
-import { ReviewRunStatus, ReviewTriggerSource, ReviewVerdict } from '../../src/review/runs.js'
+} from '../../src/review/planner.ts'
+import { ReviewRunStatus, ReviewTriggerSource, ReviewVerdict } from '../../src/review/runs.ts'
 
 const NOW = 10_000_000
 const PR = 'https://github.com/o/r/pull/1'
@@ -489,7 +489,7 @@ test('orchestrator_run_review: a forced pass bypasses the automation guards', as
 })
 
 test('the round-limit reason has exactly one spelling across the planner and the board', async () => {
-  const { autoReviewHaltReason, prFacts } = await import('../../src/contract/kanban.js')
+  const { autoReviewHaltReason, prFacts } = await import('../../src/contract/kanban.ts')
   const board = autoReviewHaltReason(
     prFacts({ url: 'pr/1', reviewRun: { present: true, changesRequested: true, roundBudgetExhausted: true } }),
   )
@@ -498,7 +498,7 @@ test('the round-limit reason has exactly one spelling across the planner and the
 })
 
 test('the retry-limit skip reason matches the board escalation for the same facts', async () => {
-  const { autoReviewHaltReason, prFacts } = await import('../../src/contract/kanban.js')
+  const { autoReviewHaltReason, prFacts } = await import('../../src/contract/kanban.ts')
   const board = autoReviewHaltReason(
     prFacts({ url: 'pr/1', reviewRun: { present: true, failed: true, failedRetryLimitReached: true } }),
   )

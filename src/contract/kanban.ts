@@ -13,8 +13,9 @@
  * @module dsho/contract/kanban
  */
 
-import { ActivityState } from './activity.js'
-import { CIState, Mergeability, ReviewDecision, silentPastGrace } from './status.js'
+import { ActivityState } from './activity.ts'
+import { CIState, Mergeability, ReviewDecision, silentPastGrace } from './status.ts'
+import type { KanbanSessionFacts } from './status.ts'
 
 /**
  * The derived delivery-lifecycle placement of a session. It answers where the
@@ -32,13 +33,16 @@ export const KanbanColumn = Object.freeze({
   ready: 'ready',
   /** A terminated session. */
   archive: 'archive',
-})
+} as const)
+
+/** The union of every Kanban column. */
+export type KanbanColumn = (typeof KanbanColumn)[keyof typeof KanbanColumn]
 
 /**
  * Board lanes in delivery order. `archive` is deliberately absent: terminated
  * sessions render in a separate archive sheet, never as a fifth lane.
  */
-export const KANBAN_LANES = Object.freeze([
+export const KANBAN_LANES: readonly KanbanColumn[] = Object.freeze([
   KanbanColumn.building,
   KanbanColumn.validating,
   KanbanColumn.needsReview,
@@ -82,105 +86,126 @@ export const DisplayStatus = Object.freeze({
   closed: 'Closed without merge',
   // archive
   terminated: 'Terminated',
-})
+} as const)
+
+/** The union of every display status. */
+export type DisplayStatus = (typeof DisplayStatus)[keyof typeof DisplayStatus]
 
 /**
  * The columns that can produce each display status. Used by tests and by the
  * client to assert a card never shows a phrase from a stage it is not in.
  */
-export const DISPLAY_STATUSES_BY_COLUMN = Object.freeze({
-  [KanbanColumn.building]: [
-    DisplayStatus.working,
-    DisplayStatus.blocked,
-    DisplayStatus.exited,
-    DisplayStatus.noSignal,
-    DisplayStatus.awaitingPr,
-  ],
-  [KanbanColumn.validating]: [
-    DisplayStatus.blocked,
-    DisplayStatus.exited,
-    DisplayStatus.noSignal,
-    DisplayStatus.fixingCI,
-    DisplayStatus.ciFailing,
-    DisplayStatus.addressingComments,
-    DisplayStatus.needsReview,
-    DisplayStatus.reviewScheduled,
-    DisplayStatus.reviewing,
-    DisplayStatus.reviewFailed,
-    DisplayStatus.reviewPending,
-    DisplayStatus.draft,
-  ],
-  [KanbanColumn.needsReview]: [
-    DisplayStatus.blocked,
-    DisplayStatus.exited,
-    DisplayStatus.noSignal,
-    DisplayStatus.fixingCI,
-    DisplayStatus.ciFailing,
-    DisplayStatus.addressingComments,
-    DisplayStatus.changesRequested,
-    DisplayStatus.commented,
-    DisplayStatus.needsHumanReview,
-  ],
-  [KanbanColumn.ready]: [
-    DisplayStatus.merged,
-    DisplayStatus.closed,
-    DisplayStatus.mergeable,
-    DisplayStatus.ciFailing,
-    DisplayStatus.approved,
-  ],
-  [KanbanColumn.archive]: [DisplayStatus.terminated],
-})
+export const DISPLAY_STATUSES_BY_COLUMN: Readonly<Record<KanbanColumn, readonly DisplayStatus[]>> =
+  Object.freeze({
+    [KanbanColumn.building]: [
+      DisplayStatus.working,
+      DisplayStatus.blocked,
+      DisplayStatus.exited,
+      DisplayStatus.noSignal,
+      DisplayStatus.awaitingPr,
+    ],
+    [KanbanColumn.validating]: [
+      DisplayStatus.blocked,
+      DisplayStatus.exited,
+      DisplayStatus.noSignal,
+      DisplayStatus.fixingCI,
+      DisplayStatus.ciFailing,
+      DisplayStatus.addressingComments,
+      DisplayStatus.needsReview,
+      DisplayStatus.reviewScheduled,
+      DisplayStatus.reviewing,
+      DisplayStatus.reviewFailed,
+      DisplayStatus.reviewPending,
+      DisplayStatus.draft,
+    ],
+    [KanbanColumn.needsReview]: [
+      DisplayStatus.blocked,
+      DisplayStatus.exited,
+      DisplayStatus.noSignal,
+      DisplayStatus.fixingCI,
+      DisplayStatus.ciFailing,
+      DisplayStatus.addressingComments,
+      DisplayStatus.changesRequested,
+      DisplayStatus.commented,
+      DisplayStatus.needsHumanReview,
+    ],
+    [KanbanColumn.ready]: [
+      DisplayStatus.merged,
+      DisplayStatus.closed,
+      DisplayStatus.mergeable,
+      DisplayStatus.ciFailing,
+      DisplayStatus.approved,
+    ],
+    [KanbanColumn.archive]: [DisplayStatus.terminated],
+  })
 
 /**
- * @typedef {object} KanbanReviewRunFacts
  * Summarizes our own review passes against one PR's **current** head commit.
  * Passes recorded for an earlier head are excluded before this object is built,
  * so a stale run can never decide the column.
- * @property {boolean} present            At least one pass was recorded.
- * @property {boolean} running            A pass is still in flight.
- * @property {boolean} changesRequested   A pass asked the worker for changes.
- * @property {boolean} outcome            A pass returned a verdict. `present`
- *   without `outcome` is a head we tried and failed to review, which still owes
- *   the PR the pass auto review promised it.
- * @property {boolean} failed             A pass ended without producing a verdict.
- * @property {boolean} cancelled          A pass was cancelled.
- * @property {boolean} roundBudgetExhausted    DSHO-only (DIVERGENCE row 5b).
- * @property {boolean} failedRetryLimitReached DSHO-only (DIVERGENCE row 5b).
  */
+export interface KanbanReviewRunFacts {
+  /** At least one pass was recorded. */
+  present: boolean
+  /** A pass is still in flight. */
+  running: boolean
+  /** A pass asked the worker for changes. */
+  changesRequested: boolean
+  /**
+   * A pass returned a verdict. `present` without `outcome` is a head we tried
+   * and failed to review, which still owes the PR the pass auto review promised.
+   */
+  outcome: boolean
+  /** A pass ended without producing a verdict. */
+  failed: boolean
+  /** A pass was cancelled. */
+  cancelled: boolean
+  /** DSHO-only, and part of DIVERGENCE row 5b. */
+  roundBudgetExhausted: boolean
+  /** DSHO-only, and part of DIVERGENCE row 5b. */
+  failedRetryLimitReached: boolean
+}
 
 /**
- * @typedef {object} KanbanExternalReviewFacts
- * Provider review verdicts on one PR that we did **not** author. Our own
- * provider reviews are matched by review id and excluded, because the aggregate
+ * Provider review verdicts on one PR that we did **not** author. Our own provider
+ * reviews are matched by review id and excluded, because the aggregate
  * `ReviewDecision` mixes both sources and cannot tell whose turn the loop is on.
- * @property {boolean} approved
- * @property {boolean} changesRequested
- * @property {boolean} comments
  */
+export interface KanbanExternalReviewFacts {
+  approved: boolean
+  changesRequested: boolean
+  comments: boolean
+}
 
-/**
- * @typedef {object} KanbanPRFacts
- * @property {string} url
- * @property {boolean} draft
- * @property {boolean} merged
- * @property {boolean} closed
- * @property {string} ci             {@link CIState} value.
- * @property {string} review         {@link ReviewDecision} value.
- * @property {string} mergeability   {@link Mergeability} value.
- * @property {number} updatedAt      Epoch ms.
- * @property {KanbanReviewRunFacts} reviewRun
- * @property {KanbanExternalReviewFacts} externalReview
- * @property {string} [number]       PR number, for the card and the API.
- */
+/** The per-PR facts the column reducer reads. */
+export interface KanbanPRFacts {
+  url: string
+  draft: boolean
+  merged: boolean
+  closed: boolean
+  /** A {@link CIState} value, or `''`. */
+  ci: string
+  /** A {@link ReviewDecision} value, or `''`. */
+  review: string
+  /** A {@link Mergeability} value, or `''`. */
+  mergeability: string
+  /** Epoch ms. */
+  updatedAt: number
+  reviewRun: KanbanReviewRunFacts
+  externalReview: KanbanExternalReviewFacts
+  /** PR number, for the card and the API. */
+  number?: number
+}
 
-/**
- * Normalizes a PR-facts object, filling Go's zero values.
- *
- * @param {Partial<KanbanPRFacts>} [pr]
- * @returns {KanbanPRFacts}
- */
-export function prFacts(pr = {}) {
-  return {
+/** What a caller may supply for a PR; every field is optional and defaulted. */
+export type KanbanPRFactsInput = Omit<Partial<KanbanPRFacts>, 'reviewRun' | 'externalReview'> & {
+  reviewRun?: Partial<KanbanReviewRunFacts>
+  externalReview?: Partial<KanbanExternalReviewFacts>
+}
+
+/** Normalizes a PR-facts object, filling Go's zero values. */
+export function prFacts(pr: KanbanPRFactsInput = {}): KanbanPRFacts {
+  const facts: KanbanPRFacts = {
     url: pr.url ?? '',
     draft: pr.draft ?? false,
     merged: pr.merged ?? false,
@@ -191,12 +216,13 @@ export function prFacts(pr = {}) {
     updatedAt: pr.updatedAt ?? 0,
     reviewRun: reviewRunFacts(pr.reviewRun),
     externalReview: externalReviewFacts(pr.externalReview),
-    number: pr.number,
   }
+  if (pr.number !== undefined) facts.number = pr.number
+  return facts
 }
 
-/** @param {Partial<KanbanReviewRunFacts>} [facts] @returns {KanbanReviewRunFacts} */
-export function reviewRunFacts(facts = {}) {
+/** Normalizes review-run facts, filling Go's zero values. */
+export function reviewRunFacts(facts: Partial<KanbanReviewRunFacts> = {}): KanbanReviewRunFacts {
   return {
     present: facts.present ?? false,
     running: facts.running ?? false,
@@ -209,8 +235,10 @@ export function reviewRunFacts(facts = {}) {
   }
 }
 
-/** @param {Partial<KanbanExternalReviewFacts>} [facts] @returns {KanbanExternalReviewFacts} */
-export function externalReviewFacts(facts = {}) {
+/** Normalizes external-review facts, filling Go's zero values. */
+export function externalReviewFacts(
+  facts: Partial<KanbanExternalReviewFacts> = {},
+): KanbanExternalReviewFacts {
   return {
     approved: facts.approved ?? false,
     changesRequested: facts.changesRequested ?? false,
@@ -218,35 +246,24 @@ export function externalReviewFacts(facts = {}) {
   }
 }
 
-/**
- * @typedef {object} KanbanPresentation
- * @property {string} column        {@link KanbanColumn} value.
- * @property {string} displayStatus {@link DisplayStatus} value.
- */
-
-/**
- * Output of {@link deriveKanbanPresentation}: the placement plus, when the
- * automated loop has stopped, why.
- *
- * @typedef {object} KanbanDerivation
- * @property {string} column
- * @property {string} displayStatus
- * @property {string} [escalationReason] `review-round-limit` or
- *   `review-failed-retry-limit` when the automated loop gave up on the current
- *   head. Drives the `Needs you` badge (PRD §7.5, A18).
- */
+/** The board placement plus, when the automated loop has stopped, why. */
+export interface KanbanDerivation {
+  column: KanbanColumn
+  displayStatus: DisplayStatus
+  /**
+   * `review-round-limit` or `review-failed-retry-limit` when the automated loop
+   * gave up on the current head. Drives the `Needs you` badge (PRD §7.5, A18).
+   */
+  escalationReason?: 'review-round-limit' | 'review-failed-retry-limit'
+}
 
 /**
  * The per-PR column reducer.
  *
  * Rows 1–4 and 7–8 are AO's reducer verbatim. **Row 5b is a DIVERGENCE**, and so
- * is the extra `requireHumanApprovalBeforeReady` clause inside row 6.
- *
- * @param {import('./status.js').KanbanSessionFacts} session
- * @param {KanbanPRFacts} pr
- * @returns {string}
+ * is the extra `requireHumanApprovalBeforeReady` clause in row 6.
  */
-function derivePRKanbanColumn(session, pr) {
+function derivePRKanbanColumn(session: KanbanSessionFacts, pr: KanbanPRFacts): KanbanColumn {
   switch (true) {
     case pr.merged || pr.closed:
       return KanbanColumn.ready
@@ -270,8 +287,7 @@ function derivePRKanbanColumn(session, pr) {
     // outcome A18 forbids.
     //
     // Gated on `requireHumanApprovalBeforeReady`, so setting that flag false
-    // restores AO's exact behaviour (which has no round cap in its reducer at
-    // all).
+    // restores AO's exact behaviour (which has no round cap in its reducer at all).
     case session.autoReview &&
       session.requireHumanApprovalBeforeReady &&
       !approvedByUs(pr) &&
@@ -280,9 +296,9 @@ function derivePRKanbanColumn(session, pr) {
     case pluginOwnsNextStep(session, pr):
       return KanbanColumn.validating
     // Auto review owns this head until its own pass approves it. A head we have
-    // not reviewed yet, a pass that failed or was cancelled, and a pass that
-    // asked for changes are all "not approved yet" — auto review's job is to
-    // keep re-reviewing this PR until it can approve, whether or not anything is
+    // not reviewed yet, a pass that failed or was cancelled, and a pass that asked
+    // for changes are all "not approved yet" — auto review's job is to keep
+    // re-reviewing this PR until it can approve, whether or not anything is
     // configured to act on what it finds in between. Without AutoReview, a
     // changes-requested verdict is as far as our involvement goes, so it does
     // release the PR from Validating — see pluginOwnsNextStep above.
@@ -300,12 +316,14 @@ function derivePRKanbanColumn(session, pr) {
     // reach Ready via a real human signal — a surviving human approval (row 3), a
     // merge, or a human close (row 1).
     //
-    // The guard is `!externalReview.approved` rather than re-testing the
-    // aggregate `reviewDecision`: row 3 needs both, so a human approval that the
-    // aggregate has not caught up with (a dismissed review, a review on an older
-    // commit) must still count as "a human approved" here. Otherwise a real human
-    // approval could be downgraded to `Needs human review`.
-    case session.requireHumanApprovalBeforeReady && approvedByUs(pr) && !pr.externalReview.approved:
+    // The guard is `!externalReview.approved` rather than re-testing the aggregate
+    // `reviewDecision`: row 3 needs both, so a human approval that the aggregate
+    // has not caught up with (a dismissed review, a review on an older commit)
+    // must still count as "a human approved" here. Otherwise a real human approval
+    // could be downgraded to `Needs human review`.
+    case session.requireHumanApprovalBeforeReady &&
+      approvedByUs(pr) &&
+      !pr.externalReview.approved:
       return KanbanColumn.needsReview
     case pr.mergeability === Mergeability.mergeable:
       return KanbanColumn.ready
@@ -323,11 +341,8 @@ function derivePRKanbanColumn(session, pr) {
  * cancelled without a verdict are all "not approved."
  *
  * Ported from `approvedByAO`.
- *
- * @param {KanbanPRFacts} pr
- * @returns {boolean}
  */
-export function approvedByUs(pr) {
+export function approvedByUs(pr: KanbanPRFacts): boolean {
   return pr.reviewRun.outcome === true && pr.reviewRun.changesRequested !== true
 }
 
@@ -336,11 +351,8 @@ export function approvedByUs(pr) {
  * reviews) and a surviving approval we did not author.
  *
  * Ported from `externallyApproved`.
- *
- * @param {KanbanPRFacts} pr
- * @returns {boolean}
  */
-export function externallyApproved(pr) {
+export function externallyApproved(pr: KanbanPRFacts): boolean {
   return pr.review === ReviewDecision.approved && pr.externalReview.approved === true
 }
 
@@ -351,12 +363,8 @@ export function externallyApproved(pr) {
  * with a person taking the next turn.
  *
  * Ported from `aoOwnsNextStep`.
- *
- * @param {import('./status.js').KanbanSessionFacts} session
- * @param {KanbanPRFacts} pr
- * @returns {boolean}
  */
-export function pluginOwnsNextStep(session, pr) {
+export function pluginOwnsNextStep(session: KanbanSessionFacts, pr: KanbanPRFacts): boolean {
   if (pr.reviewRun.running) return true
   if (session.autoInjectReview && pr.reviewRun.changesRequested) return true
   return session.autoInjectCI && pr.ci === CIState.failing
@@ -369,12 +377,11 @@ export function pluginOwnsNextStep(session, pr) {
  *
  * DSHO-only, and the reason a stopped loop releases the PR from `Validating`
  * (PRD §7.5, row 5's round-budget clause, A18).
- *
- * @param {KanbanPRFacts} pr
- * @returns {boolean}
  */
-export function autoReviewLoopHalted(pr) {
-  return pr.reviewRun.roundBudgetExhausted === true || pr.reviewRun.failedRetryLimitReached === true
+export function autoReviewLoopHalted(pr: KanbanPRFacts): boolean {
+  return (
+    pr.reviewRun.roundBudgetExhausted === true || pr.reviewRun.failedRetryLimitReached === true
+  )
 }
 
 /**
@@ -389,11 +396,10 @@ export function autoReviewLoopHalted(pr) {
  * card is waiting on a human for the ordinary reason, not because a loop gave up.
  * An escalation banner there would claim automation stopped when the pass in fact
  * succeeded.
- *
- * @param {KanbanPRFacts} pr
- * @returns {'review-round-limit'|'review-failed-retry-limit'|undefined}
  */
-export function autoReviewHaltReason(pr) {
+export function autoReviewHaltReason(
+  pr: KanbanPRFacts,
+): 'review-round-limit' | 'review-failed-retry-limit' | undefined {
   if (approvedByUs(pr)) return undefined
   if (pr.reviewRun.roundBudgetExhausted === true) return 'review-round-limit'
   if (pr.reviewRun.failedRetryLimitReached === true) return 'review-failed-retry-limit'
@@ -404,11 +410,8 @@ export function autoReviewHaltReason(pr) {
  * The live PRs, or every PR when none is live.
  *
  * Ported from `liveKanbanPRs`.
- *
- * @param {KanbanPRFacts[]} prs
- * @returns {KanbanPRFacts[]}
  */
-export function liveKanbanPRs(prs) {
+export function liveKanbanPRs(prs: readonly KanbanPRFacts[]): KanbanPRFacts[] {
   return prs.filter((pr) => !pr.merged && !pr.closed)
 }
 
@@ -421,14 +424,13 @@ export function liveKanbanPRs(prs) {
  * number, exactly as `time.Time.Equal` does; the PRD requires the ordering to be
  * stable across a no-op refresh (A29), and comparing the URL last is what
  * guarantees it.
- *
- * @param {string} candidate
- * @param {KanbanPRFacts} pr
- * @param {string} current
- * @param {KanbanPRFacts} chosen
- * @returns {boolean}
  */
-export function outranksKanban(candidate, pr, current, chosen) {
+export function outranksKanban(
+  candidate: KanbanColumn,
+  pr: KanbanPRFacts,
+  current: KanbanColumn,
+  chosen: KanbanPRFacts,
+): boolean {
   if (kanbanPriority(candidate) !== kanbanPriority(current)) {
     return kanbanPriority(candidate) < kanbanPriority(current)
   }
@@ -438,13 +440,8 @@ export function outranksKanban(candidate, pr, current, chosen) {
   return pr.url < chosen.url
 }
 
-/**
- * Lower is more actionable. Ported from `kanbanPriority`.
- *
- * @param {string} column
- * @returns {number}
- */
-export function kanbanPriority(column) {
+/** Lower is more actionable. Ported from `kanbanPriority`. */
+export function kanbanPriority(column: KanbanColumn): number {
   switch (column) {
     case KanbanColumn.ready:
       return 0
@@ -460,22 +457,21 @@ export function kanbanPriority(column) {
 /**
  * Derives a session's board placement and the phrase shown on its card, in that
  * order. The column is chosen first from lifecycle facts; the display status is
- * then derived from the facts that column cares about, so a session never shows
- * a phrase belonging to a stage it is not in.
+ * then derived from the facts that column cares about, so a session never shows a
+ * phrase belonging to a stage it is not in.
  *
  * With several PRs the column is picked per PR and ranked, and the winning PR is
  * the one whose facts the display status reads. A merged or closed PR therefore
  * cannot speak for a session that still has live work.
  *
  * Ported from `DeriveKanbanPresentation`.
- *
- * @param {import('./status.js').KanbanSessionFacts} session
- * @param {KanbanPRFacts[]|undefined|null} prs
- * @param {number} now            Epoch ms.
- * @param {number} noSignalGrace  No-signal grace in ms.
- * @returns {KanbanDerivation}
  */
-export function deriveKanbanPresentation(session, prs, now, noSignalGrace) {
+export function deriveKanbanPresentation(
+  session: KanbanSessionFacts,
+  prs: readonly KanbanPRFacts[] | undefined | null,
+  now: number,
+  noSignalGrace: number,
+): KanbanDerivation {
   if (session.isTerminated) {
     return { column: KanbanColumn.archive, displayStatus: DisplayStatus.terminated }
   }
@@ -491,33 +487,39 @@ export function deriveKanbanPresentation(session, prs, now, noSignalGrace) {
   const live = liveKanbanPRs(all)
   const pool = live.length > 0 ? live : all
 
-  let column = ''
-  /** @type {KanbanPRFacts|undefined} */
-  let chosen
+  let column: KanbanColumn | undefined
+  let chosen: KanbanPRFacts | undefined
   for (const pr of pool) {
     const candidate = derivePRKanbanColumn(session, pr)
-    if (column === '' || outranksKanban(candidate, pr, column, /** @type {KanbanPRFacts} */ (chosen))) {
+    if (column === undefined || chosen === undefined || outranksKanban(candidate, pr, column, chosen)) {
       column = candidate
       chosen = pr
     }
   }
-  const reason = autoReviewHaltReason(/** @type {KanbanPRFacts} */ (chosen))
-  return {
-    column,
-    displayStatus: displayStatusInColumn(column, session, /** @type {KanbanPRFacts} */ (chosen), now, noSignalGrace),
-    ...(reason ? { escalationReason: reason } : {}),
+  if (column === undefined || chosen === undefined) {
+    // Unreachable: `pool` is non-empty whenever `all` is. Stated explicitly
+    // rather than asserted so a future refactor cannot silently change the answer.
+    return {
+      column: KanbanColumn.building,
+      displayStatus: buildingDisplayStatus(session, now, noSignalGrace),
+    }
   }
+  const reason = autoReviewHaltReason(chosen)
+  const derivation: KanbanDerivation = {
+    column,
+    displayStatus: displayStatusInColumn(column, session, chosen, now, noSignalGrace),
+  }
+  if (reason) derivation.escalationReason = reason
+  return derivation
 }
 
-/**
- * @param {string} column
- * @param {import('./status.js').KanbanSessionFacts} session
- * @param {KanbanPRFacts} pr
- * @param {number} now
- * @param {number} noSignalGrace
- * @returns {string}
- */
-function displayStatusInColumn(column, session, pr, now, noSignalGrace) {
+function displayStatusInColumn(
+  column: KanbanColumn,
+  session: KanbanSessionFacts,
+  pr: KanbanPRFacts,
+  now: number,
+  noSignalGrace: number,
+): DisplayStatus {
   switch (column) {
     case KanbanColumn.validating:
       return validatingDisplayStatus(session, pr, now, noSignalGrace)
@@ -531,23 +533,23 @@ function displayStatusInColumn(column, session, pr, now, noSignalGrace) {
 }
 
 /**
- * Explains worker progress, because a session with no PR has produced no
- * delivery facts to report yet.
+ * Explains worker progress, because a session with no PR has produced no delivery
+ * facts to report yet.
  *
  * Ported from `buildingDisplayStatus`. An agent-level blockage outranks
  * everything else, and `waiting_input` renders as `Blocked` exactly as AO does.
  * `unknown` deliberately falls through to `Awaiting PR` and never to `Working`.
- *
- * @param {import('./status.js').KanbanSessionFacts} session
- * @param {number} now
- * @param {number} grace
- * @returns {string}
  */
-export function buildingDisplayStatus(session, now, grace) {
+export function buildingDisplayStatus(
+  session: KanbanSessionFacts,
+  now: number,
+  grace: number,
+): DisplayStatus {
   switch (true) {
     case session.activity === ActivityState.active:
       return DisplayStatus.working
-    case session.activity === ActivityState.blocked || session.activity === ActivityState.waitingInput:
+    case session.activity === ActivityState.blocked ||
+      session.activity === ActivityState.waitingInput:
       return DisplayStatus.blocked
     case session.activity === ActivityState.exited:
       return DisplayStatus.exited
@@ -574,22 +576,24 @@ export function buildingDisplayStatus(session, now, grace) {
  * `Addressing comments` or `Needs review` even though no reviewer pass will run
  * again. That is AO's own behaviour — AO's reducer has no round cap — and it is
  * the documented cost of setting the flag false.
- *
- * @param {import('./status.js').KanbanSessionFacts} session
- * @param {KanbanPRFacts} pr
- * @param {number} now
- * @param {number} grace
- * @returns {string}
  */
-export function validatingDisplayStatus(session, pr, now, grace) {
+export function validatingDisplayStatus(
+  session: KanbanSessionFacts,
+  pr: KanbanPRFacts,
+  now: number,
+  grace: number,
+): DisplayStatus {
   switch (true) {
-    case session.activity === ActivityState.blocked || session.activity === ActivityState.waitingInput:
+    case session.activity === ActivityState.blocked ||
+      session.activity === ActivityState.waitingInput:
       return DisplayStatus.blocked
     case session.activity === ActivityState.exited:
       return DisplayStatus.exited
     case silentPastGrace(session, now, grace):
       return DisplayStatus.noSignal
-    case pr.ci === CIState.failing && session.autoInjectCI && session.activity === ActivityState.active:
+    case pr.ci === CIState.failing &&
+      session.autoInjectCI &&
+      session.activity === ActivityState.active:
       return DisplayStatus.fixingCI
     case pr.ci === CIState.failing:
       return DisplayStatus.ciFailing
@@ -623,28 +627,32 @@ export function validatingDisplayStatus(session, pr, now, grace) {
  *
  * Ported from `inReviewDisplayStatus`. This is the function that produces
  * `Needs human review` for both the human-gate paths and the plain fallthrough.
- *
- * @param {import('./status.js').KanbanSessionFacts} session
- * @param {KanbanPRFacts} pr
- * @param {number} now
- * @param {number} grace
- * @returns {string}
  */
-export function inReviewDisplayStatus(session, pr, now, grace) {
+export function inReviewDisplayStatus(
+  session: KanbanSessionFacts,
+  pr: KanbanPRFacts,
+  now: number,
+  grace: number,
+): DisplayStatus {
   switch (true) {
-    case session.activity === ActivityState.blocked || session.activity === ActivityState.waitingInput:
+    case session.activity === ActivityState.blocked ||
+      session.activity === ActivityState.waitingInput:
       return DisplayStatus.blocked
     case session.activity === ActivityState.exited:
       return DisplayStatus.exited
     case silentPastGrace(session, now, grace):
       return DisplayStatus.noSignal
-    case pr.ci === CIState.failing && session.autoInjectCI && session.activity === ActivityState.active:
+    case pr.ci === CIState.failing &&
+      session.autoInjectCI &&
+      session.activity === ActivityState.active:
       return DisplayStatus.fixingCI
     case pr.ci === CIState.failing:
       return DisplayStatus.ciFailing
     case pr.externalReview.comments && session.autoInjectReview && session.activity === ActivityState.active:
       return DisplayStatus.addressingComments
-    case pr.externalReview.changesRequested && session.autoInjectReview && session.activity === ActivityState.active:
+    case pr.externalReview.changesRequested &&
+      session.autoInjectReview &&
+      session.activity === ActivityState.active:
       return DisplayStatus.addressingComments
     case pr.externalReview.changesRequested:
       return DisplayStatus.changesRequested
@@ -660,11 +668,8 @@ export function inReviewDisplayStatus(session, pr, now, grace) {
  * our own pass or a person.
  *
  * Ported from `changesRequestedOn`.
- *
- * @param {KanbanPRFacts} pr
- * @returns {boolean}
  */
-export function changesRequestedOn(pr) {
+export function changesRequestedOn(pr: KanbanPRFacts): boolean {
   return pr.reviewRun.changesRequested === true || pr.externalReview.changesRequested === true
 }
 
@@ -674,11 +679,8 @@ export function changesRequestedOn(pr) {
  * merge-readiness reading can override them.
  *
  * Ported from `readyDisplayStatus`.
- *
- * @param {KanbanPRFacts} pr
- * @returns {string}
  */
-export function readyDisplayStatus(pr) {
+export function readyDisplayStatus(pr: KanbanPRFacts): DisplayStatus {
   switch (true) {
     case pr.merged:
       return DisplayStatus.merged

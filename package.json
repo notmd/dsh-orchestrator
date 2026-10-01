@@ -6,25 +6,31 @@
   "type": "module",
   "license": "Apache-2.0",
   "exports": {
-    ".": "./index.js",
+    ".": "./dist/index.js",
     "./package.json": "./package.json",
     "./locale/*.json": "./locale/*.json"
   },
   "files": [
-    "index.js",
-    "client.js",
-    "src",
+    "dist",
     "locale/*.json",
     "icon.svg",
     "cordis.patch.yml"
   ],
   "scripts": {
     "test": "node --test",
-    "test:watch": "node --test --watch"
+    "test:watch": "node --test --watch",
+    "typecheck": "tsc -p tsconfig.src.json",
+    "typecheck:all": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.build.json",
+    "verify": "npm run typecheck && npm test && npm run build"
   },
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
     }
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.3",
+    "typescript": "6.0.3"
   }
 }

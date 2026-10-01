@@ -20,7 +20,7 @@ import {
   deriveStatus,
   prStatusFacts,
   sessionFacts,
-} from '../../src/contract/status.js'
+} from '../../src/contract/status.ts'
 
 const GRACE = 90_000
 const STATUS_NOW = Date.UTC(2026, 5, 10, 12, 0, 0)

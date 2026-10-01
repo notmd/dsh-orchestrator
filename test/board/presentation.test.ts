@@ -24,9 +24,9 @@ import {
   orderCards,
   presentCard,
   showStatusLoader,
-} from '../../src/board/presentation.js'
-import { DisplayStatus, KANBAN_LANES, KanbanColumn } from '../../src/contract/kanban.js'
-import { SessionStatus } from '../../src/contract/status.js'
+} from '../../src/board/presentation.ts'
+import { DisplayStatus, KANBAN_LANES, KanbanColumn } from '../../src/contract/kanban.ts'
+import { SessionStatus } from '../../src/contract/status.ts'
 
 const NOW = 10_000_000
 const GRACE = 90_000

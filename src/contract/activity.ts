@@ -8,7 +8,7 @@
  * hook callbacks, explicitly *not* inferred from a transcript. A DSH plugin sits
  * inside the process, so the equivalent signals are first-class: `Agent.status`,
  * the pending `ask_user_question` call, and a live permission decision. Those
- * live in `../domain/activity.js`; this module is the vocabulary only.
+ * live in `../domain/activity.ts`; this module is the vocabulary only.
  *
  * @module dsho/contract/activity
  */
@@ -36,10 +36,13 @@ export const ActivityState = Object.freeze({
   exited: 'exited',
   /** DSH-only. Not a ported value. */
   unknown: 'unknown',
-})
+} as const)
+
+/** The union of every activity state. */
+export type ActivityState = (typeof ActivityState)[keyof typeof ActivityState]
 
 /** Every activity state, in the order the PRD lists them. */
-export const ACTIVITY_STATES = Object.freeze([
+export const ACTIVITY_STATES: readonly ActivityState[] = Object.freeze([
   ActivityState.active,
   ActivityState.idle,
   ActivityState.waitingInput,
@@ -49,8 +52,10 @@ export const ACTIVITY_STATES = Object.freeze([
 ])
 
 /** Normalizes an absent or unrecognized value to `unknown`, never to `idle`. */
-export function normalizeActivity(value) {
-  return ACTIVITY_STATES.includes(value) ? value : ActivityState.unknown
+export function normalizeActivity(value: unknown): ActivityState {
+  return (ACTIVITY_STATES as readonly unknown[]).includes(value)
+    ? (value as ActivityState)
+    : ActivityState.unknown
 }
 
 /**
@@ -60,11 +65,8 @@ export function normalizeActivity(value) {
  * Ported from `func (a ActivityState) IsSticky() bool`. Note the ported function
  * returns `false` for `unknown`: AO has no `unknown`, and a state we have not
  * observed is not a state we may keep asserting forever.
- *
- * @param {string} activity
- * @returns {boolean}
  */
-export function isSticky(activity) {
+export function isSticky(activity: string): boolean {
   return activity === ActivityState.waitingInput || activity === ActivityState.blocked
 }
 
@@ -77,10 +79,7 @@ export function isSticky(activity) {
  * about the user being the unblocker.
  *
  * Ported from `func (a ActivityState) NeedsInput() bool`.
- *
- * @param {string} activity
- * @returns {boolean}
  */
-export function needsInput(activity) {
+export function needsInput(activity: string): boolean {
   return activity === ActivityState.waitingInput || activity === ActivityState.blocked
 }

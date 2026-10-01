@@ -24,7 +24,7 @@ import {
   latestCompletedRunForOtherHead,
   runsForHead,
   summarizeReviewRuns,
-} from '../../src/review/runs.js'
+} from '../../src/review/runs.ts'
 
 const HEAD_A = 'sha-a'
 const HEAD_B = 'sha-b'

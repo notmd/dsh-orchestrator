@@ -9,70 +9,71 @@ bloated status file costs the next agent more than it saves.
 |---|---|
 | **Goal** | Implement [PRD.md](PRD.md) |
 | **Plan source** | [PRD.md §16 Milestones](PRD.md#16-milestones), verified against [docs/dsh-plugin-contract.md](docs/dsh-plugin-contract.md) |
-| **Last updated** | 2026-10-01, chunk 4 |
-| **Test command** | `node --test` (zero dependencies; Node 24) |
-| **Current state** | 342 unit tests, all passing. The **entire read model plus configuration** is done and ported from the reference implementation. **No plugin is installed yet** — no host half, no client half, no M0 spike run. |
+| **Last updated** | 2026-10-01, chunk 5 (TypeScript migration) |
+| **Verify** | `npm run verify` → typecheck (src) + `node --test` + build |
+| **Current state** | **All first-party source is TypeScript.** 342 tests pass, `src/` typechecks with **0 errors**, and `npm run build` emits `dist/`. M0 spike 1 is done (the panel seat is proven). No host half or client half exists yet. |
 
 ---
 
 ## 1. Where we are, in one paragraph
 
-The board's **read model is finished and proven** — what column a card sits in,
-what it says, whether it pulses, what order cards appear in, what the review-loop
-scheduler will do next — and **configuration is done**, including the loud
-`agentRulesFile` validation. All of it is pure, dependency-free ES modules with a
-large ported test suite. Nothing plugin-shaped exists yet: no `index.js` host
-entry, no `client.js`, no tools, no storage, no routes, no UI. Next is the
-feedback classifier and the report outbox (chunk 5), the last offline chunks.
+The board's **read model is finished and proven in TypeScript** — what column a
+card sits in, what it says, whether it pulses, what order cards appear in, what
+the review-loop scheduler will do next — plus configuration with its loud
+`agentRulesFile` validation. Every module is ported from the reference
+implementation and covered by a large ported test suite. **M0 spike 1 is done**:
+a third-party bundle really does get the `main` panel seat and a
+`sidebar.panellist` row, verified in a live GUI. What does not exist yet: the host
+half (`index.js`, services, tools, storage, routes) and the client half (the
+board UI). Next is chunk 6, the host half, preceded by the small fence-repair in
+§3.
 
 ---
 
 ## 2. Done
 
-### Chunk 1 — board core: the reducer
+### Chunk 5 — TypeScript migration (hard requirement, round 2)
 
-| Module | What it is |
+| | |
 |---|---|
-| [`src/contract/activity.js`](src/contract/activity.js) | `ActivityState` vocabulary + `isSticky` / `needsInput`. Ported from AO `backend/internal/domain/activity.go`. |
-| [`src/contract/status.js`](src/contract/status.js) | SCM enums, session-facts normalizer, `silentPastGrace`, **and the session-status reducer** (`deriveStatus`, `deriveSCMStatus`, `buildStacks`). Ported from AO `backend/pkg/contract/status.go`. |
-| [`src/contract/kanban.js`](src/contract/kanban.js) | The column reducer, the display-status reducers, ranking, and the two labelled divergences. Ported from AO `backend/pkg/contract/kanban.go`. |
-| [`src/review/runs.js`](src/review/runs.js) | Head-scoped `KanbanReviewRunFacts` + the two loop bounds. Shape ported from AO `backend/internal/service/session/kanban.go`. |
+| Source | `src/**/*.ts` — all seven modules converted, real annotations replacing the old JSDoc typedefs |
+| Types | Every enum-ish const also exports its union type, derived with `(typeof X)[keyof typeof X]` — no separate types file, so the ported files stay comparable to their Go originals |
+| Tests | `test/**/*.test.ts` — renamed, import specifiers repointed |
+| Config | `tsconfig.json` (all files, noEmit), `tsconfig.src.json` (src only, the `typecheck` gate), `tsconfig.build.json` (emit to `dist/`) |
+| Tooling | `typescript@6.0.3` + `@types/node` as devDependencies (registry reachable, verified) |
 
-### Chunk 2 — board core: the review-loop scheduler
+**Why the tests still need no dependencies:** Node 24.11.1 strips types natively,
+so `node --test` runs `.ts` test files directly. Verified before migrating.
 
-| Module | What it is |
-|---|---|
-| [`src/review/planner.js`](src/review/planner.js) | `plan(prs, runs)` → per-head `AOReviewState`; `sessionGate`; `existingHeadReason`; `ineligibleReason`; `evaluateSession`; `evaluateManualRequest`. Ported from AO `backend/internal/review/planner.go` + `backend/internal/autoreview/coordinator.go`. |
+**Why imports say `./activity.ts`:** `tsc` is configured with
+`allowImportingTsExtensions` + `rewriteRelativeImportExtensions`, so the source
+uses real `.ts` specifiers (which is what Node's stripper needs) and the **emit
+rewrites them to `.js`** (verified in `dist/contract/kanban.js`). This is the
+trick that makes one source tree serve both the test runner and the shipped
+bundle.
 
-### Chunk 3 — board core: the read model
+Verified: `src/` typecheck **0 errors**; **342/342 tests pass**;
+`npm run build` emits `dist/**/*.js` and the output imports and runs.
 
-| Module | What it is |
-|---|---|
-| [`src/board/presentation.js`](src/board/presentation.js) | `needsAttention` (exactly three display statuses), `orderCards`, `presentCard`, `groupIntoLanes`, `archiveSheet`, `isFinished`, `showStatusLoader`, `attentionZone`. Ported from AO `packages/product-ui/src/SessionsBoardView.tsx` + `session-presentation.ts`. |
+### Chunks 1–4 — see git history
 
-### Chunk 4 — configuration
+The reducer, activity model, session status, head-scoped review facts, review-loop
+scheduler, card presentation, and configuration. All ported from AO at `53ba1e8`;
+78 + 37 of the tests are AO's own truth tables translated from `kanban_test.go`
+and `status_test.go`.
 
-| Module | What it is |
-|---|---|
-| [`src/config/validate.js`](src/config/validate.js) | `PLUGIN_DEFAULTS` (every PRD §13 value), `REPO_CONFIG_DEFAULTS`, explicit key-by-key validation with `ConfigError`, `resolveRepoRelativeFile`, `loadAgentRules`, `resolvePermissionPresets`. Path handling ported from AO `backend/internal/session_manager/prompt.go`. |
-
-Test suites:
+Test suites (all `.ts`, all passing):
 
 | Suite | Cases | Source |
 |---|---|---|
-| [`test/contract/kanban.test.js`](test/contract/kanban.test.js) | 78 | AO's truth table, translated from `kanban_test.go` |
-| [`test/contract/kanban-divergence.test.js`](test/contract/kanban-divergence.test.js) | 30 | New — both divergences asserted in both flag states |
-| [`test/contract/activity.test.js`](test/contract/activity.test.js) | 6 | New — the three predicates |
-| [`test/contract/status.test.js`](test/contract/status.test.js) | 37 | AO's truth table, translated from `status_test.go` |
-| [`test/review/runs.test.js`](test/review/runs.test.js) | 28 | New — head pinning, both bounds, superseded-head context |
-| [`test/review/planner.test.js`](test/review/planner.test.js) | 77 | New — the scheduler, every reason code, the manual override |
-| [`test/board/presentation.test.js`](test/board/presentation.test.js) | 41 | New — A27–A30, ordering stability, lane grouping |
-| [`test/config/validate.test.js`](test/config/validate.test.js) | 45 | New — A31, defaults, every rejection |
-
-```bash
-node --test            # 342 pass
-node --test --watch    # while iterating
-```
+| [`test/contract/kanban.test.ts`](test/contract/kanban.test.ts) | 78 | AO's truth table, translated from `kanban_test.go` |
+| [`test/contract/kanban-divergence.test.ts`](test/contract/kanban-divergence.test.ts) | 30 | New — both divergences asserted in both flag states |
+| [`test/contract/activity.test.ts`](test/contract/activity.test.ts) | 6 | New — the three predicates |
+| [`test/contract/status.test.ts`](test/contract/status.test.ts) | 37 | AO's truth table, translated from `status_test.go` |
+| [`test/review/runs.test.ts`](test/review/runs.test.ts) | 28 | New — head pinning, both bounds, superseded-head context |
+| [`test/review/planner.test.ts`](test/review/planner.test.ts) | 77 | New — the scheduler, every reason code, the manual override |
+| [`test/board/presentation.test.ts`](test/board/presentation.test.ts) | 41 | New — A27–A30, ordering stability, lane grouping |
+| [`test/config/validate.test.ts`](test/config/validate.test.ts) | 45 | New — A31, defaults, every rejection |
 
 ### Scaffolding
 
@@ -93,15 +94,27 @@ Chunk numbers are this file's own; milestone letters are the PRD's.
 
 | Chunk | Work | PRD | Why now |
 |---|---|---|---|
-| 5 | **Feedback classification**: actionability, bot detection by `__typename`/`User.Type` (never a login substring — `robothon` must not be a bot), per-comment dedup keys, signature round-trip, re-arm only on a definitive clear. | §10.3, A12 | M4's logic, testable offline. |
-| 5b | **Report outbox**: the batched delivery window, `needs_input` immediate delivery, the 3-minute `stuck` interrupt window, settlement-on-`done`, claim-based delivery so a retry cannot double-deliver. | §10.5, A23 | Pure-logic and fully specified; the last offline chunk. |
-| 5c | **DSH→board fact adapter**: activity mapping (`Agent.status` + pending question + pending approval → `ActivityState`), and `lastActivityAt = max(lastSignalAt, lastObservedAt)` (see decision 8). | §7.6 | The seam between chunks 6 and 1–3. Belongs here so chunk 6 is wiring, not thinking. |
-| 5d | **`Config` export + manifest peers.** `src/config/config.js` builds the row's schemastery `Config` from `validate.js`'s defaults and validators; `package.json` gains `peerDependencies` on the DSH services and a `@deepseek-ai/schemastery` dependency. Convention verified from shipped packages: peers pinned to exact `0.1.7-rc.2`, cordis `~4.0.4`, schemastery `~3.18.4` as a plain dependency. | §13, A1.3, A9 | Needs a live profile to confirm resolution, so it is parked next to the install. |
-| 6 | **Host half**: `index.js` → `apply()`; `OrchestratorService` over `ctx.storageDomain`; `WorkerSpawner` using the exact `ctx.agents.create()` recipe; `WorktreeManager`; `GitHubGateway` over `ctx.subprocess` + `gh`; `PrObserver` loop; the tool table; `/dsho/api/*` + `/dsho/events` on `ctx.webServer`. | §6, §12, M1 | The first code that needs a live profile. |
-| 7 | **Client half**: `client.js` in the `window.__ModuleLoader__` format, `sidebar.panellist` row + `main` keyed panel, lanes/cards/inspector, themes, locale, keyboard access. | §11, M2 | Needs the routes from chunk 6. |
+| 5e | **🔧 Fence repair: make the test files type-clean.** `src/` is clean, but `npm run typecheck:all` reports **105 errors, all in `test/**`**. Nothing is broken at runtime — `node --test` strips types without checking — but the codebase should be type-clean end to end. | — | Small, bounded, and it should be done before more code lands on top. Inventory below. |
+| 6 | **Host half**: `src/index.ts` → `apply()`; `OrchestratorService` over `ctx.storageDomain`; `WorkerSpawner` using the exact `ctx.agents.create()` recipe; `WorktreeManager`; `GitHubGateway` over `ctx.subprocess` + `gh`; `PrObserver` loop; the tool table; `/dsho/api/*` + `/dsho/events` on `ctx.webServer`. | §6, §12, M1 | The first code that needs a live profile. |
+| 7 | **Client half**: `src/client/**/*.ts` → `dist/client.js` in the `window.__ModuleLoader__` **classic-script** form, plus the `sidebar.panellist` row and the `main` keyed panel, lanes/cards/inspector, themes, locale, keyboard access. | §11, M2 | Needs the routes from chunk 6. |
+| 8 | **M0 spikes 2–4**: `ctx.agents.create()` outside `dsh-webhook`; `attachSession` against a worktree; a `/dsho/api/*` route + SSE from a slot component. | §16 | Spike 1 is done; these are the remaining unknowns. |
 
-**Recommended next step:** chunk 5, then 6. Verification and installation are both
-solved — see the box immediately below before writing any UI or host code.
+### 5e inventory — the 105 test-file type errors
+
+Grouped by cause, with the fix for each. **Do not "fix" these by weakening
+`tsconfig.json`** for `src/`; the strictness there is doing real work.
+
+| Count | Cause | Fix |
+|---|---|---|
+| ~33 | Test data tables declared as tuple arrays, so TS infers `string \| X \| Y`. | Annotate each `cases` array: `const cases: ReadonlyArray<[string, SessionFactsInput, KanbanColumn]> = [...]`. |
+| ~25 | Deliberately-invalid input to `normalizePluginConfig` / `normalizeRepoConfig` / `evaluateSession`. The values are *meant* to violate the type. | Add one helper per test file — `const bad = <T>(value: unknown): T => value as T` — and wrap those call sites. This is the honest way: the cast is visible and local to the assertion about runtime validation. |
+| ~16 | `noUncheckedIndexedAccess`: `positions.get('parent').blocked`, `orderCards(...)[0].id`. | Append `!` or `?.` at the assertion site. Tests index arrays by construction. |
+| ~15 | Fixture builders with implicit-`any` params: `function card(overrides)`, `run(overrides)`, `readerReturning(body)`. | Annotate the params with the input types the modules already export (`KanbanPRFactsInput`, `Partial<ReviewRun>`, `string`). |
+| ~12 | `evaluate({})` / `evaluate({ prs })` in `planner.test.ts`: the local helper requires every field. | Change the helper's parameter to `Partial<EvaluateInput>` and fill `session`/`prs`/`runs`/`now` with defaults. This one change likely removes most of the remaining errors. |
+| ~5 | Object literals with a deliberately-wrong property (`{ install: 'pnpm i' }` into `postCreate`). | `bad(...)` cast, same as above. |
+
+Re-run `npm run typecheck:all` after each file; the errors are independent per
+file, so they can be fixed and verified one at a time.
 
 ### ✅ M0 spike 1 DONE — the panel seat is proven, and R1 is closed
 

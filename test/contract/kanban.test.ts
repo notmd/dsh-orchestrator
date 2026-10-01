@@ -21,8 +21,8 @@ import {
   KanbanColumn,
   deriveKanbanPresentation,
   prFacts,
-} from '../../src/contract/kanban.js'
-import { sessionFacts } from '../../src/contract/status.js'
+} from '../../src/contract/kanban.ts'
+import { sessionFacts } from '../../src/contract/status.ts'
 
 /** Asserts only the stage-one placement, exactly as AO's `deriveColumn` does. */
 function deriveColumn(session, prs) {

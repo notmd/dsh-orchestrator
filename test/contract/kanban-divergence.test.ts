@@ -24,8 +24,8 @@ import {
   KanbanColumn,
   deriveKanbanPresentation,
   prFacts,
-} from '../../src/contract/kanban.js'
-import { sessionFacts } from '../../src/contract/status.js'
+} from '../../src/contract/kanban.ts'
+import { sessionFacts } from '../../src/contract/status.ts'
 
 const NOW = 3_600_000
 const GRACE = 90_000

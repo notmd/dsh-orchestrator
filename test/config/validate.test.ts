@@ -24,7 +24,7 @@ import {
   normalizeRepoConfig,
   resolvePermissionPresets,
   resolveRepoRelativeFile,
-} from '../../src/config/validate.js'
+} from '../../src/config/validate.ts'
 
 const ROOT = '/Users/me/code/myrepo'
 

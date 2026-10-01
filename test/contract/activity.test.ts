@@ -21,7 +21,7 @@ import {
   isSticky,
   needsInput,
   normalizeActivity,
-} from '../../src/contract/activity.js'
+} from '../../src/contract/activity.ts'
 
 const STICKY_AND_NEEDS_INPUT = [ActivityState.waitingInput, ActivityState.blocked]
 
