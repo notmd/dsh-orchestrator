@@ -131,11 +131,19 @@ export function apply(ctx: HostContext, config?: PluginConfigInput): PluginConfi
       // agent's own effect, so both are disposed with what they belong to.
       if (typeof ctx.on === 'function') {
         ctx.on('agent/created', (raw) => {
-          const agent = raw as {
-            session?: { id?: string }
-            ctx?: { tools?: { restrict?(filter: { deny: string[] }): () => void }; effect?(cb: () => (() => void) | void, label?: string): () => void }
+          // The payload is `{ agent, source, signal }` -- NOT the agent itself. Reading
+          // the payload as the agent yields `session: undefined` for every session, so
+          // the listener runs and restricts nothing, silently. The listener is also
+          // called with `this` bound to the scoped agent, which is the other way in.
+          const payload = raw as {
+            agent?: {
+              session?: { id?: string }
+              ctx?: { tools?: { restrict?(filter: { deny: string[] }): () => void }; effect?(cb: () => (() => void) | void, label?: string): () => void }
+            }
           }
-          const scoped = agent?.ctx
+          const agent = payload?.agent ?? (raw as typeof payload.agent)
+          if (!agent) return
+          const scoped = agent.ctx
           if (typeof scoped?.tools?.restrict !== 'function') {
             log(ctx, 'warn', `${name}: an agent has no scoped tool runtime, so protocol tools were not restricted`)
             return
