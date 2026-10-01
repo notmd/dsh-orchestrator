@@ -37,6 +37,7 @@ import { OUTBOX_TICK_MS, deliverPendingReports } from './host/outbox-service.ts'
 import { observeAll } from './host/observer-service.ts'
 import { sweepReviewPasses } from './host/reviewer-service.ts'
 import { sweepCompletions } from './host/completion.ts'
+import { sweepHumanFeedback } from './host/feedback-service.ts'
 import { createBoardRoute } from './host/board-route.ts'
 import { restrictionFor, sessionKind } from './host/tools.ts'
 import { lazyFactStore, openFactStore } from './host/store.ts'
@@ -207,6 +208,21 @@ export function apply(ctx: HostContext, config?: PluginConfigInput): PluginConfi
       // done, so this terminates it, releases its issue and collects its worktree --
       // where R4's disk bound is actually paid. R13 holds: an unfetched snapshot can
       // finish nothing, however its empty payload reads.
+      // A person's review reaches the worker (M4). Without it the card claims the work
+      // is progressing while a human's objection sits unanswered.
+      const feedback = setInterval(() => {
+        void sweepHumanFeedback({ store, config: resolved, live })
+          .then((outcomes) => {
+            if (outcomes.length > 0) {
+              log(ctx, 'info', `${name}: routed human feedback to ${outcomes.length} worker(s)`)
+            }
+          })
+          .catch((error: unknown) => {
+            log(ctx, 'warn', `${name}: the feedback sweep failed: ${String(error)}`)
+          })
+      }, resolved.pollIntervalMs)
+      feedback.unref?.()
+
       const completion = setInterval(() => {
         void sweepCompletions({ store, run })
           .then((outcomes) => {
@@ -244,6 +260,7 @@ export function apply(ctx: HostContext, config?: PluginConfigInput): PluginConfi
         clearInterval(tick)
         clearInterval(observer)
         clearInterval(completion)
+        clearInterval(feedback)
         clearInterval(reviewer)
         for (const dispose of disposers) dispose()
         // A9: unloading leaves sessions and worktrees INTACT. Disposing an agent

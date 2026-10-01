@@ -40,6 +40,14 @@ export interface PrReview {
   id: string
   state: PrReviewState
   author: string
+  /**
+   * The review's text, when the provider supplied it.
+   *
+   * Carried because M4 must route a PERSON's feedback to the worker, and "someone
+   * requested changes" without what they asked for is not actionable -- the worker
+   * would have to go and read the provider to find out what to do.
+   */
+  body?: string
   /** `true` bot, `false` human, `undefined` when the provider did not say. */
   isBot: boolean | undefined
 }
@@ -156,6 +164,7 @@ export function parsePrView(payload: unknown, observedAt: number): PrSnapshot {
           id: typeof review.id === 'string' ? review.id : String(review.id ?? ''),
           state: (typeof review.state === 'string' ? review.state.toUpperCase() : '') as PrReviewState,
           author: authorLogin(review.author),
+          ...(typeof review.body === 'string' ? { body: review.body } : {}),
           isBot: isBotAuthor(review.author),
         }
       })

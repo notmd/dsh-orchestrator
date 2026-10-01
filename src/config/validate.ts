@@ -70,6 +70,8 @@ export interface PluginConfig {
   autoReview: boolean
   // --- review loop bounds (values verified against the reference source) ---
   maxReviewRounds: number
+  /** How many times a HUMAN review may be routed to one worker per commit (M4). */
+  reviewMaxNudge: number
   autoReviewFailedRetryLimit: number
   reviewSweepIntervalMs: number
   reviewIdleThresholdMs: number
@@ -110,6 +112,7 @@ export const PLUGIN_DEFAULTS: Readonly<PluginConfig> = Object.freeze({
   /** Our reviewer runs on every PR head. The requested feature; on by default. */
   autoReview: true,
   maxReviewRounds: 3,
+  reviewMaxNudge: 3,
   autoReviewFailedRetryLimit: 3,
   reviewSweepIntervalMs: 60_000,
   reviewIdleThresholdMs: 60_000,
@@ -182,6 +185,7 @@ export type RepoConfigInput = Partial<RepoConfig>
 const POSITIVE_INT_KEYS = [
   'pollIntervalMs',
   'maxReviewRounds',
+  'reviewMaxNudge',
   'autoReviewFailedRetryLimit',
   'reviewSweepIntervalMs',
   'reviewIdleThresholdMs',

@@ -96,12 +96,44 @@ export interface Worker {
   pr?: PrRef
   /** Epoch ms of the last sign of life, for `No signal` detection. */
   lastSignalAt: number
+  /**
+   * What human feedback has already been routed to this worker (M4).
+   *
+   * Kept on the worker rather than in its own table because it is per-worker state
+   * with the same lifetime, and it must be saved in the same write as the phase — a
+   * separate table would let a crash between the two re-nudge the worker for feedback
+   * it has already answered.
+   */
+  feedback?: {
+    /** Provider ids (reviews and comments) already routed, so nothing is sent twice. */
+    routedIds: readonly string[]
+    /** How many nudges have been sent at this head, against `reviewMaxNudge`. */
+    nudgedAtHead: number
+    /** The commit the count belongs to; a new head resets it. */
+    headSha: string
+  }
   createdAt: number
   updatedAt: number
   endedAt?: number
 }
 
 /** Normalizes a stored worker, filling Go's zero values. */
+/**
+ * Whether a stored value is a usable feedback record.
+ *
+ * Validated rather than trusted: it comes from storage, and a malformed one would make
+ * the dedup silently stop working rather than fail loudly.
+ */
+function isFeedback(value: unknown): value is NonNullable<Worker['feedback']> {
+  if (typeof value !== 'object' || value === null) return false
+  const candidate = value as { routedIds?: unknown; nudgedAtHead?: unknown; headSha?: unknown }
+  return (
+    Array.isArray(candidate.routedIds) &&
+    typeof candidate.nudgedAtHead === 'number' &&
+    typeof candidate.headSha === 'string'
+  )
+}
+
 export function normalizeWorker(raw: unknown): Worker {
   const record = (typeof raw === 'object' && raw !== null ? raw : {}) as Partial<Worker>
   const phases: readonly string[] = Object.values(WorkerPhase)
@@ -116,6 +148,11 @@ export function normalizeWorker(raw: unknown): Worker {
     phaseHistory: Array.isArray(record.phaseHistory)
       ? record.phaseHistory.filter((entry): entry is PhaseEntry => typeof entry === 'object' && entry !== null)
       : [],
+    // Carried EXPLICITLY. This normalizer builds a record field by field, so a field
+    // added to the interface alone is silently dropped on the next read -- which is
+    // exactly how the feedback dedup failed: the routing wrote it, and the read that
+    // followed lost it, so every poll re-nudged the worker.
+    ...(isFeedback(record.feedback) ? { feedback: record.feedback } : {}),
     lastSignalAt: typeof record.lastSignalAt === 'number' ? record.lastSignalAt : 0,
     createdAt: typeof record.createdAt === 'number' ? record.createdAt : 0,
     updatedAt: typeof record.updatedAt === 'number' ? record.updatedAt : 0,
