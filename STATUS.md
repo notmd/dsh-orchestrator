@@ -113,24 +113,45 @@ automatically). That is the documented install path — `plugin_manager` with
 So chunks 6 and 7 can be *written* but **cannot be installed or verified from
 here** as things stand.
 
-Options, in order of preference:
+**Driving the live GUI through the Chrome DevTools MCP server was tried and does
+not work.** Evidence, gathered 2026-10-01:
 
-1. **Ask the user to run one `install_bundle`** (or to enable the plugin-manager
-   tool), then verify by refresh. This is the honest path and it is one action.
-2. Verify the **client half inside the live page** through the Chrome DevTools MCP
-   server, which *is* available: inject the client module and check the slot
-   registry in the running GUI. This can prove the panel seat (R1) without an
-   install, at the cost of touching the user's live session.
-3. Verify the **host half** offline by unit-testing it against a fake `ctx`
-   object, and defer installation.
+- The MCP server is attached to its **own** Chrome instance, not to the DSH
+  desktop app; `list_pages` shows only `about:blank`, and the desktop process
+  (PID 963) listens on `127.0.0.1:19387` with **no CDP/remote-debugging port** for
+  the MCP server to attach to.
+- That port requires authentication. `dsh-client-connection/lib/index.js` gates
+  every request behind a browser cookie minted from a **process-scoped launch
+  token**: a request must carry `?token=<launchToken>` on `GET /` to be redirected
+  with a signed cookie, and `isAuthenticated` then verifies a cookie signed by the
+  activation's secret. The token lives in the running process's memory, so it
+  cannot be read from disk or from another process.
+- Measured: `/`, `/index.html` → **401**; `/?token=bogus` → **401**; every
+  nonexistent path → 404. There is no unauthenticated asset path, so even a
+  standalone harness cannot borrow the deployment's React from the server (React
+  comes from the browser module table, which is populated by that server).
+
+Workable paths, in order of preference:
+
+1. **The user runs one `install_bundle`** (or grants this session the
+   `plugin_manager` tool), then verifies by refresh and reports what renders. This
+   is the only path that can prove the one residual unknown — whether a
+   *third-party* bundle is accepted into `main` at activation — and it is one
+   action.
+2. **Verify the client half's *contract* in Node, with no browser.** A React shim
+   plus a fake `ctx.slots` lets a test assert the module-loader format, the
+   `main` registration's key, the `sidebar.panellist` row's id/order/label, the
+   locale routing, and the rendered element tree. This proves everything about the
+   client half **except** that the host accepts the registration — which is
+   exactly path 1's job. **This is the planned default** for chunk 7, because it
+   needs no one's help.
+3. Unit-test the **host half** against a fake `ctx` object, and defer installation.
 
 **What was done instead, and why it is still real progress:** the slot
 declarations were verified **from the installed artifacts**, which is evidence the
 PRD itself treats as authoritative ("the installed `lib/types/*.d.ts` wins"). See
-§3a below. That settles "do `main` and `sidebar.panellist` exist and who occupies
-them?" — the part of R1 that can be settled without a running plugin. The part
-that still needs a live install is "does a *third-party* bundle get to register
-into them at activation time".
+§3a. That settles "do `main` and `sidebar.panellist` exist and who occupies
+them?" — the part of R1 that can be settled without a running plugin.
 
 ### 3a. Verified: the panel seat exists, is free, and has a shipped exemplar
 
