@@ -86,6 +86,14 @@ export interface HostContext extends SpawnServices {
    */
   storageDomain: DomainFacilityLike
   effect(callback: () => (() => void) | void, label?: string): () => void
+  /**
+   * Subscribe to a Cordis lifecycle event.
+   *
+   * Optional on the type so a host without it leaves the plugin working — see the
+   * restriction wiring, which treats a missing event bus as "do not restrict"
+   * rather than as an error.
+   */
+  on?(event: string, listener: (...args: unknown[]) => void): () => void
   logger?: { info(message: string): void; warn(message: string): void; error(message: string): void }
 }
 

@@ -473,3 +473,86 @@ export function describeConfig(config: PluginConfig): string {
     `  webhook: ${config.webhook.enabled ? `enabled (secret from ${config.webhook.secretEnv})` : 'disabled'}`,
   ].join('\n')
 }
+
+
+// ---------------------------------------------------------------------------
+// Restricting the protocol tools to their session kinds (PRD §12.2)
+// ---------------------------------------------------------------------------
+
+/**
+ * The worker-protocol tools, available only in a worker session.
+ *
+ * One tool, because `state` and `outputs` are orthogonal: `outputs` applies to any
+ * state, so a worker can attach an artifact mid-task without changing what the board
+ * thinks it is doing.
+ */
+export const WORKER_TOOLS: readonly string[] = ['orchestrator_report']
+
+/** The reviewer-protocol tools, available only in a reviewer session. */
+export const REVIEWER_TOOLS: readonly string[] = ['orchestrator_review_verdict', 'orchestrator_review_failed']
+
+/**
+ * Every tool this plugin registers. A constant rather than a derivation from the
+ * table, because `restrictionFor` has to answer before anything is built -- and a
+ * test asserts the two agree, so the constant cannot drift.
+ */
+export const ORCHESTRATOR_TOOL_NAMES: readonly string[] = [
+  'orchestrator_config',
+  'orchestrator_repo_connect',
+  'orchestrator_issue_create',
+  'orchestrator_issue_list',
+  'orchestrator_issue_update',
+  'orchestrator_worker_start',
+  'orchestrator_worker_message',
+  'orchestrator_worker_stop',
+  'orchestrator_run_review',
+  'orchestrator_board',
+  'orchestrator_report',
+  'orchestrator_review_verdict',
+  'orchestrator_review_failed',
+]
+
+/**
+ * The tools that belong to the user's own session: every orchestrator tool except
+ * the two protocol groups, which are for workers and reviewers.
+ */
+export const USER_TOOLS: readonly string[] = ORCHESTRATOR_TOOL_NAMES.filter(
+  (name) => !WORKER_TOOLS.includes(name) && !REVIEWER_TOOLS.includes(name),
+)
+
+/** The session kinds this plugin creates, and the default for everything else. */
+export type SessionKind = 'worker' | 'reviewer' | 'other'
+
+/**
+ * Which kind of session an id belongs to.
+ *
+ * The prefixes are the plugin's own (`dsho-wrk-`, `dsho-rev-`), so this is a fact
+ * about identities the plugin minted rather than a guess about someone else's.
+ * Anything unrecognised is `other`, which is the **safe** default: a session we do
+ * not recognise keeps its normal tools and is denied only the protocol tools.
+ */
+export function sessionKind(sessionId: string | undefined): SessionKind {
+  if (typeof sessionId !== 'string') return 'other'
+  if (sessionId.startsWith('dsho-wrk-')) return 'worker'
+  if (sessionId.startsWith('dsho-rev-')) return 'reviewer'
+  return 'other'
+}
+
+/**
+ * The `deny` list for one kind of session.
+ *
+ * **A deny-list, never an allow-list.** `restrict` is a *global-tool mask* whose
+ * `allow` means **keep only** — so an allow-list for a worker would strip `read`,
+ * `bash` and `edit`, every tool the worker actually needs. Denying the protocol
+ * groups leaves the ordinary surface untouched.
+ */
+export function restrictionFor(kind: SessionKind): { deny: string[] } {
+  switch (kind) {
+    case 'worker':
+      return { deny: [...USER_TOOLS, ...REVIEWER_TOOLS] }
+    case 'reviewer':
+      return { deny: [...USER_TOOLS, ...WORKER_TOOLS] }
+    default:
+      return { deny: [...WORKER_TOOLS, ...REVIEWER_TOOLS] }
+  }
+}

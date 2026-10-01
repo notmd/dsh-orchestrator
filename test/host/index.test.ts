@@ -960,3 +960,81 @@ test('cleanup contains a storage failure instead of throwing', async () => {
   })
   assert.deepEqual(outcomes, [])
 })
+
+
+// ---------------------------------------------------------------------------
+// Restriction lists (PRD §12.2)
+// ---------------------------------------------------------------------------
+
+import {
+  ORCHESTRATOR_TOOL_NAMES,
+  REVIEWER_TOOLS,
+  USER_TOOLS,
+  WORKER_TOOLS,
+  restrictionFor,
+  sessionKind,
+} from '../../src/host/tools.ts'
+
+test('the tool-name constant is in step with the tools actually built', () => {
+  // The constant exists because `restrictionFor` must answer before anything is
+  // built, and a deny-list that has drifted would silently stop protecting.
+  const built = buildOrchestratorTools({
+    config: apply(fakeContext(), {}),
+    run: (async () => ({ exitCode: 0, stdout: '', stderr: '' })) as RunCommand,
+    store: lazyFactStore(async () => createMemoryFactStore()),
+    spawn: createSpawnDeps(fakeContext()),
+  }).map((tool) => tool.name)
+  assert.deepEqual([...built].sort(), [...ORCHESTRATOR_TOOL_NAMES].sort())
+})
+
+test('the three groups partition the tools, with no overlap', () => {
+  assert.equal(USER_TOOLS.length + WORKER_TOOLS.length + REVIEWER_TOOLS.length, ORCHESTRATOR_TOOL_NAMES.length)
+  for (const name of WORKER_TOOLS) assert.ok(!USER_TOOLS.includes(name), name)
+  for (const name of REVIEWER_TOOLS) assert.ok(!USER_TOOLS.includes(name), name)
+})
+
+test('a session id the plugin did not mint is `other`, which is the safe default', () => {
+  // An unrecognised session keeps its normal tools and is denied only the protocol
+  // tools. Guessing `worker` would hand a stranger the ability to report.
+  assert.equal(sessionKind('dsho-wrk-01ABC'), 'worker')
+  assert.equal(sessionKind('dsho-rev-01ABC'), 'reviewer')
+  assert.equal(sessionKind('session-4f012493'), 'other')
+  assert.equal(sessionKind(''), 'other')
+  assert.equal(sessionKind(undefined), 'other')
+  assert.equal(sessionKind('dsho-wrk'), 'other', 'the full prefix is required')
+})
+
+test('restriction is a DENY list, never an allow list', () => {
+  // `allow` means keep only, so an allow-list for a worker would strip read, bash and
+  // edit -- every tool the worker needs. The filter shape is asserted directly.
+  for (const kind of ['worker', 'reviewer', 'other'] as const) {
+    const filter = restrictionFor(kind)
+    assert.deepEqual(Object.keys(filter), ['deny'])
+    assert.ok(filter.deny.length > 0)
+  }
+})
+
+test('each kind is denied the other kinds\' protocol tools, and nothing more', () => {
+  const worker = restrictionFor('worker').deny
+  assert.ok(!worker.includes('orchestrator_report'), 'a worker keeps its own protocol tool')
+  for (const tool of REVIEWER_TOOLS) assert.ok(worker.includes(tool), tool)
+  for (const tool of USER_TOOLS) assert.ok(worker.includes(tool), tool)
+
+  const reviewer = restrictionFor('reviewer').deny
+  assert.ok(!reviewer.includes('orchestrator_review_verdict'), 'a reviewer keeps its own')
+  for (const tool of WORKER_TOOLS) assert.ok(reviewer.includes(tool), tool)
+
+  const other = restrictionFor('other').deny
+  assert.deepEqual([...other].sort(), [...WORKER_TOOLS, ...REVIEWER_TOOLS].sort())
+  assert.ok(!other.includes('orchestrator_issue_create'), 'a user session keeps the orchestrator surface')
+})
+
+test('no restriction ever denies an ordinary tool', () => {
+  // The catastrophic failure this guards: a deny-list that accidentally covered the
+  // shared surface would leave a worker unable to read or edit.
+  for (const kind of ['worker', 'reviewer', 'other'] as const) {
+    for (const name of restrictionFor(kind).deny) {
+      assert.ok(ORCHESTRATOR_TOOL_NAMES.includes(name), `${name} is not one of ours`)
+    }
+  }
+})

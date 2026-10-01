@@ -38,6 +38,7 @@ import { observeAll } from './host/observer-service.ts'
 import { sweepReviewPasses } from './host/reviewer-service.ts'
 import { sweepCompletions } from './host/completion.ts'
 import { createBoardRoute } from './host/board-route.ts'
+import { restrictionFor, sessionKind } from './host/tools.ts'
 import { lazyFactStore, openFactStore } from './host/store.ts'
 import { FACT_SCHEMAS } from './host/schemas.ts'
 
@@ -112,6 +113,42 @@ export function apply(ctx: HostContext, config?: PluginConfigInput): PluginConfi
         },
       }
       disposers.push(ctx.webServer.register(createBoardRoute(boardDeps)))
+
+      // Restrict the protocol tools to the session kinds they belong to (PRD §12.2).
+      //
+      // Two traps, both read from the installed types rather than discovered later:
+      //
+      //   `restrict()` is GLOBAL on a plain context. Applied here it would strip the
+      //   protocol tools from every session including the user's -- so it is only
+      //   ever called through the AGENT'S OWN scoped ctx, and if that is missing the
+      //   wiring does nothing at all. Failing to restrict is a small gap; restricting
+      //   globally is a broken product.
+      //
+      //   the filter is a DENY list. `allow` means keep only, which for a worker would
+      //   strip read, bash and edit.
+      //
+      // The listener is owned by `ctx.effect`, and each agent's restriction by that
+      // agent's own effect, so both are disposed with what they belong to.
+      if (typeof ctx.on === 'function') {
+        ctx.on('agent/created', (raw) => {
+          const agent = raw as {
+            session?: { id?: string }
+            ctx?: { tools?: { restrict?(filter: { deny: string[] }): () => void }; effect?(cb: () => (() => void) | void, label?: string): () => void }
+          }
+          const scoped = agent?.ctx
+          if (typeof scoped?.tools?.restrict !== 'function') {
+            log(ctx, 'warn', `${name}: an agent has no scoped tool runtime, so protocol tools were not restricted`)
+            return
+          }
+          const kind = sessionKind(agent.session?.id)
+          const filter = restrictionFor(kind)
+          const apply = () => scoped.tools!.restrict!(filter)
+          if (typeof scoped.effect === 'function') scoped.effect(apply, `${name}: ${kind} tool restriction`)
+          else apply()
+        })
+      } else {
+        log(ctx, 'warn', `${name}: no event bus, so protocol tools could not be restricted to their session kinds`)
+      }
 
       // The outbox tick. Reports accumulate in storage and are delivered on their
       // own schedule (PRD §10.5), so a worker reporting three times does not
