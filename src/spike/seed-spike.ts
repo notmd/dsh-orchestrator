@@ -179,6 +179,27 @@ async function run(ctx: HostContext): Promise<void> {
       lastCommentId: '', updatedAt: new Date(now).toISOString(), observedAt: now, fetched: true,
     })
 
+    // TWO MORE changes-requested cycles at the SAME head, so the round budget is SPENT and
+    // the card escalates. Without them the escalation line never renders, and a colour
+    // added for it could not be seen -- which is the difference between implementing
+    // something and verifying it.
+    for (const round of [1, 3]) {
+      await store.reviewRuns.put(`run-seed-round-${round}`, {
+        id: `run-seed-round-${round}`,
+        workerId: 'wrk-seed-1',
+        prNumber: 128,
+        headSha: HEAD,
+        round,
+        status: 'complete',
+        verdict: 'changes_requested',
+        triggerSource: 'auto',
+        sessionId: `dsho-rev-seed-${round}`,
+        startedAt: now - 120_000,
+        endedAt: now - 90_000,
+        findings: [],
+      })
+    }
+
     record('seeded', { workerId: 'wrk-seed-1', head: HEAD, config: normalizePluginConfig().maxReviewRounds })
 
     // CLEAN UP AFTER ITSELF. Every run of this spike registers a workspace, and running it

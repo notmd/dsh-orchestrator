@@ -395,6 +395,8 @@ loader.load({
 .dsho-card__footer { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
 .dsho-card__meta { font-size: 0.6875rem; font-variant-numeric: tabular-nums; color: var(--dsw-alias-label-primary-dimmed, inherit); opacity: 0.8; }
 .dsho-card__footer .dsho-card__meta { flex: none; }
+.dsho-card__stopped { font-size: 0.6875rem; font-weight: 600;
+  color: var(--dsw-alias-state-warn-primary, #f59e0b); }
 /* Reviewer badges. The card is answering one question -- is this waiting on me? -- so a
    person who asked for changes is coloured, and our own reviewer is never here. */
 .dsho-faces { display: flex; align-items: center; gap: 4px; }
@@ -417,6 +419,12 @@ loader.load({
 
 .dsho-inspector { max-width: 52rem; margin-top: 16px; padding: 14px 16px; border-radius: 12px;
   border: 1px solid var(--dsw-alias-border-l1, rgba(127,127,127,0.2)); background: var(--dsw-alias-bg-layer-1, rgba(127,127,127,0.06)); }
+/* The detail view keeps the card's tone on its edge, so opening a card does not drop the
+   colour context the board just gave it. Inset shadow again: no layout shift. */
+.dsho-inspector[data-tone='busy'] { box-shadow: inset 3px 0 0 0 var(--dsw-alias-state-business-primary, #7aaaff); }
+.dsho-inspector[data-tone='attention'] { box-shadow: inset 3px 0 0 0 var(--dsw-alias-state-warn-primary, #f59e0b); }
+.dsho-inspector[data-tone='error'] { box-shadow: inset 3px 0 0 0 var(--dsw-alias-state-error-primary, #e5484d); }
+.dsho-inspector[data-tone='success'] { box-shadow: inset 3px 0 0 0 var(--dsw-alias-state-success-primary, #22c55e); }
 .dsho-inspector__head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
 .dsho-inspector__findings { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
 .dsho-finding { font-size: 0.8125rem; line-height: 1.35; }
@@ -763,7 +771,11 @@ loader.load({
               h('span', { className: 'dsho-card__meta' }, formatAge(card.updatedAt, Date.now())),
             ),
             card.escalationReason
-              ? h('div', { className: 'dsho-card__meta' }, translate('orchestrator.card.automationStopped', { reason: card.escalationReason }))
+              ? h(
+                  'div',
+                  { className: 'dsho-card__stopped' },
+                  translate('orchestrator.card.automationStopped', { reason: card.escalationReason }),
+                )
               : null,
           ),
           h(
@@ -831,7 +843,11 @@ loader.load({
       const tone = toneOf(card)
       return h(
         'aside',
-        { className: 'dsho-inspector', 'aria-label': translate('orchestrator.card.details', { title: card.title }) },
+        {
+          className: 'dsho-inspector',
+          'data-tone': tone,
+          'aria-label': translate('orchestrator.card.details', { title: card.title }),
+        },
         h(
           'div',
           { className: 'dsho-inspector__head' },
