@@ -45,6 +45,14 @@ export interface SpawnServices {
   }
   workspaceRegistry: {
     create(path: string, title?: string): Promise<WorkspaceLike>
+    /**
+     * Removes a REGISTRATION; the directory and every session log are retained.
+     *
+     * OPTIONAL on purpose: a caller that only ever creates should not have to implement
+     * removal, and a fake that does not offer it should still typecheck. Adding it as
+     * required rippled into four unrelated fakes for no benefit.
+     */
+    delete?(id: string): Promise<boolean>
   }
   sessionTitle: {
     rename(session: unknown, title: string): unknown
@@ -75,6 +83,14 @@ export function createSpawnDeps(services: SpawnServices): SpawnDeps {
     },
     workspaceRegistry: {
       create: (path, title) => services.workspaceRegistry.create(path, title),
+      // Removing the REGISTRATION, which retains the directory and every session log.
+      // Registered here because the real service has it (`Workspace.delete`) and a caller
+      // that makes a workspace it does not need must be able to unmake it.
+      // Forwarded only when the host actually exposes it, so a registry without removal
+      // leaves the entry absent rather than present and throwing.
+      ...(typeof services.workspaceRegistry.delete === 'function'
+        ? { delete: (id: string) => services.workspaceRegistry.delete!(id) }
+        : {}),
     },
     sessionTitle: {
       rename: (session, title) => services.sessionTitle.rename(session, title),

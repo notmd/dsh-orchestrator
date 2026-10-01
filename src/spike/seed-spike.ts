@@ -27,6 +27,13 @@ export const name = 'seed-spike'
 
 export const inject = ['storageDomain', 'agents', 'agentPresets', 'permissionPresets', 'workspaceRegistry', 'sessionTitle']
 
+/** The slice of the workspace registry this spike uses. */
+interface WorkspaceRegistryLike {
+  create(path: string, title?: string): Promise<{ id?: string; path: string }>
+  /** Removes the REGISTRATION; the directory and session logs are retained. */
+  delete(id: string): Promise<boolean>
+}
+
 const RESULT = '/tmp/dsho-seed-result.json'
 const REPO = '/tmp/dsho-seed-repo'
 const HEAD = 'sha-' + 'c'.repeat(12)
@@ -173,6 +180,22 @@ async function run(ctx: HostContext): Promise<void> {
     })
 
     record('seeded', { workerId: 'wrk-seed-1', head: HEAD, config: normalizePluginConfig().maxReviewRounds })
+
+    // CLEAN UP AFTER ITSELF. Every run of this spike registers a workspace, and running it
+    // repeatedly is what filled the user's sidebar with `seed-spike`, `restrict-spike` and
+    // so on. The registration is removed here, at the end, so the harness does not
+    // re-create the residue that `cleanup-spike.ts` exists to clear.
+    //
+    // `delete` removes the REGISTRATION only -- "retaining its directory and every session
+    // log" -- so the session the card navigates to is unaffected. That claim is worth
+    // checking rather than trusting, because the session was attached to this workspace.
+    const registry = ctx.workspaceRegistry as unknown as WorkspaceRegistryLike
+    if (typeof registry.delete === 'function' && workspace.id) {
+      const ok = await registry.delete(workspace.id)
+      record('workspace-registration-removed', { id: workspace.id, removed: ok })
+    } else {
+      record('workspace-registration-removed', { id: workspace.id ?? null, removed: false, reason: 'no delete on the registry' })
+    }
     finish(true)
   } catch (error) {
     record('failed', { message: error instanceof Error ? error.message : String(error) })

@@ -81,6 +81,9 @@ function fakeContext(): HostContext & {
       async create() {
         throw new Error('the activation tests do not spawn')
       },
+      async delete() {
+        return false
+      },
     },
     sessionTitle: {
       rename() {},

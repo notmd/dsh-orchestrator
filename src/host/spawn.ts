@@ -63,6 +63,8 @@ export interface AgentLike {
 
 /** The slice of a DSH Workspace this module uses. */
 export interface WorkspaceLike {
+  /** The registration id, for a caller that later removes the registration. */
+  readonly id?: string
   readonly path: string
   attachSession(sessionId: string): Promise<void>
 }
@@ -87,6 +89,14 @@ export interface SpawnDeps {
   }
   readonly workspaceRegistry: {
     create(path: string, title?: string): Promise<WorkspaceLike>
+    /**
+     * Removes a REGISTRATION; the directory and every session log are retained.
+     *
+     * OPTIONAL on purpose: a caller that only ever creates should not have to implement
+     * removal, and a fake that does not offer it should still typecheck. Adding it as
+     * required rippled into four unrelated fakes for no benefit.
+     */
+    delete?(id: string): Promise<boolean>
   }
   readonly sessionTitle: {
     rename(session: unknown, title: string): unknown
