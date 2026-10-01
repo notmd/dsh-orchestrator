@@ -9,7 +9,7 @@ bloated status file costs the next agent more than it saves.
 |---|---|
 | **Goal** | Implement [PRD.md](PRD.md) |
 | **Plan source** | [PRD.md §16 Milestones](PRD.md#16-milestones), verified against [docs/dsh-plugin-contract.md](docs/dsh-plugin-contract.md) |
-| **Last updated** | 2026-10-01, chunk 9 (the restriction was inert) |
+| **Last updated** | 2026-10-01, chunk 10 (the restriction does NOT apply) |
 | **Verify** | `npm run verify` → `tsc` (src + test) + `node --test` + build · **all green** |
 | **Current state** | **656 tests, 0 type errors. Twelve tools, and the requested flow runs end to end on its own ticks:** issue → worker → worktree → PR → observer → review pass → findings back to the worker → verdict → `Needs human review`. The board assembles into lanes and `orchestrator_board` reads it. **The host surface now exists**: `/dsho/api/board` answers a real request in a live host (verified: 200, `application/json`, `no-store`, four lanes). **684 tests. Fourteen tools, the requested flow runs to completion** is proven end to end in a real host**: a PR snapshot moves the card `building → validating / Review scheduled → Reviewing`, an approved verdict lands in **`needs_review / Needs human review` — never `Ready`** (A17), a new head schedules a fresh pass, and a failed pass lands in `Review failed` with its retry budget accounted. Along the way the lane spike found a real integration bug (fixed). The flow now **runs to its end**: a merged or closed PR finishes the worker, releases the issue, and collects the worktree. Still open: no *real* PR has been opened (the spike writes the observer's output directly — `gh pr create` needs write access to someone else's repository), and the worker has never run a turn. Also open: no PR has been opened by a worker yet, the protocol tools are not restricted to their session kinds, and worktree cleanup on archive does not exist. |
 
@@ -147,6 +147,15 @@ This is the **second** bug of exactly this shape, after the worktree
 canonicalization: **a fake cannot catch a wrong API, because it implements whatever
 interface the author imagined.** The tests were green throughout — which is why the
 fix was verified against reality rather than against another fake.
+
+**A negative result is worth more than silence, and "the doc says so" is not the
+runtime.** The corrected probe reports every protocol tool **visible** to a worker
+session: the restriction is not applying. Two causes are live and I did not guess
+between them — the wiring may still not apply it, **or the probe may be wrong**,
+since `get(name)` may resolve globally rather than per scope. The types *say* it
+resolves per scope; the types are not the runtime, which is the ninth instance of this
+session's one lesson. **The status is "not working", not "unverified", and no claim is
+made that it works.**
 
 **Reading the wrong object does not throw — it silently does nothing.** The
 `agent/created` payload is `{ agent, source, signal }`; the listener read it *as* the

@@ -107,9 +107,13 @@ async function run(ctx: ProbeContext): Promise<void> {
     const preset = await ctx.agentPresets.resolve('standard')
     await ctx.agentPresets.acquireScope(preset.id)
 
+    // Unique per run: sessions are DURABLE, so a fixed id fails the second run with
+    // "session already exists" and no `agent/created` fires at all -- which is exactly
+    // how the previous attempt produced an empty probe list.
+    const stamp = String(Date.now())
     for (const [label, sessionId] of [
-      ['worker', 'dsho-wrk-01RESTRICTSPIKEWORKER00'],
-      ['other', 'restrict-spike-ordinary-session'],
+      ['worker', `dsho-wrk-${stamp}`],
+      ['other', `restrict-spike-ordinary-${stamp}`],
     ] as const) {
       try {
         await ctx.agents.create({
