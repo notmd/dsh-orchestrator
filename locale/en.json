@@ -1,0 +1,22 @@
+{
+  "orchestrator.title": "Orchestrator",
+  "orchestrator.panel.label": "Orchestrator",
+  "orchestrator.board.workers": "{count} worker(s)",
+  "orchestrator.board.needsAttention": "{count} needing attention",
+  "orchestrator.board.loading": "Loading the board…",
+  "orchestrator.board.unavailable": "The board is unavailable: {message}",
+  "orchestrator.board.empty": "No workers yet. Create an issue in a session to start one.",
+  "orchestrator.lane.building": "Building",
+  "orchestrator.lane.validating": "Validating",
+  "orchestrator.lane.needs_review": "In review",
+  "orchestrator.lane.ready": "Ready",
+  "orchestrator.lane.empty": "Nothing here.",
+  "orchestrator.archive": "{count} archived session(s) — not a lane.",
+  "orchestrator.card.details": "Details for {title}",
+  "orchestrator.card.reviewRound": "auto review round {round}/{max}",
+  "orchestrator.card.automationStopped": "automation stopped: {reason}",
+  "orchestrator.inspector.noReview": "No automated review has run at this commit.",
+  "orchestrator.inspector.noFindings": "No findings recorded for this commit.",
+  "orchestrator.inspector.review": "review {id}",
+  "orchestrator.inspector.close": "Close"
+}

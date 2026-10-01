@@ -15,7 +15,8 @@
     "dist",
     "locale/*.json",
     "icon.svg",
-    "cordis.patch.yml"
+    "cordis.patch.yml",
+    "locale"
   ],
   "scripts": {
     "test": "node --test",
@@ -33,7 +34,10 @@
     },
     "client": {
       "platform": "web",
-      "immediately": true
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-locale"
+      ]
     }
   },
   "devDependencies": {

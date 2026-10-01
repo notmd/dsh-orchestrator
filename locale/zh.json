@@ -1,0 +1,22 @@
+{
+  "orchestrator.title": "编排器",
+  "orchestrator.panel.label": "编排器",
+  "orchestrator.board.workers": "{count} 个 worker",
+  "orchestrator.board.needsAttention": "{count} 个需要处理",
+  "orchestrator.board.loading": "正在加载看板…",
+  "orchestrator.board.unavailable": "看板不可用：{message}",
+  "orchestrator.board.empty": "暂无 worker。在会话中创建一个 issue 即可启动。",
+  "orchestrator.lane.building": "构建中",
+  "orchestrator.lane.validating": "校验中",
+  "orchestrator.lane.needs_review": "待审查",
+  "orchestrator.lane.ready": "可合并",
+  "orchestrator.lane.empty": "暂无内容。",
+  "orchestrator.archive": "{count} 个已归档会话——不属于泳道。",
+  "orchestrator.card.details": "{title} 的详情",
+  "orchestrator.card.reviewRound": "自动审查第 {round}/{max} 轮",
+  "orchestrator.card.automationStopped": "自动化已停止：{reason}",
+  "orchestrator.inspector.noReview": "该提交尚未进行自动审查。",
+  "orchestrator.inspector.noFindings": "该提交没有记录任何问题。",
+  "orchestrator.inspector.review": "审查 {id}",
+  "orchestrator.inspector.close": "关闭"
+}
