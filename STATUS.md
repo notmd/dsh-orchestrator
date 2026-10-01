@@ -9,9 +9,9 @@ bloated status file costs the next agent more than it saves.
 |---|---|
 | **Goal** | Implement [PRD.md](PRD.md) |
 | **Plan source** | [PRD.md §16 Milestones](PRD.md#16-milestones), verified against [docs/dsh-plugin-contract.md](docs/dsh-plugin-contract.md) |
-| **Last updated** | 2026-10-01, chunk 6c (spike 2 answered) |
+| **Last updated** | 2026-10-01, chunk 6d (worktrees, verified against real git) |
 | **Verify** | `npm run verify` → typecheck (src) + `node --test` + build · **all three green** |
-| **Current state** | **The plugin installs and activates in DSH, and the worker-spawn recipe is written and unit-tested.** 370 tests pass; `tsc` reports **0 errors across `src/` and `test/`**; `npm run build` emits `dist/`. M0 spike 1 is done (panel seat proven) and the host entry is live with one real tool. The services behind it (issue store, spawner, observer, routes) and the whole client half are still to come. |
+| **Current state** | **The plugin installs and activates in DSH; the spawn and worktree layers exist and are verified — worktrees against real git.** 411 tests pass; `tsc` reports **0 errors across `src/` and `test/`**; `npm run build` emits `dist/`. M0 spike 1 is done (panel seat proven) and the host entry is live with one real tool. The services behind it (issue store, spawner, observer, routes) and the whole client half are still to come. |
 
 ---
 
@@ -94,16 +94,18 @@ Chunk numbers are this file's own; milestone letters are the PRD's.
 
 | Chunk | Work | PRD | Why now |
 |---|---|---|---|
+| 6e | **`orchestrator_repo_connect`** — the first tool backed by real code now that git exists: register a local checkout, verify it is a git work tree, warn when `.dsho/` is not ignored (R4), and preflight `gh auth` (R3). Needs the `ctx.shell` adapter (`resolve` → `execute` → `run.result()`) that supplies the `RunCommand` seam. | §12.1, R3, R4 | The gate every other tool depends on: nothing can be spawned until a repo is connected. |
 | 7 | **Client half**: `src/client/**/*.ts` → `dist/client.js` in the `window.__ModuleLoader__` **classic-script** form, plus the `sidebar.panellist` row and the `main` keyed panel, lanes/cards/inspector, themes, locale, keyboard access. | §11, M2 | Needs the routes from chunk 6. |
 | 8 | **M0 spikes 2–4**: `ctx.agents.create()` outside `dsh-webhook`; `attachSession` against a worktree; a `/dsho/api/*` route + SSE from a slot component. | §16 | Spike 1 is done; these are the remaining unknowns. |
 | 9 | **Feedback classification** (actionability, bot detection by `__typename`/`User.Type` never a login substring, per-comment dedup, re-arm only on a definitive clear) and the **report outbox** (§10.5, A23). | §10.3, §10.5 | M4's logic, testable offline. Can be interleaved with 6. |
 
-**Recommended next step: chunk 6d — `WorktreeManager`.** Spike 2 removed the last
-unknown that could have invalidated the spawner, so the next real dependency is a
-worktree to point it at: `git worktree add` via `ctx.subprocess`, branch naming, and
-cleanup on archive. Two smaller things are also queued: confirm the admitted prompt
-actually produces a turn (the residual above), and settle whether the preset lease
-should be released by the caller or owned by the worker's context.
+**Recommended next step: chunk 6e — `orchestrator_repo_connect`.** It is the gate
+every other tool depends on, and both layers beneath it now exist and are verified:
+the spawner (spike 2) and the worktrees (real git). It also forces the `ctx.shell`
+adapter into existence, which is the last host seam before the issue store. Two
+smaller things stay queued: confirm the admitted prompt actually produces a turn (the
+residual in spike 2), and settle whether the preset lease should be released by the
+caller or owned by the worker's context.
 it: does the real `ctx.agents.create()` accept a non-`dsh-webhook` caller, and does
 `attachSession` tolerate a worktree whose repository root is a different workspace?
 Append a spawn to `fixtures/panel-spike`'s host half (or a sibling fixture), install
@@ -111,6 +113,48 @@ it, boot, and look for the new titled session in the GUI sidebar. The install lo
 is cheap and documented in [docs/verification-harness.md](docs/verification-harness.md).
 outside `dsh-webhook`, and `attachSession` against a worktree). The install loop is
 now cheap and fully documented in [docs/verification-harness.md](docs/verification-harness.md).
+
+### ✅ Chunk 6d — the worktree manager, verified against real git
+
+[`src/host/worktree.ts`](src/host/worktree.ts) is per-issue isolation: branch naming,
+the `.dsho/worktrees` layout, `git worktree add`/`remove`/`list`, porcelain parsing,
+and the `check-ignore` preflight that enforces R4's "`.dsho/` gitignored".
+
+**A real-git integration test found a real bug the unit tests could not.**
+`git worktree list` reports **realpath-resolved** paths, and on macOS `/tmp` and
+`/var` are symlinks — so a repository given as `/var/folders/…` is reported by git
+as `/private/var/folders/…`. Every textual path comparison then compares different
+strings for the same directory, and all three of them are load-bearing: idempotence
+(`create` would re-add), `remove` (would report "not found"), and `pruneAll` (would
+remove nothing). **All three would have failed silently while reporting success.**
+Caught by 4 of the 12 integration subtests; fixed by canonicalizing the root, the
+worktree root, and every incoming path.
+
+That is the whole argument for the integration test: a fake git returns whatever its
+author expected, so it cannot falsify a path comparison.
+
+| Suite | What it proves |
+|---|---|
+| [`test/host/worktree.test.ts`](test/host/worktree.test.ts) — 28 tests | argv construction, porcelain parsing, the security properties below, every failure path |
+| [`test/host/worktree.integration.test.ts`](test/host/worktree.integration.test.ts) — 12 subtests, **real git in a throwaway repo** | that git accepts the argv: a real directory, a real branch ref, a clean checkout at the base commit, two trees that cannot see each other (A3), `--force` past a worker's uncommitted file, the branch surviving its worktree so the PR can still be opened, and `pruneAll` never touching the human checkout |
+
+Two properties are asserted directly rather than assumed, because both are
+security-shaped:
+
+- **The slug cannot escape anywhere.** It becomes *both* a git branch component and a
+  directory name, so `slugify` makes dangerous input unrepresentable
+  (`^[a-z0-9][a-z0-9-]*$`) rather than escaped — `../../etc/passwd`, `a/../b`,
+  `$(rm -rf /)`, backticks, and newlines are all tested. Escaping is where this kind
+  of code usually goes wrong.
+- **Cleanup is scoped to the worktree root.** `pruneAll` can never remove the human
+  checkout, which is the first entry in every `git worktree list`.
+
+**One PRD conflict is now resolved in code, and recorded:** §7.3 writes the branch as
+`dsho/issue-<n>-<slug>` while §13.1 shows `sessionPrefix` feeding
+`dsho/<prefix>/issue-<n>/root`. This implements the first as the default and inserts
+the prefix as a middle segment (`dsho/<prefix>/issue-<n>-<slug>`), so a configured
+prefix namespaces without changing the issue segment. The two PRD shapes are not
+reconciled; if the other is wanted, it is one function to change.
 
 ### ✅ M0 SPIKE 2 DONE — `ctx.agents.create()` works for a third-party caller
 
