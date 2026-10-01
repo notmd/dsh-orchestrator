@@ -1,0 +1,344 @@
+/**
+ * Card presentation: what a card says, whether it demands attention, and the
+ * order cards appear in a lane.
+ *
+ * PORTED from Agent Orchestrator `packages/product-ui/src/SessionsBoardView.tsx`
+ * (`boardSessionNeedsAttention`, the lane sort, the card's finished/loader
+ * conditions) and `packages/product-ui/src/session-presentation.ts`
+ * (`attentionZone`). See NOTICE.
+ *
+ * The attention predicate is the piece most easily got wrong, so it is stated
+ * once here and exercised by tests rather than re-derived in the component.
+ *
+ * @module dsho/board/presentation
+ */
+
+import { ActivityState } from '../contract/activity.js'
+import {
+  DisplayStatus,
+  KANBAN_LANES,
+  KanbanColumn,
+  deriveKanbanPresentation,
+  prFacts,
+} from '../contract/kanban.js'
+import { SessionStatus, sessionFacts } from '../contract/status.js'
+
+/**
+ * Startup verification, never a persisted status.
+ *
+ * This is the honest answer to "do we actually know this worker's state yet?".
+ * `checking` is the state after a restart, before a worker's handle is reattached
+ * (A27), and `unavailable` means we could not find out. Either way it suppresses
+ * the attention treatment: **uncertainty must not be rendered as a demand.**
+ */
+export const StatusReadiness = Object.freeze({
+  checking: 'checking',
+  ready: 'ready',
+  unavailable: 'unavailable',
+})
+
+/** Normalizes a missing readiness to `ready`; only a *known* non-ready suppresses. */
+export function normalizeStatusReadiness(value) {
+  if (value === StatusReadiness.checking || value === StatusReadiness.unavailable) return value
+  return StatusReadiness.ready
+}
+
+/**
+ * The older, separate attention vocabulary.
+ *
+ * These are **not** the board lanes. They survive in the reference only as a
+ * fallback mapping for a daemon too old to send `displayStatus`, and the PRD
+ * keeps them for exactly the same reason: the predicate must still answer when
+ * `displayStatus` is absent.
+ */
+export const AttentionZone = Object.freeze({
+  working: 'working',
+  action: 'action',
+  pending: 'pending',
+  merge: 'merge',
+  done: 'done',
+})
+
+/**
+ * Maps a session status to its attention zone. Ported from `attentionZone`.
+ *
+ * Note what lands in `action`: `needs_input`, `exited`, `no_signal`, `ci_failed`,
+ * `changes_requested`, and — importantly — `unknown`. An unknown state is an
+ * action item, because we cannot rule out that a person is needed. `working` and
+ * `idle` are not.
+ *
+ * @param {string} status
+ * @returns {string|undefined}
+ */
+export function attentionZone(status) {
+  switch (status) {
+    case SessionStatus.merged:
+    case SessionStatus.approved:
+    case SessionStatus.mergeable:
+      return AttentionZone.merge
+    case SessionStatus.terminated:
+      return AttentionZone.done
+    case SessionStatus.needsInput:
+    case SessionStatus.exited:
+    case SessionStatus.noSignal:
+    case SessionStatus.ciFailed:
+    case SessionStatus.changesRequested:
+    case 'unknown':
+      return AttentionZone.action
+    case SessionStatus.reviewPending:
+    case SessionStatus.prOpen:
+    case SessionStatus.draft:
+      return AttentionZone.pending
+    case SessionStatus.working:
+    case SessionStatus.idle:
+      return AttentionZone.working
+    default:
+      return undefined
+  }
+}
+
+/**
+ * The display statuses that demand attention.
+ *
+ * **Exactly three.** `Needs human review` is deliberately not among them: it
+ * waits on a person, but it is the *normal* resting place of a finished automated
+ * loop, and pulsing on it would train the user to ignore the pulse (A28).
+ */
+export const ATTENTION_DISPLAY_STATUSES = Object.freeze([
+  DisplayStatus.blocked,
+  DisplayStatus.ciFailing,
+  DisplayStatus.changesRequested,
+])
+
+/** The display statuses that mean the automated loop is still turning the PR. */
+export const IN_PROGRESS_DISPLAY_STATUSES = Object.freeze([
+  DisplayStatus.reviewPending,
+  DisplayStatus.fixingCI,
+  DisplayStatus.addressingComments,
+  DisplayStatus.reviewing,
+])
+
+/**
+ * @typedef {object} BoardCard
+ * @property {string} id                Stable identity, for keys and tie-breaks.
+ * @property {string} sessionId
+ * @property {string} title
+ * @property {number} updatedAt         Epoch ms, for ordering.
+ * @property {string} [statusReadiness] {@link StatusReadiness} value.
+ * @property {string} [status]          {@link SessionStatus} value.
+ * @property {string} [activity]        {@link ActivityState} value.
+ * @property {boolean} [isTerminated]
+ * @property {number} [lastActivityAt]
+ * @property {boolean} [hasSignal]
+ * @property {boolean} [signalExpected]
+ * @property {string} [statusPresentation] Reference-only daemon override.
+ * @property {string} [displayStatus]   A pre-derived display status, when the
+ *   caller already ran the reducer. `presentCard` supplies it explicitly.
+ * @property {boolean} [autoReview]
+ * @property {boolean} [autoInjectReview]
+ * @property {boolean} [autoInjectCI]
+ * @property {boolean} [requireHumanApprovalBeforeReady]
+ * @property {import('../contract/kanban.js').KanbanPRFacts[]} [prs]
+ */
+
+/**
+ * Reports whether a card should carry the needs-attention treatment.
+ *
+ * Ported from `boardSessionNeedsAttention`, with the reference's guard order
+ * preserved:
+ *
+ *   1. A non-`ready` `statusReadiness` suppresses attention outright — uncertainty
+ *      is not a demand (A27, R21).
+ *   2. The three attention display statuses win.
+ *   3. With no `displayStatus` at all, fall back to the older attention-zone
+ *      mapping plus a directly blocked activity state.
+ *   4. Everything else — including `Needs human review` — does not pulse (A28).
+ *
+ * The reference's `statusPresentation` guard is reproduced and documented: it is
+ * a daemon-side presentation override that this plugin never sets, so it is inert
+ * here. It is kept so that a future port that does start setting it inherits the
+ * reference's behaviour instead of silently losing it.
+ *
+ * @param {BoardCard} card
+ * @param {string} [displayStatus] Override the derived display status.
+ * @returns {boolean}
+ */
+export function needsAttention(card, displayStatus) {
+  if (normalizeStatusReadiness(card.statusReadiness) !== StatusReadiness.ready) return false
+  if (card.statusPresentation) return false
+  const status = displayStatus ?? card.displayStatus
+  if (status === undefined) {
+    return (
+      attentionZone(card.status ?? '') === AttentionZone.action ||
+      card.activity === ActivityState.blocked
+    )
+  }
+  return ATTENTION_DISPLAY_STATUSES.includes(status)
+}
+
+/**
+ * Reports whether a session has genuinely finished.
+ *
+ * Ported from the card's `isFinishedForPullRequestProgress`. **Both** facts are
+ * required: a live session can already read `merged` before it exits, and it may
+ * still gain more PRs, so `merged` alone must not render as finished (A30).
+ *
+ * @param {BoardCard} card
+ * @returns {boolean}
+ */
+export function isFinished(card) {
+  return (
+    card.status === SessionStatus.terminated ||
+    (card.status === SessionStatus.merged && card.isTerminated === true)
+  )
+}
+
+/**
+ * Reports whether the card shows a working spinner.
+ *
+ * Ported from the card's `showStatusLoader`. Two conditions are worth keeping
+ * verbatim because both are bug fixes the reference earned:
+ *
+ *   - `Needs human review` and `Draft` get no spinner. A draft describes the PR,
+ *     not work anyone is turning, and a finished loop is not in progress.
+ *   - The check reads `displayStatus`, **not** `status`. `status` aggregates the
+ *     session's *worst* open PR while `displayStatus` describes its *best* one, so
+ *     keying the spinner off `status` spun a settled `Mergeable` card forever
+ *     whenever a sibling PR was still review-pending (the reference's #5081).
+ *
+ * @param {BoardCard} card
+ * @param {string} [displayStatus]
+ * @returns {boolean}
+ */
+export function showStatusLoader(card, displayStatus) {
+  const readiness = normalizeStatusReadiness(card.statusReadiness)
+  if (readiness === StatusReadiness.checking) return true
+  if (readiness === StatusReadiness.unavailable) return false
+  const status = displayStatus ?? card.displayStatus
+  if (needsAttention(card, status)) return false
+  if (status === DisplayStatus.needsHumanReview) return false
+  if (status === DisplayStatus.draft) return false
+  if (status) return IN_PROGRESS_DISPLAY_STATUSES.includes(status)
+  return card.status === SessionStatus.reviewPending
+}
+
+/**
+ * Orders the cards inside one lane.
+ *
+ * `(needsAttention desc, updatedAt desc)`, exactly as the reference sorts — so a
+ * worker waiting on a person floats above a freshly-updated idle one (A29, R22).
+ *
+ * **One added tie-break, and it is deliberate.** The reference relies on
+ * `Array.prototype.sort` being stable to keep equal cards in insertion order. That
+ * is not enough for us: our board is rebuilt from a snapshot on every refresh, and
+ * if the snapshot's order ever varies the board flickers on a no-op refresh,
+ * which A29 forbids. Comparing `id` last makes the result a pure function of the
+ * card set, so a no-op refresh provably cannot reorder it.
+ *
+ * @param {BoardCard[]} cards
+ * @param {(card: BoardCard) => string} [displayStatusOf]
+ * @returns {BoardCard[]} A new array; the input is not mutated.
+ */
+export function orderCards(cards, displayStatusOf) {
+  const statusOf = displayStatusOf ?? ((card) => card.displayStatus)
+  return [...cards].sort((left, right) => {
+    const attention =
+      Number(needsAttention(right, statusOf(right))) - Number(needsAttention(left, statusOf(left)))
+    if (attention !== 0) return attention
+    if (right.updatedAt !== left.updatedAt) return right.updatedAt - left.updatedAt
+    return left.id < right.id ? -1 : left.id > right.id ? 1 : 0
+  })
+}
+
+/**
+ * @typedef {object} BoardCardView
+ * @property {string} id
+ * @property {string} sessionId
+ * @property {string} title
+ * @property {string} column            {@link KanbanColumn} value.
+ * @property {string} displayStatus     {@link DisplayStatus} value.
+ * @property {string} status            {@link SessionStatus} value.
+ * @property {string} statusReadiness   {@link StatusReadiness} value.
+ * @property {boolean} needsAttention
+ * @property {boolean} showStatusLoader
+ * @property {boolean} isFinished
+ * @property {string} [escalationReason] Why the automated loop stopped, if it did.
+ * @property {import('../contract/kanban.js').KanbanPRFacts[]} prs
+ */
+
+/**
+ * Assembles one card's full presentation.
+ *
+ * The one place that reads every derived field, so the component cannot disagree
+ * with the reducer.
+ *
+ * @param {BoardCard} card
+ * @param {object} timing
+ * @param {number} timing.now            Epoch ms.
+ * @param {number} timing.noSignalGraceMs
+ * @returns {BoardCardView}
+ */
+export function presentCard(card, { now, noSignalGraceMs }) {
+  const session = sessionFacts({
+    activity: card.activity,
+    lastActivityAt: card.lastActivityAt,
+    hasSignal: card.hasSignal,
+    signalExpected: card.signalExpected,
+    isTerminated: card.isTerminated,
+    autoReview: card.autoReview,
+    autoInjectReview: card.autoInjectReview,
+    autoInjectCI: card.autoInjectCI,
+    requireHumanApprovalBeforeReady: card.requireHumanApprovalBeforeReady,
+  })
+  const prs = (card.prs ?? []).map(prFacts)
+  const derived = deriveKanbanPresentation(session, prs, now, noSignalGraceMs)
+  const readiness = normalizeStatusReadiness(card.statusReadiness)
+  const status = card.status ?? ''
+
+  /** @type {BoardCardView} */
+  const view = {
+    id: card.id,
+    sessionId: card.sessionId,
+    title: card.title,
+    column: derived.column,
+    displayStatus: derived.displayStatus,
+    status,
+    statusReadiness: readiness,
+    needsAttention: needsAttention(card, derived.displayStatus),
+    showStatusLoader: showStatusLoader(card, derived.displayStatus),
+    isFinished: isFinished(card),
+    prs,
+  }
+  if (derived.escalationReason) view.escalationReason = derived.escalationReason
+  return view
+}
+
+/**
+ * Groups presented cards into the four lanes, in delivery order.
+ *
+ * Archive is deliberately **not** a lane: terminated sessions belong in a
+ * separate sheet, and the board stays one continuous four-lane grid (A30).
+ *
+ * @param {BoardCardView[]} views
+ * @returns {Record<string, BoardCardView[]>} Keyed by {@link KanbanColumn}.
+ */
+export function groupIntoLanes(views) {
+  /** @type {Record<string, BoardCardView[]>} */
+  const lanes = {}
+  for (const lane of KANBAN_LANES) lanes[lane] = []
+  for (const view of views) {
+    if (view.column === KanbanColumn.archive) continue
+    ;(lanes[view.column] ?? (lanes[view.column] = [])).push(view)
+  }
+  return lanes
+}
+
+/**
+ * The archive sheet's contents: terminated sessions, newest first.
+ *
+ * @param {BoardCardView[]} views
+ * @returns {BoardCardView[]}
+ */
+export function archiveSheet(views) {
+  return views.filter((view) => view.column === KanbanColumn.archive)
+}

@@ -98,3 +98,225 @@ export function silentPastGrace(session, now, grace) {
     now - (session.lastActivityAt ?? 0) > grace
   )
 }
+
+/**
+ * The derived display status of a session.
+ *
+ * This is the *session-level* status: it aggregates the session's worst open PR,
+ * which is deliberately not the same reading the board's `displayStatus` gives
+ * (that one describes the PR the column was chosen from — the best landing). The
+ * card uses this for the terminal treatment and the loader, and the divergence is
+ * the cause of the reference's #5081 bug, which its comment records.
+ */
+export const SessionStatus = Object.freeze({
+  working: 'working',
+  prOpen: 'pr_open',
+  draft: 'draft',
+  ciFailed: 'ci_failed',
+  reviewPending: 'review_pending',
+  changesRequested: 'changes_requested',
+  approved: 'approved',
+  mergeable: 'mergeable',
+  merged: 'merged',
+  needsInput: 'needs_input',
+  exited: 'exited',
+  idle: 'idle',
+  terminated: 'terminated',
+  noSignal: 'no_signal',
+})
+
+/**
+ * @typedef {object} PRFacts
+ * @property {string} url
+ * @property {boolean} draft
+ * @property {boolean} merged
+ * @property {boolean} closed
+ * @property {string} ci               {@link CIState} value.
+ * @property {string} review           {@link ReviewDecision} value.
+ * @property {string} mergeability     {@link Mergeability} value.
+ * @property {boolean} reviewComments
+ * @property {string} sourceBranch
+ * @property {string} targetBranch
+ */
+
+/** Fills Go's zero values for a PR-facts object. @param {Partial<PRFacts>} [pr] @returns {PRFacts} */
+export function prStatusFacts(pr = {}) {
+  return {
+    url: pr.url ?? '',
+    draft: pr.draft ?? false,
+    merged: pr.merged ?? false,
+    closed: pr.closed ?? false,
+    ci: pr.ci ?? '',
+    review: pr.review ?? '',
+    mergeability: pr.mergeability ?? '',
+    reviewComments: pr.reviewComments ?? false,
+    sourceBranch: pr.sourceBranch ?? '',
+    targetBranch: pr.targetBranch ?? '',
+  }
+}
+
+/**
+ * Derives the session display status from session and pull-request facts.
+ *
+ * Ported from `func DeriveStatus(...)`. Note the order: a terminated session is
+ * decided first, then raw activity, and only then the SCM reading. So a running
+ * worker reads `Working` even with a failing PR — the board's column reducer is
+ * what reconciles that, and it deliberately reads different facts.
+ *
+ * @param {SessionFacts} session
+ * @param {PRFacts[]|undefined|null} prs
+ * @param {number} now
+ * @param {number} noSignalGrace
+ * @returns {string} A {@link SessionStatus} value.
+ */
+export function deriveStatus(session, prs, now, noSignalGrace) {
+  if (session.isTerminated) {
+    if (openPRs(prs).length === 0 && anyMerged(prs)) return SessionStatus.merged
+    return SessionStatus.terminated
+  }
+
+  switch (session.activity) {
+    case 'active':
+      return SessionStatus.working
+    case 'exited':
+      return SessionStatus.exited
+    case 'waiting_input':
+    case 'blocked':
+      return SessionStatus.needsInput
+  }
+
+  const scm = deriveSCMStatus(prs)
+  if (scm) return scm
+
+  if (silentPastGrace(session, now, noSignalGrace)) return SessionStatus.noSignal
+  return SessionStatus.idle
+}
+
+/**
+ * Derives stack-aware pull-request status independently of activity.
+ *
+ * Ported from `func DeriveSCMStatus(...)`. Returns `''` when there is nothing to
+ * say, exactly as the reference does — the empty string is the caller's signal
+ * that no SCM fact applies, and it is deliberately falsy rather than a status.
+ *
+ * @param {PRFacts[]|undefined|null} prs
+ * @returns {string}
+ */
+export function deriveSCMStatus(prs) {
+  const open = openPRs(prs)
+  if (open.length > 0) return aggregatePRStatus(open)
+  if (anyMerged(prs)) return SessionStatus.merged
+  return ''
+}
+
+/**
+ * Derives stack positions from open source and target branches.
+ *
+ * Ported from `func BuildStacks(...)`. Kept because the aggregate status depends
+ * on it: a PR stacked on another open PR does not report its own non-actionable
+ * signal, so a child waiting on its parent cannot make the parent look blocked.
+ *
+ * @param {PRFacts[]|undefined|null} prs
+ * @returns {Map<string, {blocked: boolean, bottomOfStack: boolean}>}
+ */
+export function buildStacks(prs) {
+  const openSources = new Set()
+  for (const pr of prs ?? []) {
+    if (!pr.merged && !pr.closed && pr.sourceBranch) openSources.add(pr.sourceBranch)
+  }
+  const positions = new Map()
+  for (const pr of prs ?? []) {
+    const blocked = Boolean(pr.targetBranch) && openSources.has(pr.targetBranch)
+    positions.set(pr.url, { blocked, bottomOfStack: !blocked })
+  }
+  return positions
+}
+
+function openPRs(prs) {
+  return (prs ?? []).filter((pr) => !pr.merged && !pr.closed)
+}
+
+function anyMerged(prs) {
+  return (prs ?? []).some((pr) => pr.merged)
+}
+
+/**
+ * The worst status among the open PRs.
+ *
+ * Ported from `func aggregatePRStatus(...)`. The non-actionable signals of a PR
+ * stacked on another open PR are skipped, so a child that is merely waiting on
+ * its parent cannot make the session look blocked; if that leaves nothing, every
+ * open PR counts again rather than the function returning an empty aggregate.
+ *
+ * @param {PRFacts[]} open
+ * @returns {string}
+ */
+function aggregatePRStatus(open) {
+  const stacks = buildStacks(open)
+  let candidates = []
+  for (const pr of open) {
+    const status = prPipelineStatus(pr)
+    if (stacks.get(pr.url)?.blocked && !isActionableChildSignal(status)) continue
+    candidates.push(status)
+  }
+  if (candidates.length === 0) candidates = open.map(prPipelineStatus)
+
+  let worst = candidates[0]
+  for (const status of candidates.slice(1)) {
+    if (statusSeverity(status) < statusSeverity(worst)) worst = status
+  }
+  return worst
+}
+
+/** Ported from `isActionableChildSignal`. */
+function isActionableChildSignal(status) {
+  return (
+    status === SessionStatus.ciFailed ||
+    status === SessionStatus.draft ||
+    status === SessionStatus.changesRequested
+  )
+}
+
+/** Lower is worse. Ported from `statusSeverity`. */
+function statusSeverity(status) {
+  switch (status) {
+    case SessionStatus.ciFailed:
+      return 0
+    case SessionStatus.changesRequested:
+      return 1
+    case SessionStatus.draft:
+      return 2
+    case SessionStatus.reviewPending:
+      return 3
+    case SessionStatus.prOpen:
+      return 4
+    case SessionStatus.approved:
+      return 5
+    case SessionStatus.mergeable:
+      return 6
+    default:
+      return 7
+  }
+}
+
+/** Ported from `prPipelineStatus`. */
+function prPipelineStatus(pr) {
+  switch (true) {
+    case pr.ci === CIState.failing:
+      return SessionStatus.ciFailed
+    case pr.draft:
+      return SessionStatus.draft
+    case pr.review === ReviewDecision.changesRequested || pr.reviewComments:
+      return SessionStatus.changesRequested
+    case pr.mergeability === Mergeability.mergeable:
+      return SessionStatus.mergeable
+    case pr.review === ReviewDecision.required:
+      return SessionStatus.reviewPending
+    case pr.mergeability === Mergeability.blocked:
+      return SessionStatus.prOpen
+    case pr.review === ReviewDecision.approved:
+      return SessionStatus.approved
+    default:
+      return SessionStatus.prOpen
+  }
+}
