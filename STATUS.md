@@ -9,9 +9,9 @@ bloated status file costs the next agent more than it saves.
 |---|---|
 | **Goal** | Implement [PRD.md](PRD.md) |
 | **Plan source** | [PRD.md §16 Milestones](PRD.md#16-milestones), verified against [docs/dsh-plugin-contract.md](docs/dsh-plugin-contract.md) |
-| **Last updated** | 2026-10-01, chunk 6f |
+| **Last updated** | 2026-10-01, chunk 6g |
 | **Verify** | `npm run verify` → `tsc` (src + test) + `node --test` + build · **all green** |
-| **Current state** | **474 tests, 0 type errors.** The board's read model, configuration, and the host plane's low-level layers (spawn, worktree, exec, GitHub access) are done and verified — worktrees against real git, activation in a real GUI. **Nothing user-visible works end to end yet:** there is no issue store, no observer, no routes, and no client half. |
+| **Current state** | **507 tests, 0 type errors.** The board's read model, configuration, the host plane's low-level layers (spawn, worktree, exec, GitHub access), **persistence, and the repository preflight** are done and verified — worktrees against real git, activation in a real GUI. **The storage question is settled** (see decisions 20–21). Still missing: the observer, the routes, the client half, and the *wiring* of `repo_connect` as a tool. |
 
 ---
 
@@ -42,6 +42,7 @@ everything else inherits.
 | 6d | **The worktree manager** — branch naming, `.dsho/worktrees`, add/remove/list, porcelain parsing, `check-ignore` preflight | 28 unit + **12 real-git subtests** |
 | 6e | **The command seam** — argv over `ctx.subprocess`, bounded in time and output, failure classification | 33 tests |
 | 6f | **GitHub credential chain** (`AO_GITHUB_TOKEN` → `GITHUB_TOKEN` → `gh auth token`) and every `gh`/`git` argv | 30 tests |
+| 6g | **Persistence and the repository preflight.** The fact store on `ctx.storage`'s KV layer, record ids, and `connectRepo`'s three checks (git work tree → worktree root ignored → `gh` installed and authenticated) with a refusal that names the fix | 33 tests |
 
 Spikes: **M0 spike 1** (the panel seat is real) and **M0 spike 2**
 (`ctx.agents.create()` works for a third-party caller) are both closed — see §3.
@@ -103,19 +104,18 @@ happened. Read the log after the session closes, or watch the GUI.
 
 | Chunk | Work | PRD | Why now |
 |---|---|---|---|
-| 6g | **`orchestrator_repo_connect`** — preflight (`rev-parse --is-inside-work-tree`, `.dsho/` ignored, `gh auth status`, `gh repo view`) then return the `Repo` record. Everything under it now exists and is tested. | §12.1, R3, R4 | The gate every other tool depends on: nothing can be spawned until a repo is connected. |
-| 6h | **Settle `ctx.storageDomain` once**, then the issue + worker stores on it. | §6.2, §14 | The same storage question blocks both `repo_connect`'s persistence and every issue tool; settle it once. |
+| 6g\.2 | **Wire `orchestrator_repo_connect` as a tool.** The preflight and the store both exist and are tested; what is missing is the wiring. It needs `inject` to gain `subprocess` and `storage`, and **`apply()` to become async** (opening the store is async), which is why it is its own step rather than a footnote — that change also touches the activation tests. | §12.1 | Makes the second real tool live, and proves the store against a real backend rather than a fake. |
+| 6h | **The issue and worker stores** on the settled fact store, then `orchestrator_issue_create` / `_list` / `_update`. | §7.1, §7.3, §12.1 | Now unblocked: the storage question is settled in 6g. |
 | 6i | **`GitHubGateway` + `PrObserver`** — poll `gh pr view --json`, diff against the stored snapshot, emit fact changes. Invariants: a failed observation keeps the prior snapshot and can never fabricate a closed/merged transition (R13). | §7.4, §10.2 | The board is only truthful if the facts are. |
 | 7 | **Client half** — `src/client/**/*.ts` → `dist/client.js` in the `window.__ModuleLoader__` classic-script form, the `sidebar.panellist` row and the `main` keyed panel, lanes/cards/inspector, themes, locale, keyboard access. | §11, M2 | The seat is proven (§3) and there is a shipped exemplar to copy. |
 | 8 | `/dsho/api/*` + `/dsho/events` on `ctx.webServer` (SSE is unverified — the fallback is polling the board endpoint). | §11.4, A10 item 5 | Needs the stores; the client needs the routes. |
 | 9 | **Feedback classification** (actionability, bot detection by `__typename`/`User.Type` — never a login substring; per-comment dedup; re-arm only on a definitive clear) and the **report outbox** (§10.5, A23). | §10.3, §10.5 | M4's logic, testable offline; can be interleaved. |
 
-**Recommended next step: 6g, which is also 6h's forcing function.** Deciding where
-the `Repo` record lives is the same decision the issue store needs, so doing them
-together avoids settling `ctx.storageDomain` twice. Two smaller items stay queued:
-confirm the admitted prompt actually produces a turn (the residual in spike 2), and
-settle whether the preset lease should be released by the caller or owned by the
-worker's context.
+**Recommended next step: 6g\.2 — wire `orchestrator_repo_connect`.** It is small and
+it is the first time the store meets a real backend, which is worth doing before more
+is built on top of it. Two smaller items stay queued: confirm the admitted prompt
+actually produces a turn (the residual in spike 2), and settle whether the preset
+lease should be released by the caller or owned by the worker's context.
 
 ---
 
@@ -182,7 +182,21 @@ Treat these as current intent. Overrule them deliberately, but not by accident.
 18. **`gh pr view --json`, not GraphQL.** AO reads PRs through `gh api graphql`; the
     PRD prescribes this. The field list is exactly what §7.4 names and the reducer
     reads.
-19. **A review is always posted as `event=COMMENT`** (R17): GitHub rejects
+20. **Persistence is `ctx.storage`'s KV layer, not `ctx.storageDomain`.** The PRD
+    allows either. `storageDomain` validates records with **zod schemas**, which
+    would mean importing a schema library the plugin cannot resolve (the symlink
+    problem, decision 14) and pinning a version the host may differ on. The KV layer
+    takes `unknown` records and needs no schema library — and the **ported
+    normalizers are already the validators**: `prFacts()`, `sessionFacts()` and
+    `reviewRunFacts()` fill Go's zero values on every read, which is exactly how a
+    record predating a field is supposed to behave. Everything is behind `FactStore`,
+    so switching later is a change to one file.
+21. **Record ids are ULIDs, and the id is the storage key.** Lexicographic order is
+    creation order, so a board sorted by id is also sorted by age; and the Crockford
+    alphabet excludes `I`/`L`/`O`/`U`, so an id survives being read out loud. The
+    alphabet is also what makes an id safe as a KV key, which the store asserts
+    rather than assuming.
+22. **A review is always posted as `event=COMMENT`** (R17): GitHub rejects
     `APPROVE`/`REQUEST_CHANGES` on your own PR, so forwarding the verdict would 422
     every PR. **`pushArgv` has no `--force` parameter at all** — making force-push
     unreachable is stronger than making it conditional.
