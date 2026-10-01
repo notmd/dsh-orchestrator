@@ -26,7 +26,8 @@
     "build": "tsc -p tsconfig.build.json && tsc -p tsconfig.client.json",
     "build:spike": "tsc -p tsconfig.spike.json",
     "verify": "npm run typecheck && npm test && npm run build",
-    "build:client": "tsc -p tsconfig.client.json"
+    "build:client": "tsc -p tsconfig.client.json",
+    "verify:all": "npm run typecheck:all && npm run build && npm run build:spike && npm test"
   },
   "dsh": {
     "bundle": {
