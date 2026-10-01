@@ -9,9 +9,9 @@ bloated status file costs the next agent more than it saves.
 |---|---|
 | **Goal** | Implement [PRD.md](PRD.md) |
 | **Plan source** | [PRD.md §16 Milestones](PRD.md#16-milestones), verified against [docs/dsh-plugin-contract.md](docs/dsh-plugin-contract.md) |
-| **Last updated** | 2026-10-01, chunk 6q (the board assembles) |
+| **Last updated** | 2026-10-01, chunk 6q.2 (the assembly is covered) |
 | **Verify** | `npm run verify` → `tsc` (src + test) + `node --test` + build · **all green** |
-| **Current state** | **633 tests, 0 type errors. Twelve tools, and the requested flow runs end to end on its own ticks:** issue → worker → worktree → PR → observer → review pass → findings back to the worker → verdict → `Needs human review`. The board assembles into lanes and `orchestrator_board` reads it. **The surface is what is missing:** no HTTP route and no client half, so none of this is visible in the GUI yet. Also open: `board-service.ts` has **no tests** (see §4), the protocol tools are not yet restricted to their session kinds, and worktree cleanup on archive does not exist. |
+| **Current state** | **651 tests, 0 type errors. Twelve tools, and the requested flow runs end to end on its own ticks:** issue → worker → worktree → PR → observer → review pass → findings back to the worker → verdict → `Needs human review`. The board assembles into lanes and `orchestrator_board` reads it. **The surface is what is missing:** no HTTP route and no client half, so none of this is visible in the GUI yet. Also open: the protocol tools are not yet restricted to their session kinds, worktree cleanup on archive does not exist, and the client half is unwritten. |
 
 ---
 
@@ -42,7 +42,7 @@ everything else inherits.
 | 6d | **The worktree manager** — branch naming, `.dsho/worktrees`, add/remove/list, porcelain parsing, `check-ignore` preflight | 28 unit + **12 real-git subtests** |
 | 6e | **The command seam** — argv over `ctx.subprocess`, bounded in time and output, failure classification | 33 tests |
 | 6f | **GitHub credential chain** (`AO_GITHUB_TOKEN` → `GITHUB_TOKEN` → `gh auth token`) and every `gh`/`git` argv | 30 tests |
-| 6q | **The board assembly.** `buildBoard` joins the stores, the reducer and the presentation layer — the only place that does, so the agent's view and the GUI's cannot disagree. Plus `orchestrator_board`. **No tests yet** | 0 tests |
+| 6q | **The board assembly.** `buildBoard` joins the stores, the reducer and the presentation layer — the only place that does, so the agent's view and the GUI's cannot disagree. Plus `orchestrator_board` | 1 test file |
 | 6p | **The review sweep, and a real activity gate.** A tick schedules a pass for every worker whose head has none, and the gate now reads the **live** `AgentStatus` rather than assuming the worker is quiet | 5 tests |
 | 6o | **The auto-review pass.** The reviewer contract (PRD §12.5, with "prefer a few high-confidence findings over nitpicks" quoted because that line is what stops every PR hitting the round cap), the read-only reviewer session in the worker's **own worktree**, the pinned-head `ReviewRun`, the head-checked verdict, finding routing, and the failed-pass retry budget | 16 tests |
 | 6n | **The PR observer.** The `PrSnapshot` record and the `gh pr view --json` parser, plus the per-repository serialised poll. R13's invariant is the substance: a failed observation writes `fetched: false` **with the prior facts**, so even a caller that ignores the flag cannot see a fabricated `CLOSED` | 18 tests |
@@ -139,6 +139,12 @@ canonicalization: **a fake cannot catch a wrong API, because it implements whate
 interface the author imagined.** The tests were green throughout — which is why the
 fix was verified against reality rather than against another fake.
 
+**Covering the assembly found a real interface problem.** `toPrFacts` returned the
+*input* shape, so `facts.externalReview` was optional and every caller had to narrow
+it — the tests failed to compile for exactly that reason. It now normalizes on the way
+out via `prFacts()`, so a caller gets Go's zero values on every field. The reducer
+tolerates holes; a caller reading `facts.externalReview.approved` does not.
+
 **A presented card had no `updatedAt`, so it could not be ordered.** `orderCards` was
 typed for `BoardCard`, but the lanes hold **views** — a different type. Typing the sort
 against `BoardCard` would have forced every caller to re-derive a card it already had,
@@ -228,7 +234,6 @@ happened. Read the log after the session closes, or watch the GUI.
 | Chunk | Work | PRD | Why now |
 |---|---|---|---|
 | 6g\.2 | **Wire `orchestrator_repo_connect` as a tool.** The preflight and the store both exist and are tested; what is missing is the wiring. It needs `inject` to gain `subprocess` and `storage`, and **`apply()` to become async** (opening the store is async), which is why it is its own step rather than a footnote — that change also touches the activation tests. | §12.1 | Makes the second real tool live, and proves the store against a real backend rather than a fake. |
-| 6q\\.2 | **Cover `src/host/board-service.ts`.** It is the one module written in 6q and it is uncovered; the *joins* (worker → issue → snapshot → runs → card) are exactly what the ported reducer tests do not reach. `buildCard` and `toPrFacts` are exported for it. | §7.6, §11 | Do this **before** the route is built on top, so the route is not resting on unverified assembly.
 | 6r | **`/dsho/api/board` on `ctx.webServer`** (`register({ kind: 'exact', path, handler })`), then the SSE stream — unverified, with polling as the documented fallback. Then the client half. | §11.4 | Nothing is visible in the GUI without it.
 | 6q | **The board's read surface**: `/dsho/api/board` on `ctx.webServer`, then `orchestrator_board`. The reducer, presentation, and stores all exist, so this is an assembly job. | §11.4, §12.1 | Nothing is visible in the GUI without it, and it is what the client half reads.
 | 6p | **A tick that schedules review passes** — call `startReviewPass` for workers whose head has no current pass, so the loop turns without a human. Then `orchestrator_run_review` for the forced path. | §7.5, M3 | The pass is complete and tested but nothing schedules it, so no card ever enters `Validating`'s review loop.

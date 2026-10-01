@@ -24,7 +24,7 @@ import {
   KanbanColumn,
   prFacts,
 } from '../contract/kanban.ts'
-import type { KanbanPRFactsInput } from '../contract/kanban.ts'
+import type { KanbanPRFacts, KanbanPRFactsInput } from '../contract/kanban.ts'
 import { deriveStatus, prStatusFacts, sessionFacts } from '../contract/status.ts'
 import { archiveSheet, groupIntoLanes, orderCards, presentCard } from '../board/presentation.ts'
 import type { BoardCard, BoardCardView } from '../board/presentation.ts'
@@ -68,7 +68,7 @@ export function toPrFacts(
   snapshot: PrSnapshot | undefined,
   runs: readonly ReviewRun[],
   bounds: { maxReviewRounds: number; autoReviewFailedRetryLimit: number },
-): KanbanPRFactsInput[] {
+): KanbanPRFacts[] {
   if (!snapshot || typeof snapshot !== 'object') return []
   const headSha = snapshot.headSha ?? ''
   // Our own provider reviews are excluded by id, because the aggregate
@@ -76,8 +76,11 @@ export function toPrFacts(
   const ourReviewIds = new Set(runs.map((run) => run.githubReviewId).filter((id): id is string => !!id))
   const external = (snapshot.reviews ?? []).filter((review) => !ourReviewIds.has(review.id))
 
+  // Normalized on the way out, so a caller gets Go's zero values on every field
+  // rather than an object with holes. The reducer tolerates holes; a caller reading
+  // `facts.externalReview.approved` does not.
   return [
-    {
+    prFacts({
       url: snapshot.url || `#${snapshot.number}`,
       ...(snapshot.number ? { number: snapshot.number } : {}),
       draft: snapshot.isDraft === true,
@@ -93,7 +96,7 @@ export function toPrFacts(
         changesRequested: external.some((review) => review.state === 'CHANGES_REQUESTED'),
         comments: external.length > 0 && external.every((review) => review.state === 'COMMENTED'),
       },
-    },
+    }),
   ]
 }
 
