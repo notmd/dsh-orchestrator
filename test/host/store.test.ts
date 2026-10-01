@@ -95,11 +95,37 @@ test('ids are unique and increase with time', () => {
   assert.equal(new Set(Array.from({ length: 500 }, () => newId('iss'))).size, 500)
 })
 
-test('an id round-trips its timestamp, and a bad prefix is refused', () => {
-  const now = 1_700_000_000_000
+test('ids created in the same millisecond stay ordered, so oldest-first is real', () => {
+  // The random half is otherwise random, which made two records created in the
+  // same millisecond order arbitrarily -- and `byQueueOrder` tie-breaks on id to
+  // express "oldest first". A flaky queue test is what surfaced it.
+  const ids = Array.from({ length: 200 }, () => newId('iss', 1_700_000_000_000))
+  assert.deepEqual(ids, [...ids].sort(), 'same-millisecond ids increase')
+  assert.equal(new Set(ids).size, ids.length, 'and are still unique')
+})
+
+test('a clock that steps backwards does not produce a smaller id', () => {
+  // A backwards clock step would otherwise break monotonicity for everything after.
+  const later = newId('iss', 2_000_000)
+  const earlier = newId('iss', 1_000_000)
+  assert.ok(earlier > later, 'the id never goes backwards')
+})
+
+test('an id round-trips its timestamp when the clock moves forwards', () => {
+  // Deliberately far ahead of anything the suite has issued: monotonicity clamps a
+  // timestamp *up* to the last one issued, so a small literal here would be
+  // clamped by an earlier test rather than round-tripping.
+  const now = 4_102_444_800_000
   assert.equal(timestampOf(newId('repo', now)), now)
   assert.equal(timestampOf('not-an-id'), undefined)
   assert.throws(() => newId('Iss'), /lowercase/)
+})
+
+test('a backwards timestamp is clamped forwards, which is what monotonicity means', () => {
+  const forward = newId('iss', 4_102_444_900_000)
+  const backwards = newId('iss', 1_000)
+  assert.ok(backwards > forward, 'the id still goes forwards')
+  assert.equal(timestampOf(backwards), 4_102_444_900_000, 'reporting the time actually issued')
 })
 
 test('generated ids are safe storage keys by construction', () => {

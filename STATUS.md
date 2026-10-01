@@ -9,9 +9,9 @@ bloated status file costs the next agent more than it saves.
 |---|---|
 | **Goal** | Implement [PRD.md](PRD.md) |
 | **Plan source** | [PRD.md §16 Milestones](PRD.md#16-milestones), verified against [docs/dsh-plugin-contract.md](docs/dsh-plugin-contract.md) |
-| **Last updated** | 2026-10-01, chunk 6h (storage fixed and verified) |
+| **Last updated** | 2026-10-01, chunk 6i (issue tools) |
 | **Verify** | `npm run verify` → `tsc` (src + test) + `node --test` + build · **all green** |
-| **Current state** | **524 tests, 0 type errors. The storage layer is fixed and verified against the real backend.** The board's read model, configuration, the host plane's low-level layers (spawn, worktree, exec, GitHub access), **persistence, and the repository preflight** are done and verified — worktrees against real git, activation in a real GUI. **The storage question is settled** (see decisions 20–21). Still missing: the issue/worker stores' accessors, the observer, the routes, the client half. The next step is 6h. |
+| **Current state** | **541 tests, 0 type errors. Five orchestrator tools are live**, including issue create/list/update over the verified store. The board's read model, configuration, the host plane's low-level layers (spawn, worktree, exec, GitHub access), **persistence, and the repository preflight** are done and verified — worktrees against real git, activation in a real GUI. **The storage question is settled** (see decisions 20–21). Still missing: starting a worker from an issue, the PR observer, the routes, the client half. The next step is 6j. |
 
 ---
 
@@ -42,6 +42,7 @@ everything else inherits.
 | 6d | **The worktree manager** — branch naming, `.dsho/worktrees`, add/remove/list, porcelain parsing, `check-ignore` preflight | 28 unit + **12 real-git subtests** |
 | 6e | **The command seam** — argv over `ctx.subprocess`, bounded in time and output, failure classification | 33 tests |
 | 6f | **GitHub credential chain** (`AO_GITHUB_TOKEN` → `GITHUB_TOKEN` → `gh auth token`) and every `gh`/`git` argv | 30 tests |
+| 6h/6i | **The issue record and its tools.** `createIssue`/`updateIssue`/`assignWorker` with two invariants the record enforces (at most one active worker per issue; an empty patch is not a change), plus `orchestrator_issue_create` / `_list` / `_update` over the verified store | 32 tests |
 | 6g | **Persistence and the repository preflight.** The fact store on `ctx.storage`'s KV layer, record ids, and `connectRepo`'s three checks (git work tree → worktree root ignored → `gh` installed and authenticated) with a refusal that names the fix | 33 tests |
 
 Spikes: **M0 spike 1** (the panel seat is real) and **M0 spike 2**
@@ -130,6 +131,15 @@ canonicalization: **a fake cannot catch a wrong API, because it implements whate
 interface the author imagined.** The tests were green throughout — which is why the
 fix was verified against reality rather than against another fake.
 
+**A flaky test, not a flaky test.** An issue-list test asserting "oldest first"
+passed on one run and failed on the next. The cause was real: record ids ended in a
+**random** half, so two records created in the same millisecond ordered arbitrarily —
+and `byQueueOrder` tie-breaks on `id` to express "oldest first". The ids are now
+**ULID-monotonic** (the random half increments as a counter while the clock stands
+still, and a backwards clock step is clamped forwards), so within a process id order
+really is creation order. A second consequence worth knowing: `timestampOf()`
+reports the timestamp actually *issued*, which may be later than one you passed in.
+
 **A live session's log buffers.** "No turn events on disk" does **not** mean no turn
 happened. Read the log after the session closes, or watch the GUI.
 
@@ -140,7 +150,9 @@ happened. Read the log after the session closes, or watch the GUI.
 | Chunk | Work | PRD | Why now |
 |---|---|---|---|
 | 6g\.2 | **Wire `orchestrator_repo_connect` as a tool.** The preflight and the store both exist and are tested; what is missing is the wiring. It needs `inject` to gain `subprocess` and `storage`, and **`apply()` to become async** (opening the store is async), which is why it is its own step rather than a footnote — that change also touches the activation tests. | §12.1 | Makes the second real tool live, and proves the store against a real backend rather than a fake. |
-| 6h | **The issue and worker records**, then `orchestrator_issue_create` / `_list` / `_update` on the verified store. | §7.1, §7.3, §12.1 | The storage layer is verified against reality, so nothing is being built on an assumption. |
+| 6j | **`orchestrator_worker_start`** — the first tool that ties three verified layers together: `worktree.create()` → `spawnWorker()` → `assignWorker()`. Returns the worker id and the session to steer. | §12.1, M1 | It is the moment issue → worker → branch becomes real; every piece under it is already verified. |
+| 6k | **`orchestrator_worker_message` / `_stop` / `_attach_pr`**, and the `Worker` record itself (PRD §7.3: phase, phaseHistory, pendingQuestion, lastSignalAt). | §7.3, §12.1 | Needs the worker record, which `worker_start` will have shown the shape of. |
+| 6l | **`GitHubGateway` + `PrObserver`** — poll `gh pr view --json`, diff against the stored snapshot. A failed observation keeps the prior snapshot and can never fabricate a closed/merged transition (R13). | §7.4, §10.2 | The board is only truthful if the facts are. |
 | 6i | **`GitHubGateway` + `PrObserver`** — poll `gh pr view --json`, diff against the stored snapshot, emit fact changes. Invariants: a failed observation keeps the prior snapshot and can never fabricate a closed/merged transition (R13). | §7.4, §10.2 | The board is only truthful if the facts are. |
 | 7 | **Client half** — `src/client/**/*.ts` → `dist/client.js` in the `window.__ModuleLoader__` classic-script form, the `sidebar.panellist` row and the `main` keyed panel, lanes/cards/inspector, themes, locale, keyboard access. | §11, M2 | The seat is proven (§3) and there is a shipped exemplar to copy. |
 | 8 | `/dsho/api/*` + `/dsho/events` on `ctx.webServer` (SSE is unverified — the fallback is polling the board endpoint). | §11.4, A10 item 5 | Needs the stores; the client needs the routes. |

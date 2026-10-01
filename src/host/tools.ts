@@ -22,7 +22,7 @@
  * |---|---|---|
  * | `orchestrator_config` | **shipped** | — |
  * | `orchestrator_repo_connect` | **shipped** | — |
- * | `orchestrator_issue_create` / `_list` / `_update` | next | an issue record + store accessors |
+ * | `orchestrator_issue_create` / `_list` / `_update` | **shipped** | — |
  * | `orchestrator_worker_start` / `_message` / `_stop` / `_attach_pr` | next | wiring the spawner into a tool |
  * | `orchestrator_board` | next | the issue + worker stores |
  * | `orchestrator_pr_sync` | next | the PR observer |
@@ -36,6 +36,8 @@ import type { PluginConfig } from '../config/validate.ts'
 import { defineTool } from './tool.ts'
 import type { ToolDescriptor } from './tool.ts'
 import { connectRepo, describeRepoConnect } from './repo.ts'
+import { createIssueForTool, listIssuesForTool, updateIssueForTool } from './issues-service.ts'
+import { IssuePriority, IssueState } from '../domain/issues.ts'
 import type { Repo } from './repo.ts'
 import type { LazyFactStore } from './store.ts'
 import type { RunCommand } from './worktree.ts'
@@ -108,6 +110,65 @@ export function buildOrchestratorTools(options: {
       },
       outputType: 'string',
       execute: async (args) => connectRepoForTool({ config, run, store }, args),
+    }) as ToolDescriptor<never, unknown>,
+
+    defineTool({
+      name: 'orchestrator_issue_create',
+      description:
+        'Create an issue: one unit of work for one worker. The repository is inferred when exactly ' +
+        'one is connected, so a plain "create an issue to fix X" needs only a title. The issue is ' +
+        'queued in `open` and appears on the board in Building until a worker is started.',
+      parameters: {
+        title: { type: 'string', required: true, description: 'What needs doing, in one line.' },
+        body: { type: 'string', description: 'The full task description. Markdown is fine.' },
+        repoId: {
+          type: 'string',
+          description: 'The connected repository id or path. Needed only when several are connected.',
+        },
+        priority: {
+          type: 'string',
+          enum: Object.values(IssuePriority),
+          description: 'Queue order. Defaults to normal.',
+        },
+        labels: { type: 'array', items: { type: 'string' }, description: 'Free-form labels.' },
+      },
+      outputType: 'string',
+      execute: async (args) => createIssueForTool({ store }, args as never),
+    }) as ToolDescriptor<never, unknown>,
+
+    defineTool({
+      name: 'orchestrator_issue_list',
+      description:
+        'List issues in queue order — highest priority first, then oldest first, so nothing starves. ' +
+        'Filter by state, repository, or owning worker.',
+      parameters: {
+        state: {
+          type: 'string',
+          enum: Object.values(IssueState),
+          description: 'Only issues in this state.',
+        },
+        repoId: { type: 'string', description: 'Only issues in this repository.' },
+        workerId: { type: 'string', description: 'Only issues worked by this worker.' },
+      },
+      outputType: 'string',
+      execute: async (args) => listIssuesForTool({ store }, args as never),
+    }) as ToolDescriptor<never, unknown>,
+
+    defineTool({
+      name: 'orchestrator_issue_update',
+      description:
+        'Edit an issue: title, body, priority, labels, or state. Re-sending the current values is a ' +
+        'no-op and does not move the issue in the queue.',
+      parameters: {
+        id: { type: 'string', required: true, description: 'The issue id, e.g. iss-01J8ZQ…. ' },
+        title: { type: 'string', description: 'New title.' },
+        body: { type: 'string', description: 'New body.' },
+        priority: { type: 'string', enum: Object.values(IssuePriority), description: 'New priority.' },
+        labels: { type: 'array', items: { type: 'string' }, description: 'Replaces the label list.' },
+        state: { type: 'string', enum: Object.values(IssueState), description: 'New issue state.' },
+      },
+      outputType: 'string',
+      execute: async (args) => updateIssueForTool({ store }, args as never),
     }) as ToolDescriptor<never, unknown>,
   ]
   return tools

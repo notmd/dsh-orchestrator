@@ -91,7 +91,7 @@ test('the plugin declares the services it cannot function without', () => {
 test('apply registers the orchestrator tools and returns the resolved config', () => {
   const ctx = fakeContext()
   const config = apply(ctx, {})
-  assert.equal(ctx.registered.length, 2)
+  assert.equal(ctx.registered.length, 5)
   assert.equal(ctx.registered[0]!.name, 'orchestrator_config')
   assert.equal(ctx.registered[1]!.name, 'orchestrator_repo_connect')
   assert.equal(config.autoReview, true, 'the requested flow is on by default')
@@ -101,7 +101,7 @@ test('apply owns every registration through ctx.effect, so unload disposes it', 
   const ctx = fakeContext()
   apply(ctx, {})
   assert.deepEqual(ctx.effects, ['dsh-orchestrator: orchestrator tools'])
-  assert.equal(ctx.registered.length, 2)
+  assert.equal(ctx.registered.length, 5)
   ctx.disposeAll()
   assert.deepEqual(ctx.registered, [], 'the tool is removed on disposal')
 })
@@ -160,7 +160,13 @@ test('the tool table stays in step with the tools actually built', () => {
     store: lazyFactStore(async () => createMemoryFactStore()),
   })
   const names = tools.map((tool) => tool.name)
-  assert.deepEqual(names, ['orchestrator_config', 'orchestrator_repo_connect'])
+  assert.deepEqual(names, [
+    'orchestrator_config',
+    'orchestrator_repo_connect',
+    'orchestrator_issue_create',
+    'orchestrator_issue_list',
+    'orchestrator_issue_update',
+  ])
   // Every registered tool must carry a real schema, because the registry feeds it
   // to the model: a tool with empty `parameters` and no schema would be rejected
   // there rather than here.
@@ -359,4 +365,177 @@ test('the lazy store does not open on close if it was never used', async () => {
   await store.close()
   assert.equal(opened, 0, 'unload must not cause an open')
   assert.equal(store.opened, false)
+})
+
+// ---------------------------------------------------------------------------
+// The issue tools
+// ---------------------------------------------------------------------------
+
+import {
+  assignWorkerForTool,
+  createIssueForTool,
+  listIssuesForTool,
+  updateIssueForTool,
+} from '../../src/host/issues-service.ts'
+
+/** A store with `count` connected repositories, ids `repo-1`, `repo-2`, … */
+async function issueDeps(count = 1) {
+  const store = createMemoryFactStore()
+  for (let index = 1; index <= count; index += 1) {
+    await store.repos.put(`repo-${index}`, { id: `repo-${index}`, rootPath: `/repos/r${index}` })
+  }
+  return { store: lazyFactStore(async () => store), raw: store }
+}
+
+test('issue_create: with no repository connected it says what to do first', async () => {
+  const deps = await issueDeps(0)
+  const text = await createIssueForTool(deps, { title: 'Fix the flaky auth test' })
+  assert.match(text, /No repository is connected/)
+  assert.match(text, /orchestrator_repo_connect/)
+})
+
+test('issue_create: with one repository it infers the repo, so a plain request works', async () => {
+  // The PRD's flow is "create an issue to fix X" -- no repository in it at all.
+  const deps = await issueDeps(1)
+  const text = await createIssueForTool(deps, { title: 'Fix the flaky auth test' })
+  assert.match(text, /Created iss-/)
+  assert.match(text, /repo-1/)
+  assert.match(text, /queued in `open`/)
+  const stored = await deps.raw.issues.list()
+  assert.equal(stored.length, 1)
+  assert.equal((stored[0] as { title: string }).title, 'Fix the flaky auth test')
+})
+
+test('issue_create: with several repositories it asks rather than guessing', async () => {
+  // Picking the wrong repository silently is how an issue ends up on the wrong board.
+  const deps = await issueDeps(2)
+  const text = await createIssueForTool(deps, { title: 'Fix it' })
+  assert.match(text, /needs an explicit `repoId`/)
+  assert.match(text, /repo-1, repo-2/)
+  assert.deepEqual(await deps.raw.issues.list(), [])
+})
+
+test('issue_create: an explicit repoId may be an id or a path', async () => {
+  const deps = await issueDeps(2)
+  const byId = await createIssueForTool(deps, { title: 'One', repoId: 'repo-2' })
+  assert.match(byId, /repo-2/)
+  const byPath = await createIssueForTool(deps, { title: 'Two', repoId: '/repos/r1' })
+  assert.match(byPath, /repo-1/)
+  const unknown = await createIssueForTool(deps, { title: 'Three', repoId: 'nope' })
+  assert.match(unknown, /No connected repository matches/)
+})
+
+test('issue_create: an unusable issue is refused before anything is stored', async () => {
+  const deps = await issueDeps(1)
+  const empty = await createIssueForTool(deps, { title: '   ' })
+  assert.match(empty, /Could not create the issue/)
+  assert.match(empty, /must not be empty/)
+  const badPriority = await createIssueForTool(deps, { title: 'ok', priority: 'urgent' as never })
+  assert.match(badPriority, /must be one of high \| normal \| low/)
+  assert.deepEqual(await deps.raw.issues.list(), [], 'nothing was persisted')
+})
+
+test('issue_create: labels are trimmed and de-duplicated', async () => {
+  const deps = await issueDeps(1)
+  await createIssueForTool(deps, { title: 'Fix it', labels: [' bug ', 'bug', '', 'ci'] })
+  const [stored] = await deps.raw.issues.list()
+  assert.deepEqual((stored as { labels: string[] }).labels, ['bug', 'ci'])
+})
+
+test('issue_list: empty, filtered, and in queue order', async () => {
+  const deps = await issueDeps(1)
+  assert.match(await listIssuesForTool(deps), /No issues yet/)
+
+  await createIssueForTool(deps, { title: 'Low', priority: 'low' })
+  await createIssueForTool(deps, { title: 'High', priority: 'high' })
+  await createIssueForTool(deps, { title: 'Normal', priority: 'normal' })
+
+  const all = await listIssuesForTool(deps)
+  assert.match(all, /3 issue\(s\)/)
+  // Queue order: high first, then normal, then low.
+  assert.ok(all.indexOf('High') < all.indexOf('Normal'), 'high before normal')
+  assert.ok(all.indexOf('Normal') < all.indexOf('Low'), 'normal before low')
+
+  const highs = await listIssuesForTool(deps, { state: 'open' })
+  assert.match(highs, /3 issue\(s\)/)
+  assert.match(await listIssuesForTool(deps, { repoId: 'other' }), /No issues match those filters/)
+})
+
+test('issue_list: among equal priority the oldest is first, so nothing starves', async () => {
+  const raw = createMemoryFactStore()
+  await raw.repos.put('repo-1', { id: 'repo-1', rootPath: '/repos/r1' })
+  const deps = { store: lazyFactStore(async () => raw) }
+  await createIssueForTool(deps, { title: 'First' })
+  await createIssueForTool(deps, { title: 'Second' })
+  const text = await listIssuesForTool(deps)
+  assert.ok(text.indexOf('First') < text.indexOf('Second'))
+})
+
+test('issue_update: an unknown id lists what does exist', async () => {
+  const deps = await issueDeps(1)
+  assert.match(await updateIssueForTool(deps, { id: 'iss-nope' }), /No issue with id/)
+  const created = await createIssueForTool(deps, { title: 'Fix it' })
+  const id = /Created (\S+)/.exec(created)![1]!
+  const text = await updateIssueForTool(deps, { id: 'iss-nope' })
+  assert.match(text, new RegExp(id), 'the known ids are listed')
+})
+
+test('issue_update: re-sending the current values is a no-op and does not move the queue', async () => {
+  // `updatedAt` must not move: a caller re-sending current values must not make the
+  // issue look freshly touched.
+  const deps = await issueDeps(1)
+  const created = await createIssueForTool(deps, { title: 'Fix it', priority: 'high' })
+  const id = /Created (\S+)/.exec(created)![1]!
+  const before = (await deps.raw.issues.get(id)) as { updatedAt: number }
+  const text = await updateIssueForTool(deps, { id, title: 'Fix it', priority: 'high' })
+  assert.match(text, /No change to/)
+  const after = (await deps.raw.issues.get(id)) as { updatedAt: number }
+  assert.equal(after.updatedAt, before.updatedAt)
+})
+
+test('issue_update: a real change is persisted and reported', async () => {
+  const deps = await issueDeps(1)
+  const created = await createIssueForTool(deps, { title: 'Fix it' })
+  const id = /Created (\S+)/.exec(created)![1]!
+  const text = await updateIssueForTool(deps, { id, title: 'Fix it properly', state: 'done' })
+  assert.match(text, /Updated/)
+  assert.match(text, /Fix it properly/)
+  const stored = (await deps.raw.issues.get(id)) as { title: string; state: string }
+  assert.equal(stored.title, 'Fix it properly')
+  assert.equal(stored.state, 'done')
+})
+
+test('issue_update: a bad state or priority is refused, leaving the issue alone', async () => {
+  const deps = await issueDeps(1)
+  const created = await createIssueForTool(deps, { title: 'Fix it' })
+  const id = /Created (\S+)/.exec(created)![1]!
+  assert.match(await updateIssueForTool(deps, { id, state: 'nonsense' as never }), /Could not update/)
+  assert.equal(((await deps.raw.issues.get(id)) as { state: string }).state, 'open')
+})
+
+test('A2 support: at most one active worker per issue', async () => {
+  // Two workers on one issue would mean two branches, two PRs, and no rule for
+  // which one a card follows.
+  const deps = await issueDeps(1)
+  const created = await createIssueForTool(deps, { title: 'Fix it' })
+  const id = /Created (\S+)/.exec(created)![1]!
+  assert.match(await assignWorkerForTool(deps, { id, workerId: 'wrk-1' }), /now worked by wrk-1/)
+  assert.match(await assignWorkerForTool(deps, { id, workerId: 'wrk-2' }), /already has worker wrk-1/)
+  // Re-assigning the same worker is idempotent rather than an error.
+  assert.match(await assignWorkerForTool(deps, { id, workerId: 'wrk-1' }), /now worked by wrk-1/)
+  assert.equal(((await deps.raw.issues.get(id)) as { state: string }).state, 'in_progress')
+})
+
+test('issue tools report a storage failure instead of pretending to work', async () => {
+  const broken = lazyFactStore(async () => {
+    throw new Error('backend offline')
+  })
+  for (const text of [
+    await createIssueForTool({ store: broken }, { title: 'x' }),
+    await listIssuesForTool({ store: broken }),
+    await updateIssueForTool({ store: broken }, { id: 'iss-1' }),
+  ]) {
+    assert.match(text, /could not open its storage/)
+    assert.match(text, /backend offline/)
+  }
 })
