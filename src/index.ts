@@ -36,6 +36,7 @@ import { createLiveWorkers } from './host/handle-registry.ts'
 import { OUTBOX_TICK_MS, deliverPendingReports } from './host/outbox-service.ts'
 import { observeAll } from './host/observer-service.ts'
 import { sweepReviewPasses } from './host/reviewer-service.ts'
+import { sweepCompletions } from './host/completion.ts'
 import { createBoardRoute } from './host/board-route.ts'
 import { lazyFactStore, openFactStore } from './host/store.ts'
 import { FACT_SCHEMAS } from './host/schemas.ts'
@@ -157,6 +158,23 @@ export function apply(ctx: HostContext, config?: PluginConfigInput): PluginConfi
       }, resolved.pollIntervalMs)
       observer.unref?.()
 
+      // Finishing. A merged or closed pull request describes a worker whose work is
+      // done, so this terminates it, releases its issue and collects its worktree --
+      // where R4's disk bound is actually paid. R13 holds: an unfetched snapshot can
+      // finish nothing, however its empty payload reads.
+      const completion = setInterval(() => {
+        void sweepCompletions({ store, run })
+          .then((outcomes) => {
+            for (const outcome of outcomes) {
+              log(ctx, 'info', `${name}: ${outcome.workerId} ${outcome.reason}`)
+            }
+          })
+          .catch((error: unknown) => {
+            log(ctx, 'warn', `${name}: the completion sweep failed: ${String(error)}`)
+          })
+      }, resolved.pollIntervalMs)
+      completion.unref?.()
+
       // The review sweep. This is the loop that makes the requested flow happen
       // without a human: every worker whose current head has no pass gets one, and
       // the per-worker decision (one pass per head, retry limits, the round cap) is
@@ -180,6 +198,7 @@ export function apply(ctx: HostContext, config?: PluginConfigInput): PluginConfi
       return () => {
         clearInterval(tick)
         clearInterval(observer)
+        clearInterval(completion)
         clearInterval(reviewer)
         for (const dispose of disposers) dispose()
         // A9: unloading leaves sessions and worktrees INTACT. Disposing an agent
