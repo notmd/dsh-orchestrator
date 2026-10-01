@@ -237,18 +237,27 @@ loader.load({
    --dsw-alias-fill-l1, -fill-l2, -fill-tertiary, -separator-primary.
    And --dsw-alias-brand-primary is #f9fafb, nearly white: it is NOT an accent, which is
    why a "busy" status came out white. The accent is -state-business-primary. */
-.dsho-panel { box-sizing: border-box; height: 100%; overflow: auto; padding: var(--dsh-frame-top-clearance, 48px) 24px 24px;
-  color: var(--dsw-alias-label-primary, inherit); }
+.dsho-panel, .dsho-panel * { box-sizing: border-box; }
+.dsho-panel { height: 100%; display: flex; flex-direction: column; overflow: hidden;
+  padding: var(--dsh-frame-top-clearance, 48px) 24px 24px; color: var(--dsw-alias-label-primary, inherit); }
 .dsho-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 16px; }
 .dsho-title { font-size: 1.125rem; font-weight: 600; margin: 0; }
 .dsho-sub { font-size: 0.8125rem; color: var(--dsw-alias-label-primary-dimmed, inherit); }
 .dsho-note { color: var(--dsw-alias-label-primary-dimmed, inherit); }
 .dsho-note--error { color: var(--dsw-alias-state-error-primary, #e5484d); font-weight: 500; }
 
-.dsho-lanes { display: grid; grid-template-columns: repeat(4, minmax(240px, 1fr)); gap: 16px; align-items: start; }
-@media (max-width: 1100px) { .dsho-lanes { grid-template-columns: repeat(2, minmax(220px, 1fr)); } }
-.dsho-lane { min-width: 0; display: flex; flex-direction: column; gap: 10px; padding: 12px; border-radius: 12px;
-  background: var(--dsw-alias-bg-layer-1, rgba(127,127,127,0.06));
+/* The reference's board model, adopted: a horizontally scrolling container with a
+   MINIMUM width, four full-height columns, and each column scrolling its OWN cards.
+   Three consequences, all of them the point:
+     columns never get cramped, because a narrow panel scrolls instead of squeezing;
+     a column with fifty cards does not push the other three off screen;
+     the board fills the panel instead of being as tall as its last card. */
+.dsho-board-scroll { flex: 1; min-height: 0; overflow-x: auto; overflow-y: hidden; }
+.dsho-lanes { display: grid; grid-template-columns: repeat(4, minmax(15rem, 1fr)); gap: 16px;
+  height: 100%; min-width: 60rem; align-items: stretch; }
+@media (min-width: 1200px) { .dsho-lanes { min-width: 0; } }
+.dsho-lane { min-width: 0; min-height: 0; height: 100%; display: flex; flex-direction: column; gap: 10px;
+  padding: 12px; border-radius: 12px; background: var(--dsw-alias-bg-layer-1, rgba(127,127,127,0.06));
   border: 1px solid var(--dsw-alias-border-l1, rgba(127,127,127,0.18)); }
 .dsho-lane__head { display: flex; align-items: center; gap: 8px; }
 .dsho-lane__title { font-size: 0.8125rem; font-weight: 600; margin: 0; }
@@ -256,7 +265,9 @@ loader.load({
   font-variant-numeric: tabular-nums; color: var(--dsw-alias-label-primary-dimmed, inherit);
   background: var(--dsw-alias-border-l1, rgba(127,127,127,0.14)); }
 .dsho-lane__empty { margin: 0; font-size: 0.8125rem; color: var(--dsw-alias-label-primary-dimmed, inherit); opacity: 0.75; }
-.dsho-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.dsho-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px;
+  flex: 1; min-height: 0; overflow-y: auto; }
+.dsho-lane__empty { flex: 1; }
 
 /* The card. The border is a step stronger than the lane's because in LIGHT mode the
    host's bg-layer-1..3 are ALL #fff -- measured cardVsLane = 0 -- so a column and the
@@ -327,7 +338,7 @@ loader.load({
 /* An empty board shows an EMPTY STATE, not four empty columns -- the reference centres a
    title and a body, and four grey boxes saying "Nothing here." is noise rather than
    information. */
-.dsho-empty { display: flex; flex-direction: column; align-items: center; justify-content: center;
+.dsho-empty { flex: 1; min-height: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
   gap: 6px; min-height: 40vh; text-align: center; padding: 0 16px; }
 .dsho-empty__title { font-size: 0.9375rem; font-weight: 600; }
 .dsho-empty__body { max-width: 34rem; font-size: 0.8125rem; line-height: 1.5;
@@ -799,9 +810,13 @@ loader.load({
             )
           : h(
               'div',
-              { className: 'dsho-lanes' },
-              ...LANES.map((lane) =>
-                h(Lane, { key: lane.key, lane, cards: board.lenses.lanes[lane.key] ?? [], onOpen: setOpenId }),
+              { className: 'dsho-board-scroll' },
+              h(
+                'div',
+                { className: 'dsho-lanes' },
+                ...LANES.map((lane) =>
+                  h(Lane, { key: lane.key, lane, cards: board.lenses.lanes[lane.key] ?? [], onOpen: setOpenId }),
+                ),
               ),
             ),
         (() => {
