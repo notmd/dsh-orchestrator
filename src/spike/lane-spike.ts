@@ -93,11 +93,15 @@ async function run(ctx: HostContext): Promise<void> {
 
     const config = normalizePluginConfig()
     const run0 = createRunCommand({ subprocess: ctx.subprocess, cwd: REPO })
-    // A domain of its own, so the spike is isolated from whatever the real plugin
-    // and the other spikes have stored. Sharing the plugin's domain is what made the
-    // first attempt stop on "several repositories are connected" -- a correct refusal
-    // to guess, but a refusal the spike has no business provoking. Isolation is the
-    // fix; naming a repository explicitly would only have worked around it.
+    // A domain of its own, and this is now known to be REQUIRED rather than merely
+    // tidy. Sharing the plugin's `dsho` domain does not merely confuse the rows: the
+    // plugin's own board endpoint starts answering
+    //
+    //   domain 'dsho' is already open
+    //
+    // because a storage domain can only be opened once per process. A spike that joins
+    // the plugin's domain BREAKS THE PLUGIN. An earlier attempt also stopped on
+    // "several repositories are connected", which was a correct refusal to guess.
     //
     // The name must match `/^[a-z][a-z0-9_]*$/`, because it is the backend's unit name.
     const store = lazyFactStore(() =>

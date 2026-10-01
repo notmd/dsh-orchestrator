@@ -58,6 +58,14 @@ interface CardView {
   showStatusLoader: boolean
   isFinished: boolean
   escalationReason?: string
+  /** Mirrors `CardReview`. Present only when a pass has run at this head. */
+  review?: {
+    round: number
+    maxRounds: number
+    verdict?: string
+    findings: ReadonlyArray<{ severity: string; path?: string; line?: number; summary: string; detail: string }>
+    githubReviewId?: string
+  }
 }
 
 /** The board snapshot. Mirrors `BoardSnapshot`. */
@@ -140,6 +148,22 @@ loader.load({
       cardTitle: { fontSize: '0.8125rem' },
       cardReason: { fontSize: '0.75rem', opacity: 0.75 },
       archive: { marginTop: '16px', fontSize: '0.8125rem', opacity: 0.6 },
+      // The card body is a BUTTON, not a div with an onClick: that is what makes it
+      // keyboard reachable and announces itself, and it costs nothing. Reset to look
+      // like the card it was.
+      cardButton: {
+        display: 'block', width: '100%', textAlign: 'left', cursor: 'pointer',
+        font: 'inherit', color: 'inherit', background: 'transparent',
+      },
+      tabular: { fontSize: '0.75rem', opacity: 0.7, fontVariantNumeric: 'tabular-nums' },
+      inspector: {
+        marginTop: '16px', padding: '12px 14px', borderRadius: '8px',
+        border: '1px solid var(--dsw-alias-border, rgba(127,127,127,0.3))',
+        maxWidth: '46rem',
+      },
+      inspectorHead: { display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '12px' },
+      finding: { marginBottom: '8px', fontSize: '0.8125rem' },
+      findingWhere: { fontVariantNumeric: 'tabular-nums', opacity: 0.75 },
     } as const
 
     /** What the panel is currently showing. */
@@ -173,32 +197,102 @@ loader.load({
       }
     }
 
-    function Card(props: { card: CardView }) {
+    function Card(props: { card: CardView; onOpen: (id: string) => void }) {
       const card = props.card
       const style = {
         ...S.card,
+        ...S.cardButton,
         ...(card.needsAttention ? S.cardAttention : {}),
         ...(card.isFinished ? S.cardFinished : {}),
       }
+      const review = card.review
       return h(
         'li',
-        { style, 'data-worker': card.id, 'data-column': card.column },
+        null,
         h(
-          'div',
-          { style: S.cardHead },
-          // Never convey state by colour alone: the phrase IS the state, and the
-          // border only reinforces it.
-          h('span', { style: S.cardStatus }, card.displayStatus),
-          card.showStatusLoader ? h('span', { style: S.spinner, 'aria-hidden': 'true' }) : null,
+          'button',
+          {
+            type: 'button',
+            style,
+            'data-worker': card.id,
+            'data-column': card.column,
+            'aria-label': `Details for ${card.title}`,
+            onClick: () => props.onOpen(card.id),
+          },
+          h(
+            'span',
+            { style: S.cardHead },
+            // Never convey state by colour alone: the phrase IS the state, and the
+            // border only reinforces it.
+            h('span', { style: S.cardStatus }, card.displayStatus),
+            card.showStatusLoader ? h('span', { style: S.spinner, 'aria-hidden': 'true' }) : null,
+          ),
+          h('span', { style: S.cardTitle }, card.title),
+          // The round is on the card face while the loop runs, so the BOUND is visible
+          // rather than arriving as a surprise when it trips.
+          review && review.verdict !== 'approved'
+            ? h('span', { style: S.tabular }, `auto review round ${review.round}/${review.maxRounds}`)
+            : null,
+          card.escalationReason
+            ? h('span', { style: S.cardReason }, `automation stopped: ${card.escalationReason}`)
+            : null,
         ),
-        h('div', { style: S.cardTitle }, card.title),
-        card.escalationReason
-          ? h('div', { style: S.cardReason }, `automation stopped: ${card.escalationReason}`)
-          : null,
       )
     }
 
-    function Lane(props: { lane: { key: string; label: string }; cards: CardView[] }) {
+    /**
+     * The card detail view (PRD §11.2).
+     *
+     * Its reason is in the PRD rather than in aesthetics: "the reviewer's findings are
+     * reachable from the card -- one click to the latest `ReviewRun`, with severity,
+     * file, and line per finding. **A machine review the user cannot inspect is a
+     * machine review the user cannot trust.**"
+     */
+    function Inspector(props: { card: CardView; onClose: () => void }) {
+      const card = props.card
+      const review = card.review
+      const findings = review?.findings ?? []
+      return h(
+        'aside',
+        { style: S.inspector, 'aria-label': `Details for ${card.title}` },
+        h(
+          'div',
+          { style: S.inspectorHead },
+          h('strong', null, card.title),
+          h('span', { style: S.tabular }, card.displayStatus),
+        ),
+        h(
+          'p',
+          { style: S.tabular },
+          review
+            ? `auto review round ${review.round}/${review.maxRounds}` +
+              (review.verdict ? ` \u00b7 ${review.verdict}` : '') +
+              (review.githubReviewId ? ` \u00b7 review ${review.githubReviewId}` : '')
+            : 'No automated review has run at this commit.',
+        ),
+        findings.length === 0
+          ? h('p', { style: S.note }, 'No findings recorded for this commit.')
+          : h(
+              'ul',
+              { style: S.list },
+              ...findings.map((finding, index) =>
+                h(
+                  'li',
+                  { key: `${finding.path ?? ''}:${finding.line ?? index}`, style: S.finding },
+                  h(
+                    'span',
+                    { style: S.findingWhere },
+                    `${finding.severity}${finding.path ? ` \u00b7 ${finding.path}${finding.line ? `:${finding.line}` : ''}` : ''}`,
+                  ),
+                  ` \u2014 ${finding.summary}: ${finding.detail}`,
+                ),
+              ),
+            ),
+        h('button', { type: 'button', onClick: props.onClose }, 'Close'),
+      )
+    }
+
+    function Lane(props: { lane: { key: string; label: string }; cards: CardView[]; onOpen: (id: string) => void }) {
       return h(
         'section',
         { style: S.lane, 'data-lane': props.lane.key, 'aria-label': props.lane.label },
@@ -210,12 +304,27 @@ loader.load({
         ),
         props.cards.length === 0
           ? h('p', { style: S.laneEmpty }, 'Nothing here.')
-          : h('ul', { style: S.list }, ...props.cards.map((card) => h(Card, { key: card.id, card }))),
+          : h(
+              'ul',
+              { style: S.list },
+              ...props.cards.map((card) => h(Card, { key: card.id, card, onOpen: props.onOpen })),
+            ),
       )
     }
 
     function Board() {
       const [view, setView] = React.useState<View>({ kind: 'loading' })
+      const [openId, setOpenId] = React.useState<string | undefined>(undefined)
+
+      // Escape closes the inspector. A detail view that can only be dismissed by
+      // finding the close button is not keyboard reachable in practice.
+      React.useEffect(() => {
+        const onKey = (event: { key?: string }) => {
+          if (event?.key === 'Escape') setOpenId(undefined)
+        }
+        window.addEventListener('keydown', onKey as never)
+        return () => window.removeEventListener('keydown', onKey as never)
+      }, [])
 
       React.useEffect(() => {
         let cancelled = false
@@ -270,8 +379,18 @@ loader.load({
           : h(
               'div',
               { style: S.lanes },
-              ...LANES.map((lane) => h(Lane, { key: lane.key, lane, cards: board.lenses.lanes[lane.key] ?? [] })),
+              ...LANES.map((lane) =>
+                h(Lane, { key: lane.key, lane, cards: board.lenses.lanes[lane.key] ?? [], onOpen: setOpenId }),
+              ),
             ),
+        (() => {
+          if (!openId) return null
+          const all = Object.values(board.lenses.lanes).flat()
+          const card = all.find((candidate) => candidate.id === openId)
+          // The card can vanish between polls -- a worker finishing moves it. Closing
+          // rather than showing a stale detail is the honest response.
+          return card ? h(Inspector, { card, onClose: () => setOpenId(undefined) }) : null
+        })(),
         board.lenses.archive.length > 0
           ? h(
               'p',

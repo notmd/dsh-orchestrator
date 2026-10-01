@@ -9,7 +9,7 @@ bloated status file costs the next agent more than it saves.
 |---|---|
 | **Goal** | Implement [PRD.md](PRD.md) |
 | **Plan source** | [PRD.md §16 Milestones](PRD.md#16-milestones), verified against [docs/dsh-plugin-contract.md](docs/dsh-plugin-contract.md) |
-| **Last updated** | 2026-10-01, chunk 12 (inspector data) |
+| **Last updated** | 2026-10-01, chunk 13 (inspector built, not seen) |
 | **Verify** | `npm run verify` → `tsc` (src + test) + `node --test` + build · **all green** |
 | **Current state** | **656 tests, 0 type errors. Twelve tools, and the requested flow runs end to end on its own ticks:** issue → worker → worktree → PR → observer → review pass → findings back to the worker → verdict → `Needs human review`. The board assembles into lanes and `orchestrator_board` reads it. **The host surface now exists**: `/dsho/api/board` answers a real request in a live host (verified: 200, `application/json`, `no-store`, four lanes). **684 tests. Fourteen tools, the requested flow runs to completion** is proven end to end in a real host**: a PR snapshot moves the card `building → validating / Review scheduled → Reviewing`, an approved verdict lands in **`needs_review / Needs human review` — never `Ready`** (A17), a new head schedules a fresh pass, and a failed pass lands in `Review failed` with its retry budget accounted. Along the way the lane spike found a real integration bug (fixed). The flow now **runs to its end**: a merged or closed PR finishes the worker, releases the issue, and collects the worktree. Still open: no *real* PR has been opened (the spike writes the observer's output directly — `gh pr create` needs write access to someone else's repository), and the worker has never run a turn. Also open: no PR has been opened by a worker yet, the protocol tools are not restricted to their session kinds, and worktree cleanup on archive does not exist. |
 
@@ -46,7 +46,7 @@ everything else inherits.
 | 6u | **The whole path, end to end.** A host spike drove `connectRepo → createIssue → startWorker → buildBoard` against the real services: a real worktree, a real session, and a card in `building` reading `Awaiting PR` | **live**; found a real argv bug |
 | 6v | **A card moving through lanes** — the worker opens a PR (`gh pr create`), the observer sees it, the review sweep schedules a pass, and the card visibly moves `building → validating → …`. The PR half has never executed. | A4, A13, M1/M3 | Everything up to the PR is proven; nothing after it has run. |
 | — | **§12.2's effect is UNVERIFIED, and three instruments have each failed to be valid ones.** Do not add a fourth without first proving it can measure the property: (1) `tools.get(name)` resolves globally without an explicit scope object (`ScopeKey` is an opaque `object`); (2) the session log holds permission/sandbox/approval, inbox and turn/step records and **nothing about tools, even after a full turn**; (3) `tools.execute` needs a complete `ToolExecutionInput`, including whatever supplies `signal` — it throws `reading 'aborted'` on a hand-built one. The next attempt should START from a real execution input captured from a live call. | §12.2, A3.5 | The effect is unproven. **Nothing is unsafe**: the protocol tools validate their caller and refuse. Unproven and unsafe are different, and this is the former. |
-| 12 | **The client inspector**: clicking a card opens a detail view with the branch, PR, `round/maxRounds`, and each finding's severity/file/line; the round also goes on the card face; and the card becomes keyboard-reachable. The host-side data is done and tested (`reviewEvidence`); nothing renders it yet. | §11.2, M2 | M2's exit criteria name the inspector, so this is the last named M2 item. |
+| 13 | **SEE the inspector render.** It is implemented and builds, but was never rendered: the attempt to put a card on the board pointed the lane spike at the plugin's own domain, and **a storage domain can only be opened once per process** — the plugin's endpoint began answering "domain 'dsho' is already open". So the spike must write to its OWN domain and the card must be seeded another way (a temp build of the plugin, or a dedicated seed path). | §11.2, M2 | The last named M2 item, implemented but unrendered. |
 | 6y | **Clear the spike residue** from the web profile's `~/.dsh/storages/` (`dsho.json` and `dsho_lane_spike.json` hold repositories, issues and workers from the spikes). Harmless, but it is test data in a real profile. | housekeeping | Cheap, and it stops a later reader mistaking spike rows for real ones.
 | 7b | **A removal path for the spike workspaces** left in the web profile\'s `workspace.json`. Not hand-edited: it is a running service\'s own state, with the user\'s real workspaces in the same table. | housekeeping | Needs the registry, or the user.
 | 6v\\.3 | DONE — the lane sequence is proven live (see §3). Superseded by: (`building → validating (Review scheduled) → validating (Reviewing) → needs_review (Needs human review)`) and the failed-pass path. Note the durable store now holds spike repositories and issues in the **web profile's** `~/.dsh/storages/dsho.json` — harmless, but it is test residue. | §7.5, §7.6, A13, A17 | The half after `worker_start` has never executed live, and it is where the review ordering lives. |
@@ -184,6 +184,14 @@ from outside a session, so "applied and unobserved" is where it stands. The post
 deliberate: a missing restriction is a small gap, a global one is a broken product, so
 the wiring does nothing when it cannot be sure. Recorded as the next chunk rather than
 counted as done.
+
+**A STORAGE DOMAIN CAN ONLY BE OPENED ONCE PER PROCESS.** A spike that joins the
+plugin's domain does not merely add rows -- the plugin's own `/dsho/api/board` starts
+answering `domain 'dsho' is already open`, so **the spike breaks the plugin**. The
+spike's isolated domain was load-bearing, and I removed it for convenience to get a
+card onto the board. Reverted, and the reason is now written in the spike so it is not
+removed again. **The generalisable form: before relaxing an isolation boundary to make
+a test easier, establish what the boundary was protecting.**
 
 **Registering something is easier than unregistering it.** The spikes left rows in two
 storage domains *and* workspace entries in the profile's live `workspace.json`. The
