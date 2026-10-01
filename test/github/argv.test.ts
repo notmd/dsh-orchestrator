@@ -27,6 +27,7 @@ import {
 } from '../../src/github/auth.ts'
 import {
   PR_VIEW_FIELDS,
+  REPO_VIEW_FIELDS,
   authStatusArgv,
   currentBranchArgv,
   isWorkTreeArgv,
@@ -240,6 +241,16 @@ test('the repository is always passed explicitly, never inferred from a remote',
   ]) {
     assert.ok(argv.includes('--repo') || argv.includes('o/r'), argv.join(' '))
   }
+})
+
+test('repoViewArgv with no argument asks about the CURRENT repository, not "."', () => {
+  // `gh repo view .` resolves `<owner>/.` and fails: gh reads the argument as an
+  // explicit owner/name, never as a path. A live spike found this; the argv test
+  // could only assert what its author intended.
+  assert.deepEqual(repoViewArgv(), ['gh', 'repo', 'view', '--json', REPO_VIEW_FIELDS.join(',')])
+  assert.ok(!repoViewArgv().includes('.'))
+  assert.deepEqual(repoViewArgv('   '), repoViewArgv(), 'blank means the current repository')
+  assert.deepEqual(repoViewArgv('o/r').slice(0, 4), ['gh', 'repo', 'view', 'o/r'])
 })
 
 test('pr list is bounded by an explicit limit', () => {

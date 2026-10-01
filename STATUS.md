@@ -9,9 +9,9 @@ bloated status file costs the next agent more than it saves.
 |---|---|
 | **Goal** | Implement [PRD.md](PRD.md) |
 | **Plan source** | [PRD.md §16 Milestones](PRD.md#16-milestones), verified against [docs/dsh-plugin-contract.md](docs/dsh-plugin-contract.md) |
-| **Last updated** | 2026-10-01, chunk 6t (the panel renders in a real GUI) |
+| **Last updated** | 2026-10-01, chunk 6u (the path runs end to end) |
 | **Verify** | `npm run verify` → `tsc` (src + test) + `node --test` + build · **all green** |
-| **Current state** | **655 tests, 0 type errors. Twelve tools, and the requested flow runs end to end on its own ticks:** issue → worker → worktree → PR → observer → review pass → findings back to the worker → verdict → `Needs human review`. The board assembles into lanes and `orchestrator_board` reads it. **The host surface now exists**: `/dsho/api/board` answers a real request in a live host (verified: 200, `application/json`, `no-store`, four lanes). **The panel renders in a real GUI** (verified: nav row, selection, `Orchestrator` heading, `0 worker(s)`, empty state). Only the empty state has been seen: no worker has ever existed, so the four-lane path is unit-tested but **not yet seen live**. Also open: the protocol tools are not yet restricted to their session kinds, and worktree cleanup on archive does not exist. |
+| **Current state** | **656 tests, 0 type errors. Twelve tools, and the requested flow runs end to end on its own ticks:** issue → worker → worktree → PR → observer → review pass → findings back to the worker → verdict → `Needs human review`. The board assembles into lanes and `orchestrator_board` reads it. **The host surface now exists**: `/dsho/api/board` answers a real request in a live host (verified: 200, `application/json`, `no-store`, four lanes). **The whole path has now run end to end in a real host**: repo connected → issue created → worker spawned in its own worktree on its own branch with a `#<n>` title → **1 card in `building`, `Awaiting PR`**. A1 and A2 are demonstrated. Also open: no PR has been opened by a worker yet, the protocol tools are not restricted to their session kinds, and worktree cleanup on archive does not exist. |
 
 ---
 
@@ -43,6 +43,8 @@ everything else inherits.
 | 6e | **The command seam** — argv over `ctx.subprocess`, bounded in time and output, failure classification | 33 tests |
 | 6f | **GitHub credential chain** (`AO_GITHUB_TOKEN` → `GITHUB_TOKEN` → `gh auth token`) and every `gh`/`git` argv | 30 tests |
 | 6q | **The board assembly.** `buildBoard` joins the stores, the reducer and the presentation layer — the only place that does, so the agent's view and the GUI's cannot disagree. Plus `orchestrator_board` | 1 test file |
+| 6u | **The whole path, end to end.** A host spike drove `connectRepo → createIssue → startWorker → buildBoard` against the real services: a real worktree, a real session, and a card in `building` reading `Awaiting PR` | **live**; found a real argv bug |
+| 6v | **A card moving through lanes** — the worker opens a PR (`gh pr create`), the observer sees it, the review sweep schedules a pass, and the card visibly moves `building → validating → …`. The PR half has never executed. | A4, A13, M1/M3 | Everything up to the PR is proven; nothing after it has run. |
 | 6t | **The panel renders in a real GUI.** Module loaded, nav row present, selection works, and the panel shows its heading, count and empty state | **live** |
 | 6s | **The client half.** `src/client/index.ts` registers the `sidebar.panellist` row and the `main` keyed panel, polls `/dsho/api/board`, and renders four lanes with loading/empty/error states. Its own `tsconfig.client.json` emits a **classic script** (`module: none`), since that is what `window.__ModuleLoader__` requires | builds |
 | 6p | **The review sweep, and a real activity gate.** A tick schedules a pass for every worker whose head has none, and the gate now reads the **live** `AgentStatus` rather than assuming the worker is quiet | 5 tests |
@@ -140,6 +142,14 @@ This is the **second** bug of exactly this shape, after the worktree
 canonicalization: **a fake cannot catch a wrong API, because it implements whatever
 interface the author imagined.** The tests were green throughout — which is why the
 fix was verified against reality rather than against another fake.
+
+**The argv looked right and the tool disagreed.** `gh repo view .` resolves to
+`notmd/.` — gh reads the argument as an explicit `owner/name`, never as a path — so
+`connectRepo` failed with `gh-failed (not-found)`. The current repository is selected
+by passing **nothing**. A unit test could only assert the argv its author intended,
+and `.` looked entirely reasonable; only the real `gh` could say otherwise. **Fifth
+instance of one lesson, and the second this round**: a fake, or a string assertion,
+cannot falsify what the real tool does with its input.
 
 **A diagnostic must not look for furniture the empty state does not have.** I checked for
 `[data-lane]` and `.dsho-panel` and concluded the panel was broken — but the empty state

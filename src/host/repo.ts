@@ -161,14 +161,16 @@ export async function connectRepo(options: {
     }
   }
 
-  const view = await options.run(repoViewArgv('.'), { cwd: rootPath })
+  // No repository argument: `gh repo view` with none resolves the checkout it runs
+  // in, while `gh repo view .` resolves `<owner>/.` and fails.
+  const view = await options.run(repoViewArgv(), { cwd: rootPath })
   if (view.exitCode !== 0) {
     const failure = classifyCommandFailure(view)
     return {
       ok: false,
       reason: RepoRefusal.ghFailed,
       kind: failure.kind,
-      message: describeFailure(failure.kind, repoViewArgv('.')),
+      message: describeFailure(failure.kind, repoViewArgv()),
     }
   }
 

@@ -100,9 +100,23 @@ export function prListArgv(options: {
   return argv
 }
 
-/** `gh repo view <repo> --json <fields>`. */
-export function repoViewArgv(repository: string, fields: readonly string[] = REPO_VIEW_FIELDS): string[] {
-  return ['gh', 'repo', 'view', repository, '--json', fields.join(',')]
+/**
+ * `gh repo view [<repo>] --json <fields>`.
+ *
+ * **The repository argument is optional, and `.` is not "here".** `gh repo view .`
+ * resolves to `<owner>/.` and fails with `Could not resolve to a Repository with the
+ * name 'notmd/.'` — gh reads the argument as an explicit `owner/name`, not as a path.
+ * The current repository is selected by passing **nothing**, which is what a caller
+ * inspecting the checkout it is standing in wants.
+ *
+ * A live spike found this; the unit test could only assert the argv its author
+ * intended, and `.` looked reasonable.
+ */
+export function repoViewArgv(repository?: string, fields: readonly string[] = REPO_VIEW_FIELDS): string[] {
+  const named = (repository ?? '').trim()
+  return named === ''
+    ? ['gh', 'repo', 'view', '--json', fields.join(',')]
+    : ['gh', 'repo', 'view', named, '--json', fields.join(',')]
 }
 
 /**
