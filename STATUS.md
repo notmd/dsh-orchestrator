@@ -100,64 +100,35 @@ Chunk numbers are this file's own; milestone letters are the PRD's.
 | 6 | **Host half**: `index.js` → `apply()`; `OrchestratorService` over `ctx.storageDomain`; `WorkerSpawner` using the exact `ctx.agents.create()` recipe; `WorktreeManager`; `GitHubGateway` over `ctx.subprocess` + `gh`; `PrObserver` loop; the tool table; `/dsho/api/*` + `/dsho/events` on `ctx.webServer`. | §6, §12, M1 | The first code that needs a live profile. |
 | 7 | **Client half**: `client.js` in the `window.__ModuleLoader__` format, `sidebar.panellist` row + `main` keyed panel, lanes/cards/inspector, themes, locale, keyboard access. | §11, M2 | Needs the routes from chunk 6. |
 
-**Recommended next step:** chunk 5, then 6 — but the *first* thing chunk 6 needs is
-one `install_bundle` from the user (see the box below), because a host half that
-cannot be activated cannot be verified.
+**Recommended next step:** chunk 5, then 6. Verification and installation are both
+solved — see the box immediately below before writing any UI or host code.
 
-### ⚠ Chunk 6/7 has an access problem that must be solved before it can be verified
+### ✅ The verification/install problem is SOLVED — see [docs/verification-harness.md](docs/verification-harness.md)
 
-**This session has no `plugin_manager` and no `cordis_inspect_query` tool, and
-approval prompts are disabled** (an action needing approval is rejected
-automatically). That is the documented install path — `plugin_manager` with
-`action: install_bundle` — and the documented way to confirm a slot registration.
-So chunks 6 and 7 can be *written* but **cannot be installed or verified from
-here** as things stand.
+Earlier rounds recorded this as blocked. It is not. **The full procedure is
+documented in [docs/verification-harness.md](docs/verification-harness.md); read
+that before touching the browser.** In brief:
 
-**Driving the live GUI through the Chrome DevTools MCP server was tried and does
-not work.** Evidence, gathered 2026-10-01:
+- **Boot your own authenticated GUI:** `dsh --profile web --port 0 --no-open
+  --host 127.0.0.1`, then read the printed
+  `dsh web: http://127.0.0.1:<port>/?token=<token>` line and open it with the
+  Chrome DevTools MCP `new_page`. That token is the gate; the desktop app's GUI on
+  `19387` stays unreachable (401 + a token in another process's memory + no CDP
+  port), and none of that matters any more.
+- **Install with the CLI:** `dsh plugin --profile web add <absolute-package-dir>`
+  (`--profile` is required). This is the `install_bundle` equivalent — the
+  `plugin_manager` *tool* does not exist in this build's installed packages.
+- **The `web` profile is the right target for verification**, because it is a
+  different profile from `desktop`: you cannot break the user's live session, and
+  the procedure is repeatable.
+- **Prove the boot** with `document.title === 'DeepSeek Harness'` plus
+  `window.__DSH_BOOT__` existing, and enumerate loaded client modules from
+  `window.__DSH_BOOT__.entries` (65 entries in the `web` profile).
 
-- The MCP server is attached to its **own** Chrome instance, not to the DSH
-  desktop app; `list_pages` shows only `about:blank`, and the desktop process
-  (PID 963) listens on `127.0.0.1:19387` with **no CDP/remote-debugging port** for
-  the MCP server to attach to.
-- That port requires authentication. `dsh-client-connection/lib/index.js` gates
-  every request behind a browser cookie minted from a **process-scoped launch
-  token**: a request must carry `?token=<launchToken>` on `GET /` to be redirected
-  with a signed cookie, and `isAuthenticated` then verifies a cookie signed by the
-  activation's secret. The token lives in the running process's memory, so it
-  cannot be read from disk or from another process.
-- Measured: `/`, `/index.html` → **401**; `/?token=bogus` → **401**; every
-  nonexistent path → 404. There is no unauthenticated asset path, so even a
-  standalone harness cannot borrow the deployment's React from the server (React
-  comes from the browser module table, which is populated by that server).
-
-Workable paths, in order of preference:
-
-1. **The user installs the bundle through the GUI's own Settings → Plugins
-   surface, then reports what renders.** This is the only path that can prove the
-   one residual unknown — whether a *third-party* bundle is accepted into `main`
-   at activation. Precise steps, because the obvious instruction is wrong:
-   - `plugin_manager` (the tool the plugin-development skill names) **is not
-     present in this build's installed packages**, and this session's tool list
-     does not include it, so it cannot be called from here at all. It appears to
-     be scoped to a shipped agent preset inside `app.asar`, which is not
-     inspectable as a directory.
-   - What *is* installed and enabled is the GUI surface: `dsh-web-app/cordis.patch.yml`
-     enables `plugin-inventory` (host, line 98), `ui-settings-plugin-inventory`
-     (line 299), and `ui-settings-plugins` (line 399) — a read-only projection of
-     the Loader entries plus a Plugins section in Settings.
-   - So: Settings → Plugins, install the bundle from its **absolute package
-     directory** (`/Users/notmd/dev/game/dsh-orchestrator`), then reload. A **new**
-     bundle can activate through HMR; replacing an installed package needs a
-     restart to load a fresh module generation.
-2. **Verify the client half's *contract* in Node, with no browser.** A React shim
-   plus a fake `ctx.slots` lets a test assert the module-loader format, the
-   `main` registration's key, the `sidebar.panellist` row's id/order/label, the
-   locale routing, and the rendered element tree. This proves everything about the
-   client half **except** that the host accepts the registration — which is
-   exactly path 1's job. **This is the planned default** for chunk 7, because it
-   needs no one's help.
-3. Unit-test the **host half** against a fake `ctx` object, and defer installation.
+Still **not** provable without a real install: whether a *third-party* bundle is
+accepted into the root-scoped `main` keyed slot at activation. Everything else
+about the client half can be asserted in Node against a React shim and a fake
+`ctx.slots`.
 
 **What was done instead, and why it is still real progress:** the slot
 declarations were verified **from the installed artifacts**, which is evidence the
