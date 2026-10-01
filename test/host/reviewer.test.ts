@@ -129,7 +129,7 @@ async function review(overrides: { runStatus?: string; inject?: boolean } = {}) 
       tools: { register: () => () => {} },
       subprocess: { spawn: () => { throw new Error('no') } } as never,
       storageDomain: { open: async () => { throw new Error('no') } } as never,
-      agentRegistry: { get: () => undefined },
+      webServer: { register: () => () => {} },
       agents: spawn.agents as never,
       agentPresets: spawn.agentPresets as never,
       permissionPresets: spawn.permissionPresets as never,

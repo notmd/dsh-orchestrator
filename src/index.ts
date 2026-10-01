@@ -36,6 +36,7 @@ import { createLiveWorkers } from './host/handle-registry.ts'
 import { OUTBOX_TICK_MS, deliverPendingReports } from './host/outbox-service.ts'
 import { observeAll } from './host/observer-service.ts'
 import { sweepReviewPasses } from './host/reviewer-service.ts'
+import { createBoardRoute } from './host/board-route.ts'
 import { lazyFactStore, openFactStore } from './host/store.ts'
 import { FACT_SCHEMAS } from './host/schemas.ts'
 
@@ -66,6 +67,7 @@ export const inject = [
   'permissionPresets',
   'workspaceRegistry',
   'sessionTitle',
+  'webServer',
 ]
 
 /**
@@ -98,13 +100,25 @@ export function apply(ctx: HostContext, config?: PluginConfigInput): PluginConfi
       const disposers: Array<() => void> = []
       const tools = buildOrchestratorTools({ config: resolved, run, store, spawn, live })
 
+      // The board's read endpoint. Registered under the same effect as the tools, so
+      // unloading disposes the route rather than leaving a handler on a dead service.
+      const boardDeps = {
+        store,
+        config: resolved,
+        activityOf: (workerId: string) => {
+          const status = live.byWorker(workerId)?.handle.agent.status
+          return status === 'running' ? 'active' : status === 'idle' ? 'idle' : 'unknown'
+        },
+      }
+      disposers.push(ctx.webServer.register(createBoardRoute(boardDeps)))
+
       // The outbox tick. Reports accumulate in storage and are delivered on their
       // own schedule (PRD §10.5), so a worker reporting three times does not
       // interrupt the orchestrator three times.
       const tick = setInterval(() => {
         void deliverPendingReports({
           store,
-          agents: ctx.agentRegistry,
+          agents: ctx.agents,
           userMessage: spawn.userMessage,
           bounds: {
             batchFallbackMs: resolved.reportBatchFallbackMs,

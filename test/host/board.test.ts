@@ -11,6 +11,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 import { buildBoard, buildCard, laneOf, renderBoard, toPrFacts } from '../../src/host/board-service.ts'
+import { BOARD_ROUTE_PATH, createBoardRoute, handleBoardRequest } from '../../src/host/board-route.ts'
 import { presentCard } from '../../src/board/presentation.ts'
 import type { BoardDeps } from '../../src/host/board-service.ts'
 import { createMemoryFactStore, lazyFactStore } from '../../src/host/store.ts'
@@ -327,4 +328,89 @@ test('every lane is present even when empty, so the client never renders an unde
     assert.equal(result.counts.byLane[lane], 0)
   }
   assert.deepEqual(result.lenses.archive, [])
+})
+
+
+// ---------------------------------------------------------------------------
+// The read endpoint
+// ---------------------------------------------------------------------------
+
+/** A response that records what was written. */
+function fakeResponse() {
+  const record: { status?: number; headers?: Record<string, string>; body?: string } = {}
+  return {
+    record,
+    writeHead(status: number, headers?: Record<string, string>) {
+      record.status = status
+      record.headers = headers
+    },
+    end(body?: string) {
+      record.body = body
+    },
+  }
+}
+
+test('the route is an exact path the client can hard-code', () => {
+  const route = createBoardRoute({
+    store: lazyFactStore(async () => createMemoryFactStore()),
+    config: CONFIG,
+  })
+  assert.equal(route.kind, 'exact')
+  assert.equal(route.path, '/dsho/api/board')
+  assert.equal(route.path, BOARD_ROUTE_PATH)
+})
+
+test('a successful read answers 200 with the snapshot and no caching', async () => {
+  // A cached board is a stale board, which is the one thing this endpoint must
+  // never serve.
+  const { deps } = await board([{ id: 'wrk-1', sessionId: 's1', updatedAt: 1, lastSignalAt: NOW - 1 }])
+  const response = fakeResponse()
+  await handleBoardRequest(deps, response)
+
+  assert.equal(response.record.status, 200)
+  assert.match(response.record.headers?.['content-type'] ?? '', /application\/json/)
+  assert.equal(response.record.headers?.['cache-control'], 'no-store')
+  const body = JSON.parse(response.record.body ?? '{}') as { counts: { total: number } }
+  assert.equal(body.counts.total, 1)
+  assert.equal(
+    Number(response.record.headers?.['content-length']),
+    Buffer.byteLength(response.record.body ?? ''),
+    'the length is the byte length, not the character count',
+  )
+})
+
+test('a storage failure answers 500 explicitly, not a 400 from a throw', async () => {
+  // The web server answers a THROWING handler with 400 -- but a storage failure is
+  // not a bad request, and a lie there leaves the client guessing. Answering
+  // explicitly is what lets it show an error state rather than an empty board.
+  const response = fakeResponse()
+  await handleBoardRequest(
+    {
+      store: lazyFactStore(async () => {
+        throw new Error('backend offline')
+      }),
+      config: CONFIG,
+    },
+    response,
+  )
+
+  assert.equal(response.record.status, 500)
+  const body = JSON.parse(response.record.body ?? '{}') as { error: string; message: string }
+  assert.equal(body.error, 'board-unavailable')
+  assert.match(body.message, /backend offline/)
+})
+
+test('the handler never throws, whatever the store does', async () => {
+  const response = fakeResponse()
+  await assert.doesNotReject(() =>
+    handleBoardRequest(
+      {
+        store: lazyFactStore(async () => {
+          throw new Error('boom')
+        }),
+        config: CONFIG,
+      },
+      response,
+    ),
+  )
 })

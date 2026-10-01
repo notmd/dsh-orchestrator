@@ -18,14 +18,21 @@ import type { ToolDescriptor } from './tool.ts'
 import type { SubprocessLike } from './exec.ts'
 import type { DomainFacilityLike } from './store.ts'
 import type { SpawnServices } from './spawn-deps.ts'
+import type { WebRouteLike } from './board-route.ts'
 
 /**
  * The agent registry, as far as delivery is concerned.
  *
+ * **This is `ctx.agents`, not a separate service.** An earlier version of this file
+ * declared `ctx.agentRegistry`, which does not exist: cordis refused it at the first
+ * outbox tick with `cannot get property "agentRegistry" without inject`, and the
+ * host exited. `AgentRegistry` is the class behind `ctx.agents` (the same service
+ * the spawner needs), and `get(id)` is that class's method.
+ *
  * `get(id)` is how the plugin reaches a session it does **not** own — the user's
  * orchestrator session. Owning a handle is only possible for sessions the plugin
- * spawned; the user's session is reached through the registry instead, which is
- * also why delivery survives a plugin reload.
+ * spawned; the user's session is reached through the registry instead, which is also
+ * why delivery survives a plugin reload.
  */
 export interface AgentRegistryLike {
   get(id: string): { followup(message: unknown): void } | undefined
@@ -52,8 +59,15 @@ export interface ToolRegistryLike {
  */
 export interface HostContext extends SpawnServices {
   tools: ToolRegistryLike
-  /** Live-agent lookup, for delivering into a session the plugin does not own. */
-  agentRegistry: AgentRegistryLike
+  /**
+   * The host web server, for the board's read endpoint.
+   *
+   * `register` returns a disposer, which the plugin hands to `ctx.effect` — so
+   * unloading the plugin removes the route rather than leaving a dangling handler
+   * on a dead service.
+   */
+  webServer: { register(route: WebRouteLike): () => void }
+
   /**
    * The subprocess capability seam, for git and `gh`.
    *

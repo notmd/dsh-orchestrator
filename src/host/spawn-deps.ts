@@ -18,6 +18,14 @@ import type { AgentHandle, Disposable, SpawnDeps, WorkspaceLike } from './spawn.
 /** The five services a spawn needs, as this plugin uses them. */
 export interface SpawnServices {
   agents: {
+    /**
+     * The live-agent lookup: `AgentRegistry.get(id)`.
+     *
+     * The registry is **this same service**, not a second one — `AgentRegistry` is the
+     * class behind `ctx.agents`. An earlier version reached for `ctx.agentRegistry`,
+     * which does not exist, and cordis refused it at the first outbox tick.
+     */
+    get(id: string): { followup(message: unknown): void } | undefined
     create(options: {
       sessionId: string
       signal?: AbortSignal

@@ -53,6 +53,9 @@ function fakeContext(): HostContext & {
     },
     // The spawn recipe's five services. Stubs: these activation tests never spawn.
     agents: {
+      get() {
+        return undefined
+      },
       async create() {
         throw new Error('the activation tests do not spawn')
       },
@@ -78,9 +81,9 @@ function fakeContext(): HostContext & {
     sessionTitle: {
       rename() {},
     },
-    agentRegistry: {
-      get() {
-        return undefined
+    webServer: {
+      register() {
+        return () => {}
       },
     },
     tools: {
@@ -130,6 +133,7 @@ test('the plugin declares the services it cannot function without', () => {
     'permissionPresets',
     'workspaceRegistry',
     'sessionTitle',
+    'webServer',
   ])
 })
 

@@ -9,9 +9,9 @@ bloated status file costs the next agent more than it saves.
 |---|---|
 | **Goal** | Implement [PRD.md](PRD.md) |
 | **Plan source** | [PRD.md §16 Milestones](PRD.md#16-milestones), verified against [docs/dsh-plugin-contract.md](docs/dsh-plugin-contract.md) |
-| **Last updated** | 2026-10-01, chunk 6q.2 (the assembly is covered) |
+| **Last updated** | 2026-10-01, chunk 6r (the board endpoint is live) |
 | **Verify** | `npm run verify` → `tsc` (src + test) + `node --test` + build · **all green** |
-| **Current state** | **651 tests, 0 type errors. Twelve tools, and the requested flow runs end to end on its own ticks:** issue → worker → worktree → PR → observer → review pass → findings back to the worker → verdict → `Needs human review`. The board assembles into lanes and `orchestrator_board` reads it. **The surface is what is missing:** no HTTP route and no client half, so none of this is visible in the GUI yet. Also open: the protocol tools are not yet restricted to their session kinds, worktree cleanup on archive does not exist, and the client half is unwritten. |
+| **Current state** | **655 tests, 0 type errors. Twelve tools, and the requested flow runs end to end on its own ticks:** issue → worker → worktree → PR → observer → review pass → findings back to the worker → verdict → `Needs human review`. The board assembles into lanes and `orchestrator_board` reads it. **The host surface now exists**: `/dsho/api/board` answers a real request in a live host (verified: 200, `application/json`, `no-store`, four lanes). **The client half is the remaining gap** — nothing renders yet. Also open: the protocol tools are not yet restricted to their session kinds, and worktree cleanup on archive does not exist. |
 
 ---
 
@@ -43,6 +43,7 @@ everything else inherits.
 | 6e | **The command seam** — argv over `ctx.subprocess`, bounded in time and output, failure classification | 33 tests |
 | 6f | **GitHub credential chain** (`AO_GITHUB_TOKEN` → `GITHUB_TOKEN` → `gh auth token`) and every `gh`/`git` argv | 30 tests |
 | 6q | **The board assembly.** `buildBoard` joins the stores, the reducer and the presentation layer — the only place that does, so the agent's view and the GUI's cannot disagree. Plus `orchestrator_board` | 1 test file |
+| 6s | **The client half** — `src/client/**/*.ts` compiled to the `window.__ModuleLoader__` classic-script form, the `sidebar.panellist` row and the `main` keyed panel, lanes, cards, and the inspector. The seat is proven (spike 1) and `ui-schedule` is a shipped exemplar to copy. | §11, M2 | The endpoint exists; nothing renders yet. |
 | 6p | **The review sweep, and a real activity gate.** A tick schedules a pass for every worker whose head has none, and the gate now reads the **live** `AgentStatus` rather than assuming the worker is quiet | 5 tests |
 | 6o | **The auto-review pass.** The reviewer contract (PRD §12.5, with "prefer a few high-confidence findings over nitpicks" quoted because that line is what stops every PR hitting the round cap), the read-only reviewer session in the worker's **own worktree**, the pinned-head `ReviewRun`, the head-checked verdict, finding routing, and the failed-pass retry budget | 16 tests |
 | 6n | **The PR observer.** The `PrSnapshot` record and the `gh pr view --json` parser, plus the per-repository serialised poll. R13's invariant is the substance: a failed observation writes `fetched: false` **with the prior facts**, so even a caller that ignores the flag cannot see a fabricated `CLOSED` | 18 tests |
@@ -139,6 +140,16 @@ canonicalization: **a fake cannot catch a wrong API, because it implements whate
 interface the author imagined.** The tests were green throughout — which is why the
 fix was verified against reality rather than against another fake.
 
+**A service I invented crashed the host, and only a live boot could show it.**
+`ctx.agentRegistry` **does not exist** — the registry *is* `ctx.agents`. Cordis refused it
+at the first outbox tick with `cannot get property "agentRegistry" without inject`, and
+the host **exited with code 1**. Every unit test passed, because the fakes had
+`agentRegistry` as a plain property; a fake cannot enforce an injection contract.
+
+This is the **fourth** instance of one lesson, and the most severe: the others degraded a
+feature, while this one takes the process down. **Run the live boot before claiming a
+host feature works** — it is one command, and `npm run verify` cannot substitute.
+
 **Covering the assembly found a real interface problem.** `toPrFacts` returned the
 *input* shape, so `facts.externalReview` was optional and every caller had to narrow
 it — the tests failed to compile for exactly that reason. It now normalizes on the way
@@ -234,7 +245,7 @@ happened. Read the log after the session closes, or watch the GUI.
 | Chunk | Work | PRD | Why now |
 |---|---|---|---|
 | 6g\.2 | **Wire `orchestrator_repo_connect` as a tool.** The preflight and the store both exist and are tested; what is missing is the wiring. It needs `inject` to gain `subprocess` and `storage`, and **`apply()` to become async** (opening the store is async), which is why it is its own step rather than a footnote — that change also touches the activation tests. | §12.1 | Makes the second real tool live, and proves the store against a real backend rather than a fake. |
-| 6r | **`/dsho/api/board` on `ctx.webServer`** (`register({ kind: 'exact', path, handler })`), then the SSE stream — unverified, with polling as the documented fallback. Then the client half. | §11.4 | Nothing is visible in the GUI without it.
+| 6r | **`/dsho/api/board`.** One snapshot endpoint, no per-card fan-out; handlers answer their own errors so a storage failure is a `500` rather than the web server's throw-to-400 — a 400 for a backend outage would be a lie the client cannot act on | 4 tests + **live** |
 | 6q | **The board's read surface**: `/dsho/api/board` on `ctx.webServer`, then `orchestrator_board`. The reducer, presentation, and stores all exist, so this is an assembly job. | §11.4, §12.1 | Nothing is visible in the GUI without it, and it is what the client half reads.
 | 6p | **A tick that schedules review passes** — call `startReviewPass` for workers whose head has no current pass, so the loop turns without a human. Then `orchestrator_run_review` for the forced path. | §7.5, M3 | The pass is complete and tested but nothing schedules it, so no card ever enters `Validating`'s review loop.
 | 6o | **The reviewer spawner** — the auto-review pass (M3): spawn a `read-only` reviewer at the PR's exact head, `orchestrator_review_verdict` → `ReviewRun` → route findings to the worker → re-review on the new head. The loop's bounds and the stale-head rule are already written and tested (`src/review/`). | §7.5, M3 | This is the feature the request calls out, and every piece under it — spawn, outbox, observer, reducer — now exists. |
