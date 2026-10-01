@@ -9,7 +9,7 @@ bloated status file costs the next agent more than it saves.
 |---|---|
 | **Goal** | Implement [PRD.md](PRD.md) |
 | **Plan source** | [PRD.md §16 Milestones](PRD.md#16-milestones), verified against [docs/dsh-plugin-contract.md](docs/dsh-plugin-contract.md) |
-| **Last updated** | 2026-10-01, chunk 21 (M4's human feedback loop) |
+| **Last updated** | 2026-10-01, chunk 22 (the slot queue) |
 | **Verify** | `npm run verify` → `tsc` (src + test) + `node --test` + build · **all green** |
 | **Current state** | **656 tests, 0 type errors. Twelve tools, and the requested flow runs end to end on its own ticks:** issue → worker → worktree → PR → observer → review pass → findings back to the worker → verdict → `Needs human review`. The board assembles into lanes and `orchestrator_board` reads it. **The host surface now exists**: `/dsho/api/board` answers a real request in a live host (verified: 200, `application/json`, `no-store`, four lanes). **684 tests. Fourteen tools, the requested flow runs to completion** is proven end to end in a real host**: a PR snapshot moves the card `building → validating / Review scheduled → Reviewing`, an approved verdict lands in **`needs_review / Needs human review` — never `Ready`** (A17), a new head schedules a fresh pass, and a failed pass lands in `Review failed` with its retry budget accounted. Along the way the lane spike found a real integration bug (fixed). The flow now **runs to its end**: a merged or closed PR finishes the worker, releases the issue, and collects the worktree. **M2's board UI is met and seen**: panel, lanes, cards, inspector, empty/loading/error states, keyboard access. Still open: no *real* PR has been opened (the spike writes the observer's output directly — `gh pr create` needs write access to someone else's repository), and the worker has never run a turn. Also open: no PR has been opened by a worker yet, the protocol tools are not restricted to their session kinds, and worktree cleanup on archive does not exist. |
 
@@ -184,6 +184,8 @@ the wiring does nothing when it cannot be sure. Recorded as the next chunk rathe
 counted as done.
 
 **AUDIT THE SPEC AGAINST THE CODE, NOT AGAINST YOUR OWN NARRATION.** Recent rounds implied only A4 and §12.2 remained. Re-reading the milestones against `src/` found `maxConcurrentWorkers` **validated, displayed, and never enforced** — the plugin started unbounded workers — plus an absent human feedback loop (M4) and an empty `locale/` (M7). A long session drifts toward believing its own summaries; the spec does not drift.
+
+**A QUEUE MUST RECORD THE INTENT, NOT INFER IT.** The slot queue could have started `open` issues, and then merely CREATING an issue would eventually spawn a worker -- an action nobody asked for, triggered a tick later. It uses an explicit `pendingWorker` flag instead, carried in the issue normalizer because the previous chunk proved that a field added to the interface alone does not survive a read.
 
 **A FIELD ADDED TO A TYPE IS NOT A FIELD THAT SURVIVES STORAGE.** `normalizeWorker` builds its record FIELD BY FIELD, so `feedback` — added to the `Worker` interface — was written by the router and **silently dropped on the next read**. The dedup therefore never held and every poll re-nudged the worker, which is the exact failure the dedup exists to prevent. The types were happy the whole time. Any field on a stored record must be carried explicitly in its normalizer, and validated there rather than trusted.
 

@@ -81,6 +81,15 @@ export interface Issue {
   githubIssue?: GithubIssueRef
   /** At most one active worker per issue. */
   workerId?: string
+  /**
+   * A worker was ASKED for and the cap had no slot, so this issue is waiting (M5).
+   *
+   * A flag rather than an issue state: "waiting for a slot" is not a lifecycle
+   * position, it is a request still outstanding, and the issue stays `open` either way.
+   * It is deliberately NOT implied by `open` -- merely creating an issue must never
+   * cause a worker to appear, so the intent is recorded rather than inferred.
+   */
+  pendingWorker?: boolean
   createdAt: number
   updatedAt: number
 }
@@ -124,6 +133,10 @@ export function normalizeIssue(raw: unknown): Issue {
     createdBy: CREATORS.includes(record.createdBy as string)
       ? (record.createdBy as IssueCreator)
       : IssueCreator.user,
+    // Carried explicitly, per the lesson normalizeWorker taught: a field added to the
+    // interface alone is dropped on the next read, and the queue would silently forget
+    // what it was waiting to start.
+    ...(record.pendingWorker === true ? { pendingWorker: true } : {}),
     createdAt: typeof record.createdAt === 'number' ? record.createdAt : 0,
     updatedAt: typeof record.updatedAt === 'number' ? record.updatedAt : 0,
   }

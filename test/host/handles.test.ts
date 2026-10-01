@@ -12,7 +12,7 @@ import assert from 'node:assert/strict'
 
 import { createLiveWorkers } from '../../src/host/handle-registry.ts'
 import type { LiveWorker } from '../../src/host/handle-registry.ts'
-import { messageWorkerForTool, startWorkerForTool, stopWorkerForTool } from '../../src/host/workers-service.ts'
+import { fillSlots, messageWorkerForTool, startWorkerForTool, stopWorkerForTool } from '../../src/host/workers-service.ts'
 import type { RunCommand } from '../../src/host/worktree.ts'
 import { normalizePluginConfig } from '../../src/config/validate.ts'
 import { createMemoryFactStore, lazyFactStore } from '../../src/host/store.ts'
@@ -239,7 +239,7 @@ test('a stop whose release fails still reports the stop', async () => {
 // The concurrency cap (M5)
 // ---------------------------------------------------------------------------
 
-test('the concurrency cap is ENFORCED, and says what is holding the slots', async () => {
+test('over the cap, work is QUEUED rather than refused', async () => {
   // `maxConcurrentWorkers` was validated, displayed by orchestrator_config, and never
   // applied -- so the plugin started unbounded workers, each with its own worktree (a
   // full checkout), session, and model spend. A cap that is advertised and not applied
@@ -252,12 +252,23 @@ test('the concurrency cap is ENFORCED, and says what is holding the slots', asyn
       lastSignalAt: 1, createdAt: 1, updatedAt: 1,
     })
   }
-  const text = await startWorkerForTool(depsFor(store, 2), { title: 'One more' })
+  // An explicit issue, because the cap is checked once the issue is resolved -- you
+  // cannot queue work that cannot be filed, so a title with no repository still reports
+  // the repository problem first.
+  await store.issues.put('iss-queue', {
+    id: 'iss-queue', number: 9, repoId: 'repo-1', title: 'One more', state: 'open', createdAt: 1, updatedAt: 1,
+  })
+  const text = await startWorkerForTool(depsFor(store, 2), { issueId: 'iss-queue' })
 
   assert.match(text, /At capacity: 2 of 2 workers are active/)
+  assert.match(text, /iss-queue is QUEUED at position 1/)
   assert.match(text, /wrk-1/, 'the reply names what is holding the slots')
   assert.match(text, /orchestrator_worker_stop/, 'and how to free one')
   assert.equal((await store.workers.list()).length, 2, 'nothing was started')
+
+  // And the request is RECORDED, so the caller does not have to remember it.
+  const queued = (await store.issues.get('iss-queue')) as { pendingWorker?: boolean }
+  assert.equal(queued.pendingWorker, true, 'the intent to work is what is queued')
 })
 
 test('a TERMINAL worker does not occupy a slot', async () => {
@@ -271,8 +282,12 @@ test('a TERMINAL worker does not occupy a slot', async () => {
     id: 'wrk-live', issueId: 'iss-1', sessionId: 'dsho-wrk-live', branch: 'b', worktreePath: '/p/1',
     workspaceId: 'w', phase: WorkerPhase.implementing, phaseHistory: [], lastSignalAt: 1, createdAt: 1, updatedAt: 1,
   })
-  const text = await startWorkerForTool(depsFor(store, 2), { title: 'One more' })
-  assert.ok(!/At capacity/.test(text), `a released worker frees its slot, got: ${text}`)
+  await store.issues.put('iss-1', {
+    id: 'iss-1', number: 2, repoId: 'repo-1', title: 'One more', state: 'open', createdAt: 1, updatedAt: 1,
+  })
+  const text = await startWorkerForTool(depsFor(store, 2), { issueId: 'iss-1' })
+  assert.ok(!/QUEUED/.test(text), `a released worker frees its slot, got: ${text}`)
+  assert.ok(!/At capacity/.test(text), text)
 })
 
 test('the cap is read from config, not hard-coded', async () => {
@@ -281,8 +296,14 @@ test('the cap is read from config, not hard-coded', async () => {
     id: 'wrk-1', issueId: 'iss-1', sessionId: 's', branch: 'b', worktreePath: '/p', workspaceId: 'w',
     phase: WorkerPhase.implementing, phaseHistory: [], lastSignalAt: 1, createdAt: 1, updatedAt: 1,
   })
-  assert.match(await startWorkerForTool(depsFor(store, 1), { title: 'x' }), /At capacity: 1 of 1/)
-  assert.ok(!/At capacity/.test(await startWorkerForTool(depsFor(store, 2), { title: 'x' })))
+  await store.issues.put('iss-x', {
+    id: 'iss-x', number: 3, repoId: 'repo-1', title: 'x', state: 'open', createdAt: 1, updatedAt: 1,
+  })
+  await store.issues.put('iss-y', {
+    id: 'iss-y', number: 4, repoId: 'repo-1', title: 'y', state: 'open', createdAt: 2, updatedAt: 2,
+  })
+  assert.match(await startWorkerForTool(depsFor(store, 1), { issueId: 'iss-x' }), /At capacity: 1 of 1/)
+  assert.ok(!/At capacity/.test(await startWorkerForTool(depsFor(store, 2), { issueId: 'iss-y' })))
 })
 
 /** The minimum the cap check needs; it runs before anything is spawned. */
@@ -294,3 +315,54 @@ function depsFor(store: ReturnType<typeof createMemoryFactStore>, maxConcurrentW
     run: (async () => ({ exitCode: 0, stdout: '', stderr: '' })) as RunCommand,
   } as never
 }
+
+
+// ---------------------------------------------------------------------------
+// The slot filler (M5)
+// ---------------------------------------------------------------------------
+
+test('the filler does nothing while the cap is full, and R7: nothing hungry', async () => {
+  const store = createMemoryFactStore()
+  await store.workers.put('wrk-1', {
+    id: 'wrk-1', issueId: 'iss-0', sessionId: 's', branch: 'b', worktreePath: '/p', workspaceId: 'w',
+    phase: WorkerPhase.implementing, phaseHistory: [], lastSignalAt: 1, createdAt: 1, updatedAt: 1,
+  })
+  await store.issues.put('iss-q', {
+    id: 'iss-q', number: 5, repoId: 'repo-1', title: 'Waiting', state: 'open',
+    pendingWorker: true, createdAt: 1, updatedAt: 1,
+  })
+  const full = await fillSlots(depsFor(store, 1))
+  assert.deepEqual(full, { started: [], active: 1 }, 'a full cap starts nothing')
+  assert.equal(((await store.issues.get('iss-q')) as { pendingWorker?: boolean }).pendingWorker, true, 'and the request survives')
+
+  // An ordinary `open` issue is NOT queued work: merely creating an issue must never
+  // cause a worker to appear.
+  const store2 = createMemoryFactStore()
+  await store2.issues.put('iss-plain', {
+    id: 'iss-plain', number: 6, repoId: 'repo-1', title: 'Just recorded', state: 'open', createdAt: 1, updatedAt: 1,
+  })
+  assert.deepEqual((await fillSlots(depsFor(store2, 2))).started, [], 'an open issue without the intent flag waits')
+})
+
+test('a failed start clears the flag, so a sweep does not retry forever', async () => {
+  // The alternative -- leaving it set -- turns one broken spawn into a start attempt on
+  // every tick, forever, each one creating a worktree and a session before failing.
+  const store = createMemoryFactStore()
+  await store.repos.put('repo-1', { id: 'repo-1', rootPath: '/r', owner: 'acme', name: 'widgets' })
+  await store.issues.put('iss-q', {
+    id: 'iss-q', number: 7, repoId: 'repo-1', title: 'Waiting', state: 'open',
+    pendingWorker: true, createdAt: 1, updatedAt: 1,
+  })
+  // The spawn seam is empty, so the attempt fails after the flag is cleared.
+  const outcome = await fillSlots(depsFor(store, 2))
+  assert.deepEqual(outcome.started, [], 'nothing started')
+  assert.equal(((await store.issues.get('iss-q')) as { pendingWorker?: boolean }).pendingWorker, false, 'marked as tried')
+})
+
+test('the filler contains a storage failure', async () => {
+  const outcome = await fillSlots({
+    store: lazyFactStore(async () => { throw new Error('offline') }),
+    config: normalizePluginConfig(),
+  } as never)
+  assert.deepEqual(outcome, { started: [], active: 0 })
+})

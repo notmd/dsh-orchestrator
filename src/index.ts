@@ -38,6 +38,7 @@ import { observeAll } from './host/observer-service.ts'
 import { sweepReviewPasses } from './host/reviewer-service.ts'
 import { sweepCompletions } from './host/completion.ts'
 import { sweepHumanFeedback } from './host/feedback-service.ts'
+import { fillSlots } from './host/workers-service.ts'
 import { createBoardRoute } from './host/board-route.ts'
 import { restrictionFor, sessionKind } from './host/tools.ts'
 import { lazyFactStore, openFactStore } from './host/store.ts'
@@ -210,6 +211,22 @@ export function apply(ctx: HostContext, config?: PluginConfigInput): PluginConfi
       // finish nothing, however its empty payload reads.
       // A person's review reaches the worker (M4). Without it the card claims the work
       // is progressing while a human's objection sits unanswered.
+      // Queued work starts when a slot frees (M5). A sweep rather than a hook on
+      // worker completion, because slots free in several ways -- a merge, a close, a
+      // cancellation, a stop -- and this catches all of them.
+      const slots = setInterval(() => {
+        void fillSlots({ run, store, spawn, config: resolved, live })
+          .then((outcome) => {
+            if (outcome.started.length > 0) {
+              log(ctx, 'info', `${name}: started ${outcome.started.length} queued worker(s)`)
+            }
+          })
+          .catch((error: unknown) => {
+            log(ctx, 'warn', `${name}: the slot sweep failed: ${String(error)}`)
+          })
+      }, resolved.pollIntervalMs)
+      slots.unref?.()
+
       const feedback = setInterval(() => {
         void sweepHumanFeedback({ store, config: resolved, live })
           .then((outcomes) => {
@@ -261,6 +278,7 @@ export function apply(ctx: HostContext, config?: PluginConfigInput): PluginConfi
         clearInterval(observer)
         clearInterval(completion)
         clearInterval(feedback)
+        clearInterval(slots)
         clearInterval(reviewer)
         for (const dispose of disposers) dispose()
         // A9: unloading leaves sessions and worktrees INTACT. Disposing an agent

@@ -22,7 +22,7 @@
  */
 
 import { newId } from '../domain/ids.ts'
-import { IssueState, assignWorker, normalizeIssue, releaseWorker } from '../domain/issues.ts'
+import { IssueState, assignWorker, byQueueOrder, normalizeIssue, releaseWorker } from '../domain/issues.ts'
 import type { Issue } from '../domain/issues.ts'
 import { WorkerPhase, isTerminalPhase, normalizeWorker, workerSessionTitle } from '../domain/workers.ts'
 import type { Worker } from '../domain/workers.ts'
@@ -96,28 +96,6 @@ export async function startWorkerForTool(
     return storageFailure(error)
   }
 
-  // THE CONCURRENCY CAP. `maxConcurrentWorkers` was validated, displayed by
-  // `orchestrator_config`, and NEVER ENFORCED -- so the plugin would happily start
-  // unbounded workers, each with its own worktree (a full checkout), session, and
-  // model spend. A cap that is advertised and not applied is worse than no cap,
-  // because the operator has configured a bound they believe holds.
-  //
-  // Counted from the store rather than a live registry: a worker whose session died
-  // still occupies a worktree until it is released, and the bound is about resources.
-  const active = (await store.workers.list())
-    .map(normalizeWorker)
-    .filter((candidate) => !isTerminalPhase(candidate.phase))
-  if (active.length >= deps.config.maxConcurrentWorkers) {
-    return [
-      `At capacity: ${active.length} of ${deps.config.maxConcurrentWorkers} workers are active, so nothing was started.`,
-      '',
-      ...active.slice(0, 8).map((candidate) => `  ${candidate.id}  ${candidate.phase}`),
-      '',
-      `Finish or stop a worker first (\`orchestrator_worker_stop\` releases its issue), or raise`,
-      '`maxConcurrentWorkers`.',
-    ].join('\n')
-  }
-
   let issue: Issue
   if (args.issueId && args.issueId.trim() !== '') {
     const found = await findIssue(store, args.issueId.trim())
@@ -136,6 +114,34 @@ export async function startWorkerForTool(
     issue = found.issue
   } else {
     return 'Give either an `issueId` to work, or a `title` for an ad-hoc task.'
+  }
+
+  // THE CONCURRENCY CAP (M5). Over the cap this QUEUES the request rather than
+  // refusing it: the orchestrator asked for this work, and dropping the request makes
+  // the caller responsible for remembering it. The issue is marked `pendingWorker` and
+  // `fillSlots` starts it when a slot frees.
+  //
+  // The flag is explicit rather than inferred from `open`, because merely CREATING an
+  // issue must never cause a worker to appear -- the intent to work is what is queued.
+  // Counted from the STORE, not a live registry: a worker whose session died still
+  // occupies a worktree until it is released, and the bound is about resources.
+  const active = (await store.workers.list()).map(normalizeWorker).filter((c) => !isTerminalPhase(c.phase))
+  if (active.length >= deps.config.maxConcurrentWorkers) {
+    const queued = { ...issue, pendingWorker: true, updatedAt: deps.now ? deps.now() : Date.now() }
+    await store.issues.put(queued.id, queued)
+    const waiting = (await store.issues.list())
+      .map(normalizeIssue)
+      .filter((candidate) => candidate.pendingWorker === true && candidate.state === IssueState.open)
+      .sort(byQueueOrder)
+    const position = waiting.findIndex((candidate) => candidate.id === queued.id) + 1
+    return [
+      `At capacity: ${active.length} of ${deps.config.maxConcurrentWorkers} workers are active.`,
+      `${issue.id} is QUEUED at position ${position} and starts when a slot frees.`,
+      '',
+      ...active.slice(0, 8).map((candidate) => `  ${candidate.id}  ${candidate.phase}`),
+      '',
+      'Stop a worker (`orchestrator_worker_stop` releases its issue) or raise `maxConcurrentWorkers`.',
+    ].join('\n')
   }
 
   if (issue.workerId) {
@@ -358,4 +364,45 @@ export async function stopWorkerForTool(
     '',
     released,
   ].join('\n')
+}
+
+
+/**
+ * Starts queued work while the cap allows (M5).
+ *
+ * A sweep rather than a hook on worker completion, because slots free in several ways
+ * -- a merge, a close, a cancellation, a stop -- and a sweep catches all of them. It
+ * reuses `startWorkerForTool` rather than duplicating the spawn path, so a queued start
+ * behaves exactly like a direct one, including the worktree, the session title and the
+ * report tool restriction.
+ *
+ * Bounded by the cap at the TOP of each iteration and stopped on the first failure, so
+ * a spawn that fails cannot become an infinite loop.
+ */
+export async function fillSlots(deps: WorkerToolDeps): Promise<{ started: string[]; active: number }> {
+  const started: string[] = []
+  let store
+  try {
+    store = await deps.store.get()
+  } catch {
+    return { started, active: 0 }
+  }
+
+  for (;;) {
+    const active = (await store.workers.list()).map(normalizeWorker).filter((c) => !isTerminalPhase(c.phase))
+    if (active.length >= deps.config.maxConcurrentWorkers) return { started, active: active.length }
+
+    const next = (await store.issues.list())
+      .map(normalizeIssue)
+      .filter((candidate) => candidate.pendingWorker === true && candidate.state === IssueState.open && !candidate.workerId)
+      .sort(byQueueOrder)[0]
+    if (!next) return { started, active: active.length }
+
+    // Cleared BEFORE the attempt, so a failure marks the issue as tried rather than
+    // leaving it to be retried on every sweep forever. The reply is reported either way.
+    await store.issues.put(next.id, { ...next, pendingWorker: false, updatedAt: Date.now() })
+    const reply = await startWorkerForTool(deps, { issueId: next.id })
+    if (!reply.startsWith('Started')) return { started, active: active.length }
+    started.push(next.id)
+  }
 }
