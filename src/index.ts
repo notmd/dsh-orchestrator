@@ -34,6 +34,7 @@ import { createRunCommand } from './host/exec.ts'
 import { createSpawnDeps } from './host/spawn-deps.ts'
 import { createLiveWorkers } from './host/handle-registry.ts'
 import { OUTBOX_TICK_MS, deliverPendingReports } from './host/outbox-service.ts'
+import { observeAll } from './host/observer-service.ts'
 import { lazyFactStore, openFactStore } from './host/store.ts'
 import { FACT_SCHEMAS } from './host/schemas.ts'
 
@@ -122,12 +123,31 @@ export function apply(ctx: HostContext, config?: PluginConfigInput): PluginConfi
       }, OUTBOX_TICK_MS)
       // Do not hold the process open for a delivery tick.
       tick.unref?.()
+
+      // The PR observer. Serialised per repository inside `observeAll`, so a busy
+      // board makes sequential `gh` calls rather than fanning out against one rate
+      // limit. A failed observation keeps the prior snapshot (R13), so a GitHub
+      // outage degrades the board to `No signal` instead of fabricating a merge.
+      const observer = setInterval(() => {
+        void observeAll({ store, run })
+          .then((outcome) => {
+            const changed = outcome.observations.filter((observation) => observation.changed)
+            if (changed.length > 0) {
+              log(ctx, 'info', `${name}: ${changed.length} pull request(s) changed`)
+            }
+          })
+          .catch((error: unknown) => {
+            log(ctx, 'warn', `${name}: the PR observer pass failed: ${String(error)}`)
+          })
+      }, resolved.pollIntervalMs)
+      observer.unref?.()
       for (const tool of tools) {
         disposers.push(ctx.tools.register(tool as never))
       }
       log(ctx, 'info', `${name}: registered ${tools.length} orchestrator tool(s)`)
       return () => {
         clearInterval(tick)
+        clearInterval(observer)
         for (const dispose of disposers) dispose()
         // A9: unloading leaves sessions and worktrees INTACT. Disposing an agent
         // handle stops and removes its session, so this drops the references and
