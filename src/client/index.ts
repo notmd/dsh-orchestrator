@@ -109,6 +109,7 @@ const FALLBACK: Record<string, string> = {
   'orchestrator.board.needsAttention': '{count} needing attention',
   'orchestrator.board.loading': 'Loading the board...',
   'orchestrator.board.unavailable': 'The board is unavailable: {message}',
+  'orchestrator.board.stale': 'The board could not be refreshed: {message}. Showing the last reading.',
   'orchestrator.board.emptyTitle': 'No workers yet',
   'orchestrator.board.emptyBody': 'Ask a session to create an issue, then start a worker for it. Cards appear here and move as the work does.',
   'orchestrator.lane.building': 'Building',
@@ -193,7 +194,7 @@ loader.load({
     // React comes from the browser module table — never a second copy.
     const React = require('react') as {
       createElement: (type: unknown, props?: unknown, ...children: unknown[]) => unknown
-      useState: <T>(initial: T) => [T, (next: T) => void]
+      useState: <T>(initial: T) => [T, (next: T | ((previous: T) => T)) => void]
       useEffect: (effect: () => void | (() => void), deps?: unknown[]) => void
     }
     const h = React.createElement
@@ -245,6 +246,14 @@ loader.load({
 .dsho-sub { font-size: 0.8125rem; color: var(--dsw-alias-label-primary-dimmed, inherit); }
 .dsho-note { color: var(--dsw-alias-label-primary-dimmed, inherit); }
 .dsho-note--error { color: var(--dsw-alias-state-error-primary, #e5484d); font-weight: 500; }
+/* The reference's degraded-state row: a bordered surface with a warning glyph, a
+   message, and room for an action -- kept ABOVE the board so the board's height does not
+   move when a warning appears. */
+.dsho-banner { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; padding: 6px 10px;
+  border-radius: 8px; font-size: 0.75rem; color: var(--dsw-alias-label-primary-dimmed, inherit);
+  border: 1px solid var(--dsw-alias-border-l2, rgba(127,127,127,0.24)); background: var(--dsw-alias-bg-layer-2, transparent); }
+.dsho-banner svg { flex: none; color: var(--dsw-alias-state-warn-primary, #f59e0b); }
+.dsho-banner > span { min-width: 0; flex: 1; }
 
 /* The reference's board model, adopted: a horizontally scrolling container with a
    MINIMUM width, four full-height columns, and each column scrolling its OWN cards.
@@ -368,8 +377,26 @@ loader.load({
     /** What the panel is currently showing. */
     type View =
       | { kind: 'loading' }
-      | { kind: 'ready'; board: BoardSnapshot }
+      /** `stale` is the last poll's failure, when a board is being shown without one. */
+      | { kind: 'ready'; board: BoardSnapshot; stale?: string }
       | { kind: 'error'; message: string }
+
+    /**
+     * Fold a poll's outcome into what is on screen.
+     *
+     * A failed poll must NOT blank a board that is already showing. The reference keeps
+     * its board at a stable height and puts a banner above it for a degraded state --
+     * mine replaced the whole panel with an error, so one dropped request wiped out the
+     * board and told the user the plugin was broken. A failure with nothing to show is
+     * still a full error state; a failure with a last good reading is a stale banner.
+     */
+    function mergeView(previous: View, next: View): View {
+      if (next.kind === 'ready') return next
+      // `loading` is the initial state, not an outcome: it never replaces what is shown.
+      if (next.kind === 'loading') return previous
+      if (previous.kind === 'ready') return { kind: 'ready', board: previous.board, stale: next.message }
+      return next
+    }
 
     /**
      * Reads the board once, uncached.
@@ -750,7 +777,7 @@ loader.load({
         let cancelled = false
         const tick = () => {
           void readBoard().then((next) => {
-            if (!cancelled) setView(next)
+            if (!cancelled) setView((previous) => mergeView(previous, next))
           })
         }
         tick()
@@ -801,6 +828,19 @@ loader.load({
         { className: 'dsho-panel' },
         style,
         header,
+        view.stale
+          ? h(
+              'div',
+              { className: 'dsho-banner', role: 'status' },
+              h(
+                'svg',
+                { width: 14, height: 14, viewBox: '0 0 16 16', 'aria-hidden': 'true' },
+                h('path', { d: 'M8 2 15 14H1L8 2Z', fill: 'none', stroke: 'currentColor', strokeWidth: 1.4, strokeLinejoin: 'round' }),
+                h('path', { d: 'M8 6.5v3.5M8 11.6v.2', fill: 'none', stroke: 'currentColor', strokeWidth: 1.4, strokeLinecap: 'round' }),
+              ),
+              h('span', null, translate('orchestrator.board.stale', { message: view.stale })),
+            )
+          : null,
         board.counts.total === 0
           ? h(
               'div',

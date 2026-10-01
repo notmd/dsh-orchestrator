@@ -6,6 +6,7 @@
   "orchestrator.board.workerMany": "{count} 个 worker",
   "orchestrator.board.loading": "正在加载看板…",
   "orchestrator.board.unavailable": "看板不可用：{message}",
+  "orchestrator.board.stale": "看板无法刷新：{message}。显示上次读取的结果。",
   "orchestrator.board.emptyTitle": "暂无 worker",
   "orchestrator.board.emptyBody": "让会话创建一个 issue，然后为它启动 worker。卡片会出现在这里，并随工作进展移动。",
   "orchestrator.lane.building": "构建中",
