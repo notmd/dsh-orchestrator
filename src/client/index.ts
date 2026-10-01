@@ -123,6 +123,8 @@ const FALLBACK: Record<string, string> = {
   'orchestrator.card.automationStopped': 'automation stopped: {reason}',
   'orchestrator.card.openPr': 'Open pull request #{number} in your browser',
   'orchestrator.card.reviewedBy': '{name}: {state}',
+  'orchestrator.card.openSession': 'Open the worker session for {title}',
+  'orchestrator.card.findings': 'Review findings for {title}',
   'orchestrator.inspector.noReview': 'No automated review has run at this commit.',
   'orchestrator.inspector.noFindings': 'No findings recorded for this commit.',
   'orchestrator.inspector.review': 'review {id}',
@@ -137,6 +139,27 @@ type Translate = (key: string, params?: Record<string, string | number>) => stri
  * `undefined` is a REAL answer here, not a failure: the English table is the fallback,
  * and the panel must render in a host without the locale service.
  */
+/**
+ * The workspace navigation service, or undefined when it cannot be read.
+ *
+ * `ctx.uiWorkspace.openSession(id)` is the harness's own way to "select a Session and
+ * show its Conversation as one UI navigation action" -- found by grepping the CALL SITES
+ * rather than guessing a key, because guessing a service name is how `ctx.agentRegistry`
+ * crashed the host. A shipped plugin declares `inject: ["slots", "uiWorkspace"]`.
+ *
+ * Read through a guard all the same: an undeclared service THROWS when read, and this
+ * half must load on a host that has no workspace UI. When it is absent the card keeps
+ * opening the inspector, so the degradation is a working panel rather than a dead click.
+ */
+function readUiWorkspace(ctx: unknown): { openSession(target: unknown): void } | undefined {
+  try {
+    const service = (ctx as { uiWorkspace?: { openSession?: unknown } }).uiWorkspace
+    return typeof service?.openSession === 'function' ? (service as { openSession(target: unknown): void }) : undefined
+  } catch {
+    return undefined
+  }
+}
+
 function readLocale(ctx: unknown): unknown {
   try {
     return (ctx as { locale?: unknown }).locale
@@ -202,6 +225,8 @@ loader.load({
     // ONE binding the components close over, assigned in `apply` when the locale is
     // known. Threading `t` through every component is what broke the first attempt.
     let translate: Translate = makeTranslate(undefined)
+    /** The workspace navigation service, when the host has one. */
+    let openSession: ((sessionId: string) => void) | undefined
 
     /**
      * The panel's styles, applied inline.
@@ -615,7 +640,7 @@ loader.load({
      *   the branch appears only when it says something the title does not -- repeating it
      *   is noise on a board read at a glance.
      */
-    function Card(props: { card: CardView; onOpen: (id: string) => void }) {
+    function Card(props: { card: CardView; onOpen: (id: string) => void; onFindings: (id: string) => void }) {
       const card = props.card
       const review = card.review
       const tone = toneOf(card)
@@ -675,12 +700,33 @@ loader.load({
               : null,
             h('div', { className: 'dsho-card__meta' }, formatAge(card.updatedAt, Date.now())),
           ),
-          pr && pr.url
+          h(
+            'div',
+            { className: 'dsho-card__actions' },
+            // The findings live behind an explicit action: §11.2 gives the card's BODY to
+            // the worker's session and puts the review one click further.
+            h(
+              'button',
+              {
+                type: 'button',
+                className: 'dsho-action',
+                'aria-label': translate('orchestrator.card.findings', { title: card.title }),
+                title: translate('orchestrator.card.findings', { title: card.title }),
+                onClick: (event: { stopPropagation?: () => void }) => {
+                  event?.stopPropagation?.()
+                  props.onFindings(card.id)
+                },
+              },
+              h(
+                'svg',
+                { width: 12, height: 12, viewBox: '0 0 16 16', 'aria-hidden': 'true' },
+                h('path', { d: 'M3 2.5h10v11H3z', fill: 'none', stroke: 'currentColor', strokeWidth: 1.4, strokeLinejoin: 'round' }),
+                h('path', { d: 'M5.5 6h5M5.5 8.5h5M5.5 11h3', fill: 'none', stroke: 'currentColor', strokeWidth: 1.3, strokeLinecap: 'round' }),
+              ),
+            ),
+            pr && pr.url
             ? h(
-                'div',
-                { className: 'dsho-card__actions' },
-                h(
-                  'a',
+                'a',
                   {
                     className: 'dsho-action',
                     href: pr.url,
@@ -698,9 +744,9 @@ loader.load({
                       fill: 'none', stroke: 'currentColor', strokeWidth: 1.5, strokeLinecap: 'round',
                     }),
                   ),
-                ),
-              )
-            : null,
+                  )
+              : null,
+          ),
         ),
       )
     }
@@ -763,6 +809,7 @@ loader.load({
       lane: { key: string; labelKey: string }
       cards: CardView[]
       onOpen: (id: string) => void
+      onFindings: (id: string) => void
     }) {
       return h(
         'section',
@@ -778,7 +825,7 @@ loader.load({
           : h(
               'ul',
               { className: 'dsho-list' },
-              ...props.cards.map((card) => h(Card, { key: card.id, card, onOpen: props.onOpen })),
+              ...props.cards.map((card) => h(Card, { key: card.id, card, onOpen: props.onOpen, onFindings: props.onFindings })),
             ),
       )
     }
@@ -812,6 +859,21 @@ loader.load({
           clearInterval(timer)
         }
       }, [])
+
+      /**
+       * What a card's body click does.
+       *
+       * §11.2: "Clicking the card body opens the worker's DSH session (the real working
+       * room), not a plugin-drawn chat." The harness's own navigation service does that.
+       * Without it -- a host with no workspace UI -- the click falls back to the
+       * inspector, so the card is never a dead end.
+       */
+      const openCard = (id: string): void => {
+        const card = Object.values(view.kind === 'ready' ? view.board.lenses.lanes : {}).flat().find((c) => c.id === id)
+        const sessionId = card?.sessionId
+        if (openSession !== undefined && sessionId) openSession(sessionId)
+        else setOpenId(id)
+      }
 
       const style = h('style', null, CSS)
       const header = h(
@@ -887,7 +949,13 @@ loader.load({
                 'div',
                 { className: 'dsho-lanes' },
                 ...LANES.map((lane) =>
-                  h(Lane, { key: lane.key, lane, cards: board.lenses.lanes[lane.key] ?? [], onOpen: setOpenId }),
+                  h(Lane, {
+                    key: lane.key,
+                    lane,
+                    cards: board.lenses.lanes[lane.key] ?? [],
+                    onOpen: openCard,
+                    onFindings: setOpenId,
+                  }),
                 ),
               ),
             ),
@@ -939,9 +1007,12 @@ loader.load({
     }
 
     return {
-      // `slots` is the only thing this half needs; the endpoint needs no service.
-      inject: ['slots'],
+      // `uiWorkspace` is what makes a card open the worker's real session (PRD §11.2:
+      // "the real working room, not a plugin-drawn chat"). Declared exactly as a shipped
+      // plugin declares it -- `inject: ["slots", "uiWorkspace"]`.
+      inject: ['slots', 'uiWorkspace'],
       apply(ctx: {
+        uiWorkspace?: unknown
         locale?: unknown
         slots: {
           inject: (owner: string, callback: () => unknown) => () => void
@@ -959,6 +1030,9 @@ loader.load({
         // activate ("web boot: 1 entry did not activate"), which takes the app's own
         // shell down with it and shows "Failed to load plugins".
         translate = makeTranslate(readLocale(ctx))
+        // Bound once, at activation, so a render never probes the service.
+        const workspaceUi = readUiWorkspace(ctx)
+        openSession = workspaceUi === undefined ? undefined : (sessionId) => workspaceUi.openSession(sessionId)
         ctx.effect(() => {
           const disposers: Array<() => void> = []
           // The same id addresses both seats: the panellist row selects the panel

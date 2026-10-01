@@ -262,7 +262,12 @@ counted as done.
 **AUDIT THE SPEC AGAINST THE CODE, NOT AGAINST YOUR OWN NARRATION.** Recent rounds implied only A4 and §12.2 remained. Re-reading the milestones against `src/` found `maxConcurrentWorkers` **validated, displayed, and never enforced** — the plugin started unbounded workers — plus an absent human feedback loop (M4) and an empty `locale/` (M7). A long session drifts toward believing its own summaries; the spec does not drift.
 
 
-**A DIVERGENCE FROM 11.2, RECORDED RATHER THAN GLOSSED.** The PRD says clicking a card body opens the WORKER'S DSH SESSION -- "the real working room, not a plugin-drawn chat". The card click opens the inspector instead, which is a plugin-drawn detail view. The inspector earns its place (it is where a machine review becomes inspectable), but the working room is NOT one click away, and that is a real gap against the spec rather than a design preference.
+**THE INTERFACE DECLARED THE METHOD BUT NOT THE SERVICE KEY -- the call sites did.** To
+close the 11.2 divergence I needed `ctx.<something>.openSession`. The type file declares
+`UiWorkspace.openSession` and no module augmentation naming the key, so `ctx.<name>` was
+not discoverable from the types. Grepping CALL SITES found `ctx.uiWorkspace.openSession(id)`
+and `inject = ["slots", "uiWorkspace"]`, both in shipped plugins -- evidence, not
+inference. **When a service key is not in the types, read how someone else reaches it.** The PRD says clicking a card body opens the WORKER'S DSH SESSION -- "the real working room, not a plugin-drawn chat". The card click opens the inspector instead, which is a plugin-drawn detail view. The inspector earns its place (it is where a machine review becomes inspectable), but the working room is NOT one click away, and that is a real gap against the spec rather than a design preference.
 
 **AND CHECK BEFORE REMOVING: THE DEAD RULE WAS ALREADY GONE.** I went to delete two now-unused CSS classes and the edit reported the anchor missing -- because the earlier patch had already replaced them. A removal that reports nothing to remove is a correct outcome, not a failure to retry; the grep afterwards confirmed zero references.
 

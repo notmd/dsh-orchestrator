@@ -20,6 +20,8 @@
   "orchestrator.card.automationStopped": "自动化已停止：{reason}",
   "orchestrator.card.openPr": "在浏览器中打开拉取请求 #{number}",
   "orchestrator.card.reviewedBy": "{name}：{state}",
+  "orchestrator.card.openSession": "打开 {title} 的 worker 会话",
+  "orchestrator.card.findings": "查看 {title} 的审查问题",
   "orchestrator.inspector.noReview": "该提交尚未进行自动审查。",
   "orchestrator.inspector.noFindings": "该提交没有记录任何问题。",
   "orchestrator.inspector.review": "审查 {id}",

@@ -20,6 +20,8 @@
   "orchestrator.card.automationStopped": "automation stopped: {reason}",
   "orchestrator.card.openPr": "Open pull request #{number} in your browser",
   "orchestrator.card.reviewedBy": "{name}: {state}",
+  "orchestrator.card.openSession": "Open the worker session for {title}",
+  "orchestrator.card.findings": "Review findings for {title}",
   "orchestrator.inspector.noReview": "No automated review has run at this commit.",
   "orchestrator.inspector.noFindings": "No findings recorded for this commit.",
   "orchestrator.inspector.review": "review {id}",
