@@ -262,6 +262,8 @@ counted as done.
 **AUDIT THE SPEC AGAINST THE CODE, NOT AGAINST YOUR OWN NARRATION.** Recent rounds implied only A4 and §12.2 remained. Re-reading the milestones against `src/` found `maxConcurrentWorkers` **validated, displayed, and never enforced** — the plugin started unbounded workers — plus an absent human feedback loop (M4) and an empty `locale/` (M7). A long session drifts toward believing its own summaries; the spec does not drift.
 
 
+**A CLEANUP THAT DELETES BY A RULE YOU CANNOT READ AFTERWARDS IS INDISTINGUISHABLE FROM ONE THAT DELETES TOO MUCH.** The spike-residue removal records EVERY registration it considered, then deletes only `/tmp/dsho-*` scratch paths through `Workspace.delete`. "Removed six" would look identical if the filter had been wrong; the evidence that matters is that the user's four real workspaces survived. Do not hand-edit a running service's state file when it exposes the operation -- and when it does not, say so rather than reaching into the file.
+
 **A CLICK THAT DOES NOTHING AND A CLICK THAT NAVIGATES LOOK IDENTICAL WHEN THE TARGET DOES NOT EXIST.** The 11.2 session-opening could not be verified with a seeded `sessionId` the harness had never heard of: the navigation had nowhere to land. Making the seed CREATE A REAL SESSION first turned the ambiguous result into a measurable one -- bogus id, panel stays (the fallback fires, proving the service is present); real id, panel gone (`navigatedAway: true`). **When a test cannot distinguish working from inert, the fixture is usually the problem, not the code.**
 
 **THE INTERFACE DECLARED THE METHOD BUT NOT THE SERVICE KEY -- the call sites did.** To
