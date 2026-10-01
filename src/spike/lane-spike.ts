@@ -151,7 +151,16 @@ async function run(ctx: HostContext): Promise<void> {
       observedAt: Date.now(),
       fetched: true,
     })
-    await (await store.get()).workers.put(workerId, { ...worker, pr: { number: 42, url: 'pr/42', headSha: head } })
+    // Backdate the worker's last signal past the idle threshold. `worker_start` set
+    // it seconds ago, and the review gate correctly refuses to start a pass while the
+    // worker has not been quiet long enough -- the reviewer must not race a diff that
+    // is still moving. The spike waits instead of the gate yielding, because the gate
+    // is the safety property and the spike is what has to accommodate it.
+    await (await store.get()).workers.put(workerId, {
+      ...worker,
+      pr: { number: 42, url: 'pr/42', headSha: head },
+      lastSignalAt: Date.now() - config.reviewIdleThresholdMs - 1_000,
+    })
     record('lane:with-a-pr', { view: await view(deps, workerId) })
 
     const sweep = await sweepReviewPasses(deps)
