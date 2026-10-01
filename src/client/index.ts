@@ -121,6 +121,21 @@ const FALLBACK: Record<string, string> = {
 type Translate = (key: string, params?: Record<string, string | number>) => string
 
 /**
+ * The locale surface, or undefined when it cannot be read.
+ *
+ * `undefined` is a REAL answer here, not a failure: the English table is the fallback,
+ * and the panel must render in a host without the locale service.
+ */
+function readLocale(ctx: unknown): unknown {
+  try {
+    return (ctx as { locale?: unknown }).locale
+  } catch {
+    // Not injected. The panel loads in English rather than taking the shell down.
+    return undefined
+  }
+}
+
+/**
  * Substitutes `{name}` placeholders. A missing value leaves the placeholder VISIBLE,
  * which is how a missing key gets noticed rather than rendering a silent hole.
  */
@@ -491,7 +506,15 @@ loader.load({
         effect: (callback: () => (() => void) | void, label?: string) => () => void
       }) {
         // Assigned once, here, where the locale is known.
-        translate = makeTranslate(ctx.locale)
+        //
+        // THE ACCESS IS WRAPPED, and not out of caution. A Cordis context THROWS on
+        // reading a service that is not injected -- "cannot get property X without
+        // inject" -- which is the same trap `ctx.agentRegistry` set on the host half.
+        // Treating `locale` as optional in the TYPES is not enough: the read itself
+        // throws, so `apply` never completes and the whole client entry fails to
+        // activate ("web boot: 1 entry did not activate"), which takes the app's own
+        // shell down with it and shows "Failed to load plugins".
+        translate = makeTranslate(readLocale(ctx))
         ctx.effect(() => {
           const disposers: Array<() => void> = []
           // The same id addresses both seats: the panellist row selects the panel
