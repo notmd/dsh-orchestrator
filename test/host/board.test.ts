@@ -492,8 +492,28 @@ test('the round and the bound both travel, so the limit is visible before it tri
     { id: 'r3', workerId: 'w', headSha: 'sha-now', status: 'running' },
   ]
   const evidence = reviewEvidence(runs, 'sha-now', 3)!
-  assert.equal(evidence.round, 3, 'two changes-requested cycles came before this one')
+  assert.equal(evidence.round, 3, 'a RUNNING pass is the one in progress, so cycles + 1')
   assert.equal(evidence.maxRounds, 3)
+})
+
+test('a COMPLETE pass shows its own round, not the next one', () => {
+  // Seen live: a card displayed `auto review round 3/3` -- budget spent -- while the
+  // lane below it correctly said `Needs review`. The completed run was round 2, and
+  // cycles+1 invented a third round that had not started. The PRD wants the bound
+  // visible so it is not surprising when it trips; a bound that reads as tripped when
+  // it has not is the same problem inverted.
+  const runs: ReviewRun[] = [
+    { id: 'r1', workerId: 'w', headSha: 'a', round: 1, status: 'complete', verdict: 'changes_requested' },
+    { id: 'r2', workerId: 'w', headSha: 'sha-1', round: 2, status: 'complete', verdict: 'changes_requested' },
+  ]
+  const evidence = reviewEvidence(runs, 'sha-1', 3)!
+  assert.equal(evidence.round, 2, 'the pass that actually ran')
+  assert.notEqual(evidence.round, evidence.maxRounds, 'and it does not read as exhausted')
+
+  const failed: ReviewRun[] = [
+    { id: 'r1', workerId: 'w', headSha: 'sha-1', round: 1, status: 'failed' },
+  ]
+  assert.equal(reviewEvidence(failed, 'sha-1', 3)!.round, 1, 'a failed pass is still its own round')
 })
 
 test('findings carry severity, file and line, which is what makes them inspectable', () => {

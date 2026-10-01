@@ -170,8 +170,15 @@ export function reviewEvidence(
   const atHead = runs.filter((run) => run.headSha === headSha)
   if (atHead.length === 0) return undefined
   const latest = atHead[atHead.length - 1]!
+  // The round to display. A RUNNING pass is the one in progress, so it is the cycles
+  // so far plus one; a COMPLETE or FAILED pass already has its own number, and using
+  // cycles+1 for it displays a round that has not happened -- which showed a card as
+  // `3/3` (budget spent) while the lane below it correctly said `Needs review`. The
+  // PRD wants the bound visible so it is not surprising when it trips; a bound that
+  // reads as tripped when it has not is the same problem inverted.
+  const inProgress = latest.status === 'running'
   return {
-    round: changesRequestedCycles(runs) + 1,
+    round: inProgress ? changesRequestedCycles(runs) + 1 : (latest.round ?? changesRequestedCycles(runs) + 1),
     maxRounds,
     ...(latest.verdict ? { verdict: latest.verdict } : {}),
     ...(latest.githubReviewId ? { githubReviewId: latest.githubReviewId } : {}),
