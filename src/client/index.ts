@@ -109,7 +109,8 @@ const FALLBACK: Record<string, string> = {
   'orchestrator.board.needsAttention': '{count} needing attention',
   'orchestrator.board.loading': 'Loading the board...',
   'orchestrator.board.unavailable': 'The board is unavailable: {message}',
-  'orchestrator.board.empty': 'No workers yet. Create an issue in a session to start one.',
+  'orchestrator.board.emptyTitle': 'No workers yet',
+  'orchestrator.board.emptyBody': 'Ask a session to create an issue, then start a worker for it. Cards appear here and move as the work does.',
   'orchestrator.lane.building': 'Building',
   'orchestrator.lane.validating': 'Validating',
   'orchestrator.lane.needs_review': 'In review',
@@ -323,6 +324,14 @@ loader.load({
 .dsho-sev[data-sev='high'] { color: var(--dsw-alias-state-error-primary, #e5484d); }
 .dsho-sev[data-sev='medium'] { color: var(--dsw-alias-state-warn-primary, #f5a524); }
 .dsho-sev[data-sev='low'] { color: var(--dsw-alias-label-primary-dimmed, inherit); }
+/* An empty board shows an EMPTY STATE, not four empty columns -- the reference centres a
+   title and a body, and four grey boxes saying "Nothing here." is noise rather than
+   information. */
+.dsho-empty { display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 6px; min-height: 40vh; text-align: center; padding: 0 16px; }
+.dsho-empty__title { font-size: 0.9375rem; font-weight: 600; }
+.dsho-empty__body { max-width: 34rem; font-size: 0.8125rem; line-height: 1.5;
+  color: var(--dsw-alias-label-primary-dimmed, inherit); }
 .dsho-archive { margin-top: 16px; font-size: 0.8125rem; color: var(--dsw-alias-label-primary-dimmed, inherit); }
 .dsho-btn { font: inherit; padding: 4px 10px; border-radius: 6px; cursor: pointer;
   border: 1px solid var(--dsw-alias-border-l2, rgba(127,127,127,0.24)); background: transparent; color: inherit; }
@@ -782,7 +791,12 @@ loader.load({
         style,
         header,
         board.counts.total === 0
-          ? h('p', { className: 'dsho-note' }, translate('orchestrator.board.empty'))
+          ? h(
+              'div',
+              { className: 'dsho-empty' },
+              h('p', { className: 'dsho-empty__title' }, translate('orchestrator.board.emptyTitle')),
+              h('p', { className: 'dsho-empty__body' }, translate('orchestrator.board.emptyBody')),
+            )
           : h(
               'div',
               { className: 'dsho-lanes' },
