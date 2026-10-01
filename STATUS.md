@@ -9,20 +9,21 @@ bloated status file costs the next agent more than it saves.
 |---|---|
 | **Goal** | Implement [PRD.md](PRD.md) |
 | **Plan source** | [PRD.md §16 Milestones](PRD.md#16-milestones), verified against [docs/dsh-plugin-contract.md](docs/dsh-plugin-contract.md) |
-| **Last updated** | 2026-10-01, chunk 3 |
+| **Last updated** | 2026-10-01, chunk 4 |
 | **Test command** | `node --test` (zero dependencies; Node 24) |
-| **Current state** | 297 unit tests, all passing. The **entire read model** — reducer, activity model, session status, head-scoped review facts, review-loop scheduler, and the card presentation (attention, ordering, lanes) — is done and ported from the reference implementation. **No plugin is installed yet** — no host half, no client half, no M0 spike run. |
+| **Current state** | 342 unit tests, all passing. The **entire read model plus configuration** is done and ported from the reference implementation. **No plugin is installed yet** — no host half, no client half, no M0 spike run. |
 
 ---
 
 ## 1. Where we are, in one paragraph
 
-The board's **read model is finished and proven**: what column a card sits in,
-what it says, whether it pulses, what order cards appear in, and what the
-review-loop scheduler will do next — all as pure, dependency-free ES modules with
-a large ported test suite. Nothing plugin-shaped exists yet: no `index.js` host
-entry, no `client.js`, no tools, no storage, no routes, no UI. The next chunk is
-config and validation (chunk 4), which the spawner depends on.
+The board's **read model is finished and proven** — what column a card sits in,
+what it says, whether it pulses, what order cards appear in, what the review-loop
+scheduler will do next — and **configuration is done**, including the loud
+`agentRulesFile` validation. All of it is pure, dependency-free ES modules with a
+large ported test suite. Nothing plugin-shaped exists yet: no `index.js` host
+entry, no `client.js`, no tools, no storage, no routes, no UI. Next is the
+feedback classifier and the report outbox (chunk 5), the last offline chunks.
 
 ---
 
@@ -33,7 +34,7 @@ config and validation (chunk 4), which the spawner depends on.
 | Module | What it is |
 |---|---|
 | [`src/contract/activity.js`](src/contract/activity.js) | `ActivityState` vocabulary + `isSticky` / `needsInput`. Ported from AO `backend/internal/domain/activity.go`. |
-| [`src/contract/status.js`](src/contract/status.js) | SCM enums, session-facts normalizer, `silentPastGrace`, **and the session-status reducer** (`deriveStatus`, `deriveSCMStatus`, `buildStacks`) with its worst-open-PR precedence. Ported from AO `backend/pkg/contract/status.go`. |
+| [`src/contract/status.js`](src/contract/status.js) | SCM enums, session-facts normalizer, `silentPastGrace`, **and the session-status reducer** (`deriveStatus`, `deriveSCMStatus`, `buildStacks`). Ported from AO `backend/pkg/contract/status.go`. |
 | [`src/contract/kanban.js`](src/contract/kanban.js) | The column reducer, the display-status reducers, ranking, and the two labelled divergences. Ported from AO `backend/pkg/contract/kanban.go`. |
 | [`src/review/runs.js`](src/review/runs.js) | Head-scoped `KanbanReviewRunFacts` + the two loop bounds. Shape ported from AO `backend/internal/service/session/kanban.go`. |
 
@@ -41,13 +42,19 @@ config and validation (chunk 4), which the spawner depends on.
 
 | Module | What it is |
 |---|---|
-| [`src/review/planner.js`](src/review/planner.js) | `plan(prs, runs)` → per-head `AOReviewState`; `sessionGate` (5 checks, 5 reason codes); `existingHeadReason` (6 skip conditions); `ineligibleReason`; `evaluateSession` → the heads a pass may start for; `evaluateManualRequest` → the user-forced override. Ported from AO `backend/internal/review/planner.go` + `backend/internal/autoreview/coordinator.go`. |
+| [`src/review/planner.js`](src/review/planner.js) | `plan(prs, runs)` → per-head `AOReviewState`; `sessionGate`; `existingHeadReason`; `ineligibleReason`; `evaluateSession`; `evaluateManualRequest`. Ported from AO `backend/internal/review/planner.go` + `backend/internal/autoreview/coordinator.go`. |
 
 ### Chunk 3 — board core: the read model
 
 | Module | What it is |
 |---|---|
-| [`src/board/presentation.js`](src/board/presentation.js) | `needsAttention` (exactly three display statuses), `orderCards` (`needsAttention desc, updatedAt desc`), `presentCard`, `groupIntoLanes`, `archiveSheet`, `isFinished` (A30 gating), `showStatusLoader`, and the older `attentionZone` fallback. Ported from AO `packages/product-ui/src/SessionsBoardView.tsx` + `session-presentation.ts`. |
+| [`src/board/presentation.js`](src/board/presentation.js) | `needsAttention` (exactly three display statuses), `orderCards`, `presentCard`, `groupIntoLanes`, `archiveSheet`, `isFinished`, `showStatusLoader`, `attentionZone`. Ported from AO `packages/product-ui/src/SessionsBoardView.tsx` + `session-presentation.ts`. |
+
+### Chunk 4 — configuration
+
+| Module | What it is |
+|---|---|
+| [`src/config/validate.js`](src/config/validate.js) | `PLUGIN_DEFAULTS` (every PRD §13 value), `REPO_CONFIG_DEFAULTS`, explicit key-by-key validation with `ConfigError`, `resolveRepoRelativeFile`, `loadAgentRules`, `resolvePermissionPresets`. Path handling ported from AO `backend/internal/session_manager/prompt.go`. |
 
 Test suites:
 
@@ -60,9 +67,10 @@ Test suites:
 | [`test/review/runs.test.js`](test/review/runs.test.js) | 28 | New — head pinning, both bounds, superseded-head context |
 | [`test/review/planner.test.js`](test/review/planner.test.js) | 77 | New — the scheduler, every reason code, the manual override |
 | [`test/board/presentation.test.js`](test/board/presentation.test.js) | 41 | New — A27–A30, ordering stability, lane grouping |
+| [`test/config/validate.test.js`](test/config/validate.test.js) | 45 | New — A31, defaults, every rejection |
 
 ```bash
-node --test            # 297 pass
+node --test            # 342 pass
 node --test --watch    # while iterating
 ```
 
@@ -85,12 +93,16 @@ Chunk numbers are this file's own; milestone letters are the PRD's.
 
 | Chunk | Work | PRD | Why now |
 |---|---|---|---|
-| 4 | **Config**: `Config` schema via `@deepseek-ai/schemastery`, per-repo fields, and the loud `agentRulesFile` validation (reject absolute paths and any `..` segment; a missing file is a hard spawn error). | §13, A31 | Spawn depends on it, so it must land before the spawner. |
 | 5 | **Feedback classification**: actionability, bot detection by `__typename`/`User.Type` (never a login substring — `robothon` must not be a bot), per-comment dedup keys, signature round-trip, re-arm only on a definitive clear. | §10.3, A12 | M4's logic, testable offline. |
 | 5b | **Report outbox**: the batched delivery window, `needs_input` immediate delivery, the 3-minute `stuck` interrupt window, settlement-on-`done`, claim-based delivery so a retry cannot double-deliver. | §10.5, A23 | Pure-logic and fully specified; the last offline chunk. |
 | 5c | **DSH→board fact adapter**: activity mapping (`Agent.status` + pending question + pending approval → `ActivityState`), and `lastActivityAt = max(lastSignalAt, lastObservedAt)` (see decision 8). | §7.6 | The seam between chunks 6 and 1–3. Belongs here so chunk 6 is wiring, not thinking. |
+| 5d | **`Config` export + manifest peers.** `src/config/config.js` builds the row's schemastery `Config` from `validate.js`'s defaults and validators; `package.json` gains `peerDependencies` on the DSH services and a `@deepseek-ai/schemastery` dependency. Convention verified from shipped packages: peers pinned to exact `0.1.7-rc.2`, cordis `~4.0.4`, schemastery `~3.18.4` as a plain dependency. | §13, A1.3, A9 | Needs a live profile to confirm resolution, so it is parked next to the install. |
 | 6 | **Host half**: `index.js` → `apply()`; `OrchestratorService` over `ctx.storageDomain`; `WorkerSpawner` using the exact `ctx.agents.create()` recipe; `WorktreeManager`; `GitHubGateway` over `ctx.subprocess` + `gh`; `PrObserver` loop; the tool table; `/dsho/api/*` + `/dsho/events` on `ctx.webServer`. | §6, §12, M1 | The first code that needs a live profile. |
 | 7 | **Client half**: `client.js` in the `window.__ModuleLoader__` format, `sidebar.panellist` row + `main` keyed panel, lanes/cards/inspector, themes, locale, keyboard access. | §11, M2 | Needs the routes from chunk 6. |
+
+**Recommended next step:** chunk 5, then 6 — but the *first* thing chunk 6 needs is
+one `install_bundle` from the user (see the box below), because a host half that
+cannot be activated cannot be verified.
 
 ### ⚠ Chunk 6/7 has an access problem that must be solved before it can be verified
 
