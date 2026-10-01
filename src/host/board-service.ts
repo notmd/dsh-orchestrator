@@ -29,7 +29,8 @@ import { deriveStatus, prStatusFacts, sessionFacts } from '../contract/status.ts
 import { archiveSheet, groupIntoLanes, orderCards, presentCard } from '../board/presentation.ts'
 import type { BoardCard, BoardCardView } from '../board/presentation.ts'
 import { normalizeIssue } from '../domain/issues.ts'
-import { normalizeWorker, workerSessionTitle } from '../domain/workers.ts'
+import { WorkerPhase, normalizeWorker, workerSessionTitle } from '../domain/workers.ts'
+import type { Worker } from '../domain/workers.ts'
 import { snapshotKey } from './observer-service.ts'
 import { changesRequestedCycles, summarizeReviewRuns } from '../review/runs.ts'
 import type { ReviewRun } from '../review/runs.ts'
@@ -62,6 +63,28 @@ export interface BoardSnapshot {
     archive: BoardCardView[]
   }
   counts: { total: number; needsAttention: number; byLane: Record<string, number> }
+}
+
+/**
+ * The card's activity: the protocol's explicit blockage FIRST, live status as fallback.
+ *
+ * R9 is explicit about the order -- "the protocol tool makes blockage explicit; inference
+ * is a fallback, never the primary signal" -- and getting it backwards enables R20, which
+ * is rated High: a worker waiting on a person whose session is quiet would be inferred
+ * `idle`, then demoted to `No signal` once the grace elapsed, and the card would SILENTLY
+ * leave `Needs you` **while the question was still unanswered**.
+ *
+ * `AgentStatus` cannot carry this. It is only `idle | running`, so a session waiting on a
+ * person is indistinguishable from an idle one at that level -- which is precisely why the
+ * protocol records the question.
+ */
+export function cardActivity(
+  worker: Worker,
+  activityOf?: BoardDeps['activityOf'],
+): 'active' | 'idle' | 'blocked' | 'waiting_input' | 'exited' | 'unknown' {
+  if (worker.pendingQuestion !== undefined) return 'waiting_input'
+  if (worker.phase === WorkerPhase.awaitingHuman) return 'blocked'
+  return activityOf?.(worker.id) ?? 'unknown'
 }
 
 /** Maps a stored PR snapshot onto the reducer's facts. */
@@ -250,7 +273,7 @@ export async function buildBoard(deps: BoardDeps): Promise<BoardSnapshot> {
       issueNumber: issue?.number ?? 0,
       prs: toPrFacts(snapshotByWorker.get(worker.id), workerRuns, bounds),
       ...(review ? { review } : {}),
-      activity: deps.activityOf?.(worker.id) ?? 'unknown',
+      activity: cardActivity(worker, deps.activityOf),
       config: deps.config,
       now,
     })

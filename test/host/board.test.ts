@@ -10,7 +10,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { buildBoard, buildCard, laneOf, renderBoard, reviewEvidence, toPrFacts } from '../../src/host/board-service.ts'
+import { buildBoard, buildCard, cardActivity, laneOf, renderBoard, reviewEvidence, toPrFacts } from '../../src/host/board-service.ts'
 import { BOARD_ROUTE_PATH, createBoardRoute, handleBoardRequest } from '../../src/host/board-route.ts'
 import { presentCard } from '../../src/board/presentation.ts'
 import type { BoardDeps } from '../../src/host/board-service.ts'
@@ -553,4 +553,65 @@ test('a card with no review omits the field rather than inventing one', () => {
   })
   const view = presentCard(card, { now: NOW, noSignalGraceMs: CONFIG.noSignalGraceMs })
   assert.equal(view.review, undefined)
+})
+
+
+// ---------------------------------------------------------------------------
+// R9 / R20 — the protocol's blockage is primary, not inferred
+// ---------------------------------------------------------------------------
+
+test('the card reads the protocol\'s blockage, not the live status', () => {
+  const blocked = worker({ pendingQuestion: { id: 'q1', text: 'which branch?', at: 1 } })
+  assert.equal(cardActivity(blocked, () => 'idle'), 'waiting_input', 'the question outranks an idle inference')
+  assert.equal(cardActivity(worker({ phase: WorkerPhase.awaitingHuman }), () => 'idle'), 'blocked')
+  assert.equal(cardActivity(worker(), () => 'active'), 'active', 'with no explicit blockage, the live status is used')
+  assert.equal(cardActivity(worker()), 'unknown', 'and with no live status either, unknown -- not idle')
+})
+
+test('R20: a waiting worker does NOT decay out of Needs you, however quiet it is', () => {
+  // Rated High. The failure: a worker waiting on a person whose session went quiet is
+  // inferred `idle`, then demoted to `No signal` once the grace elapsed -- so the card
+  // SILENTLY leaves `Needs you` while the question is still unanswered.
+  const longQuiet = worker({
+    pendingQuestion: { id: 'q1', text: 'which branch?', at: 1 },
+    lastSignalAt: NOW - 10 * 60_000,
+  })
+  const card = buildCard({
+    worker: longQuiet,
+    issueTitle: 'Waiting',
+    issueNumber: 4,
+    prs: [],
+    activity: 'waiting_input',
+    config: CONFIG,
+    now: NOW,
+  })
+  assert.equal(card.status, SessionStatus.needsInput, 'the question survives the clock')
+  const view = presentCard(card, { now: NOW, noSignalGraceMs: CONFIG.noSignalGraceMs })
+  assert.notEqual(view.displayStatus, DisplayStatus.noSignal, 'and the card is not demoted to No signal')
+  assert.equal(view.needsAttention, true, 'so it stays in Needs you')
+})
+
+test('the board applies that precedence when it builds cards, not just when asked', async () => {
+  // The unit above could pass while `buildBoard` still used the raw live status, so this
+  // asserts the wiring: a blocked worker reads as blocked even though the live handle says
+  // idle, which is what `AgentStatus` always says for a session waiting on a person.
+  const store = createMemoryFactStore()
+  await store.issues.put('iss-0', {
+    id: 'iss-0', number: 1, repoId: 'repo-1', title: 'Waiting', state: 'in_progress', workerId: 'wrk-1',
+    createdAt: 1, updatedAt: 1,
+  })
+  await store.workers.put('wrk-1', {
+    id: 'wrk-1', issueId: 'iss-0', sessionId: 's', branch: 'b', worktreePath: '/p', workspaceId: 'w',
+    phase: WorkerPhase.implementing, phaseHistory: [],
+    pendingQuestion: { id: 'q1', text: 'which branch?', at: 1 },
+    lastSignalAt: NOW - 10 * 60_000, createdAt: 1, updatedAt: 1,
+  })
+  const board = await buildBoard({
+    store: lazyFactStore(async () => store), config: CONFIG, now: () => NOW, activityOf: () => 'idle',
+  })
+  const card = Object.values(board.lenses.lanes).flat()[0]!
+  // Asserted on the PRESENTED card, because that is what a reader sees: the activity is
+  // an internal fact and the view does not carry it.
+  assert.notEqual(card.displayStatus, DisplayStatus.noSignal, 'not demoted, though the session is long quiet')
+  assert.equal(card.needsAttention, true, 'and it is surfaced as needing a person')
 })
