@@ -33,6 +33,7 @@ import { buildOrchestratorTools } from './host/tools.ts'
 import { createRunCommand } from './host/exec.ts'
 import { createSpawnDeps } from './host/spawn-deps.ts'
 import { createLiveWorkers } from './host/handle-registry.ts'
+import { OUTBOX_TICK_MS, deliverPendingReports } from './host/outbox-service.ts'
 import { lazyFactStore, openFactStore } from './host/store.ts'
 import { FACT_SCHEMAS } from './host/schemas.ts'
 
@@ -94,11 +95,39 @@ export function apply(ctx: HostContext, config?: PluginConfigInput): PluginConfi
     () => {
       const disposers: Array<() => void> = []
       const tools = buildOrchestratorTools({ config: resolved, run, store, spawn, live })
+
+      // The outbox tick. Reports accumulate in storage and are delivered on their
+      // own schedule (PRD §10.5), so a worker reporting three times does not
+      // interrupt the orchestrator three times.
+      const tick = setInterval(() => {
+        void deliverPendingReports({
+          store,
+          agents: ctx.agentRegistry,
+          userMessage: spawn.userMessage,
+          bounds: {
+            batchFallbackMs: resolved.reportBatchFallbackMs,
+            settlementWindowMs: resolved.reportSettlementWindowMs,
+            interruptWindowMs: resolved.reportInterruptWindowMs,
+          },
+        })
+          .then((outcome) => {
+            for (const error of outcome.errors) {
+              log(ctx, 'warn', `${name}: delivering reports for ${error.workerId} failed: ${error.message}`)
+            }
+          })
+          .catch((error: unknown) => {
+            // A delivery pass must never take the host down.
+            log(ctx, 'warn', `${name}: the report outbox pass failed: ${String(error)}`)
+          })
+      }, OUTBOX_TICK_MS)
+      // Do not hold the process open for a delivery tick.
+      tick.unref?.()
       for (const tool of tools) {
         disposers.push(ctx.tools.register(tool as never))
       }
       log(ctx, 'info', `${name}: registered ${tools.length} orchestrator tool(s)`)
       return () => {
+        clearInterval(tick)
         for (const dispose of disposers) dispose()
         // A9: unloading leaves sessions and worktrees INTACT. Disposing an agent
         // handle stops and removes its session, so this drops the references and

@@ -78,6 +78,11 @@ function fakeContext(): HostContext & {
     sessionTitle: {
       rename() {},
     },
+    agentRegistry: {
+      get() {
+        return undefined
+      },
+    },
     tools: {
       register(tool) {
         registered.push(tool as ToolDescriptor<never, unknown>)

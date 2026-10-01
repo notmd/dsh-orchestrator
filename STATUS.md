@@ -9,9 +9,9 @@ bloated status file costs the next agent more than it saves.
 |---|---|
 | **Goal** | Implement [PRD.md](PRD.md) |
 | **Plan source** | [PRD.md §16 Milestones](PRD.md#16-milestones), verified against [docs/dsh-plugin-contract.md](docs/dsh-plugin-contract.md) |
-| **Last updated** | 2026-10-01, chunk 6l (worker control) |
+| **Last updated** | 2026-10-01, chunk 6m (the outbox delivers) |
 | **Verify** | `npm run verify` → `tsc` (src + test) + `node --test` + build · **all green** |
-| **Current state** | **585 tests, 0 type errors. Nine tools are live.** A worker can now be started, reported on, messaged and stopped — the control-room loop exists, minus delivery. The board's read model, configuration, the host plane's low-level layers (spawn, worktree, exec, GitHub access), **persistence, and the repository preflight** are done and verified — worktrees against real git, activation in a real GUI. **The storage question is settled** (see decisions 20–21). Still missing: **wiring the outbox's delivery** (the policy is written and tested but nothing calls it yet, so reports accumulate undelivered), restricting `orchestrator_report` to worker sessions, the PR observer, the routes, the client half. The next step is 6m. |
+| **Current state** | **594 tests, 0 type errors. Nine tools are live, and the control-room loop is closed:** a worker is started, reports, is messaged, is stopped, and its reports reach the orchestrator session on the outbox's own schedule. The board's read model, configuration, the host plane's low-level layers (spawn, worktree, exec, GitHub access), **persistence, and the repository preflight** are done and verified — worktrees against real git, activation in a real GUI. **The storage question is settled** (see decisions 20–21). Still missing: the PR observer, restricting `orchestrator_report` to worker sessions, the routes, and the client half. The next step is 6n. |
 
 ---
 
@@ -42,6 +42,7 @@ everything else inherits.
 | 6d | **The worktree manager** — branch naming, `.dsho/worktrees`, add/remove/list, porcelain parsing, `check-ignore` preflight | 28 unit + **12 real-git subtests** |
 | 6e | **The command seam** — argv over `ctx.subprocess`, bounded in time and output, failure classification | 33 tests |
 | 6f | **GitHub credential chain** (`AO_GITHUB_TOKEN` → `GITHUB_TOKEN` → `gh auth token`) and every `gh`/`git` argv | 30 tests |
+| 6m | **The outbox delivers.** A tick calls `planDelivery` and delivers each batch into the session that created the issue, via `ctx.agents.get()` — reached through the registry, not an owned handle, because the plugin does not own the user's session. Claim-before-send, with the claim released on failure | 9 tests |
 | 6l | **Worker control.** `orchestrator_worker_message` / `_stop` over a **live handle registry** — the in-process cache of `AgentHandle`s that `spawnWorker` returns and `worker_start` used to discard | 9 tests |
 | 6k | **The worker report protocol.** `orchestrator_report` (PRD §12.2) with the `Report` record, the outbox's delivery **policy** (§10.5) as a pure function, note truncation that is marked rather than silent, and PR binding on `pr_created` | 25 tests |
 | 6j | **`orchestrator_worker_start`** — the moment three separately-verified layers meet: `WorktreeManager` (real git) → `spawnWorker` (real host, spike 2) → `assignWorker`. Plus the **worker contract** (PRD §12.4), the `Worker` record and its phases (§7.3/§5.2), and per-repo issue **numbers** | 27 tests |
@@ -134,6 +135,12 @@ canonicalization: **a fake cannot catch a wrong API, because it implements whate
 interface the author imagined.** The tests were green throughout — which is why the
 fix was verified against reality rather than against another fake.
 
+**Delivery goes through `ctx.agents.get()`, not an owned handle.** The plugin owns
+handles for sessions it spawned, but the orchestrator session is the **user's** — so
+it is reached through the agent registry instead. That is also why delivery keeps
+working across a plugin reload, and why a worker's report can land in a session the
+plugin never created.
+
 **Read the cause, do not invent it.** `Agent.cancel()` takes `AgentCancelCause`, which
 is `{ kind: 'user' } | { kind: 'parent' } | { kind: 'hook', reason } | { kind: 'disposed' }`
 — so **only `hook` carries a reason**. A `reason` on a user cancellation would be an
@@ -183,7 +190,7 @@ happened. Read the log after the session closes, or watch the GUI.
 | Chunk | Work | PRD | Why now |
 |---|---|---|---|
 | 6g\.2 | **Wire `orchestrator_repo_connect` as a tool.** The preflight and the store both exist and are tested; what is missing is the wiring. It needs `inject` to gain `subprocess` and `storage`, and **`apply()` to become async** (opening the store is async), which is why it is its own step rather than a footnote — that change also touches the activation tests. | §12.1 | Makes the second real tool live, and proves the store against a real backend rather than a fake. |
-| 6m | **Wire the outbox's delivery** — call `planDelivery` on a tick and deliver the batch into the orchestrator session, with a durable `lastInterruptAt` per worker. | §10.5 | The policy is written and tested but nothing calls it, so reports accumulate undelivered. |
+| 6n | **The PR observer** — poll `gh pr view --json` per live worker, diff against the stored snapshot, emit fact changes. Invariants: a failed observation keeps the prior **and can never fabricate a closed/merged transition** (R13), rate limits back off deterministically, and `gh` calls are serialised per repo. | §7.4, §10.2 | Without it a card never leaves Building, so the board is still a queue rather than a board. |
 | 6l2 | **Restrict `orchestrator_report` to worker sessions** via `ctx.tools.restrict()` on the worker agent's ctx (Appendix A3.5), so a non-worker never sees it. Today it is registered globally and *refuses* at runtime, which is functionally equivalent but not the same as not offering it. | §12.2, A3.5 | Cheap, and it is the difference between "cannot" and "must not". |
 | 6k | **`orchestrator_worker_message` / `_stop` / `_attach_pr`**, and the `Worker` record itself (PRD §7.3: phase, phaseHistory, pendingQuestion, lastSignalAt). | §7.3, §12.1 | Needs the worker record, which `worker_start` will have shown the shape of. |
 | 6l | **`GitHubGateway` + `PrObserver`** — poll `gh pr view --json`, diff against the stored snapshot. A failed observation keeps the prior snapshot and can never fabricate a closed/merged transition (R13). | §7.4, §10.2 | The board is only truthful if the facts are. |

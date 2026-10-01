@@ -19,6 +19,18 @@ import type { SubprocessLike } from './exec.ts'
 import type { DomainFacilityLike } from './store.ts'
 import type { SpawnServices } from './spawn-deps.ts'
 
+/**
+ * The agent registry, as far as delivery is concerned.
+ *
+ * `get(id)` is how the plugin reaches a session it does **not** own — the user's
+ * orchestrator session. Owning a handle is only possible for sessions the plugin
+ * spawned; the user's session is reached through the registry instead, which is
+ * also why delivery survives a plugin reload.
+ */
+export interface AgentRegistryLike {
+  get(id: string): { followup(message: unknown): void } | undefined
+}
+
 /** The tool registry, as far as this plugin is concerned. */
 export interface ToolRegistryLike {
   /**
@@ -40,6 +52,8 @@ export interface ToolRegistryLike {
  */
 export interface HostContext extends SpawnServices {
   tools: ToolRegistryLike
+  /** Live-agent lookup, for delivering into a session the plugin does not own. */
+  agentRegistry: AgentRegistryLike
   /**
    * The subprocess capability seam, for git and `gh`.
    *

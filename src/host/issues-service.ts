@@ -102,6 +102,8 @@ export async function createIssueForTool(
     priority?: IssuePriority
     labels?: readonly string[]
     createdBy?: IssueCreator
+    /** The calling session, captured by the tool for report delivery. */
+    sourceSessionId?: string
   },
 ): Promise<string> {
   let store: Awaited<ReturnType<LazyFactStore['get']>>
@@ -120,6 +122,9 @@ export async function createIssueForTool(
     issue = createIssue(
       {
         repoId: resolved.repoId,
+        // The session that asked for the issue is where its worker's reports are
+        // delivered. Without it there is nowhere for a report to land.
+        ...(args.sourceSessionId ? { sourceSessionId: args.sourceSessionId } : {}),
         // `max + 1`, so a cancelled issue keeps its number and two issues can never
         // share the `#3` in a session title or a branch.
         number: nextIssueNumber(existing, resolved.repoId),
