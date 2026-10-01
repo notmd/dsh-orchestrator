@@ -26,12 +26,13 @@ import {
   showStatusLoader,
 } from '../../src/board/presentation.ts'
 import { DisplayStatus, KANBAN_LANES, KanbanColumn } from '../../src/contract/kanban.ts'
+import type { BoardCard } from '../../src/board/presentation.ts'
 import { SessionStatus } from '../../src/contract/status.ts'
 
 const NOW = 10_000_000
 const GRACE = 90_000
 
-function card(overrides) {
+function card(overrides: Partial<BoardCard> = {}): BoardCard {
   return { id: 'c1', sessionId: 's1', title: 'Fix the flaky auth test', updatedAt: 1, ...overrides }
 }
 
@@ -240,7 +241,7 @@ test('A29 — the order does not depend on input order, so a no-op refresh canno
   ]
   const first = orderCards(cards).map((c) => c.id)
   const second = orderCards([...cards].reverse()).map((c) => c.id)
-  const third = orderCards([cards[1], cards[2], cards[0]]).map((c) => c.id)
+  const third = orderCards([cards[1]!, cards[2]!, cards[0]!]).map((c) => c.id)
   assert.deepEqual(first, second)
   assert.deepEqual(first, third)
   assert.deepEqual(first, ['c', 'a', 'b'])
@@ -259,7 +260,7 @@ test('A29 — the input array is not mutated', () => {
 test('R22 — a blocked worker flips above freshly-updated idle ones', () => {
   const idle = [1, 2, 3].map((i) => card({ id: `idle-${i}`, updatedAt: 1000 + i, displayStatus: DisplayStatus.awaitingPr }))
   const blocked = card({ id: 'blocked', updatedAt: 1, displayStatus: DisplayStatus.blocked })
-  assert.equal(orderCards([...idle, blocked])[0].id, 'blocked')
+  assert.equal(orderCards([...idle, blocked])[0]!.id, 'blocked')
 })
 
 // ---------------------------------------------------------------------------
@@ -269,7 +270,7 @@ test('R22 — a blocked worker flips above freshly-updated idle ones', () => {
 test('presentCard runs the reducer and reports every derived field', () => {
   const view = presentCard(
     card({
-      prs: [{ url: 'pr/1', updateAt: 0 }],
+      prs: [{ url: 'pr/1', updatedAt: 0 }],
       autoReview: true,
       requireHumanApprovalBeforeReady: true,
       activity: 'idle',
@@ -330,7 +331,7 @@ test('A30 — the board is four lanes and archive is not one of them', () => {
   const lanes = groupIntoLanes(views)
   assert.deepEqual(Object.keys(lanes).sort(), [...KANBAN_LANES].sort())
   assert.equal(lanes[KanbanColumn.building].length, 1)
-  assert.equal(lanes[KanbanColumn.building][0].id, 'a')
+  assert.equal(lanes[KanbanColumn.building][0]!.id, 'a')
   assert.equal(lanes[KanbanColumn.archive], undefined)
 
   assert.deepEqual(archiveSheet(views).map((v) => v.id), ['term'])

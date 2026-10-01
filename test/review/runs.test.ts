@@ -12,6 +12,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
+import type { ReviewRun } from '../../src/review/runs.ts'
 import {
   REVIEW_BOUND_DEFAULTS,
   ReviewRunStatus,
@@ -30,7 +31,7 @@ const HEAD_A = 'sha-a'
 const HEAD_B = 'sha-b'
 const PR = 'pr/1'
 
-function run(overrides) {
+function run(overrides: Partial<ReviewRun> = {}): ReviewRun {
   return {
     workerId: 'wrk-1',
     prUrl: PR,
@@ -62,7 +63,9 @@ test('an empty head SHA selects nothing', () => {
 })
 
 test("the aggregation carries the reference's shape: present/running/outcome/failed/cancelled", () => {
-  const cases = [
+  const cases: ReadonlyArray<
+    readonly [string, Partial<ReviewRun>, Record<string, boolean>]
+  > = [
     [
       'a settled pass with no verdict is present but has no outcome',
       { status: ReviewRunStatus.complete, verdict: ReviewVerdict.none },
@@ -102,7 +105,7 @@ test("the aggregation carries the reference's shape: present/running/outcome/fai
   for (const [name, overrides, expected] of cases) {
     const facts = summarizeReviewRuns({ runs: [run(overrides)], headSha: HEAD_A })
     for (const [key, value] of Object.entries(expected)) {
-      assert.equal(facts[key], value, `${name}: ${key}`)
+      assert.equal((facts as unknown as Record<string, unknown>)[key], value, `${name}: ${key}`)
     }
   }
 })
@@ -172,7 +175,7 @@ test('changesRequestedCycles ignores approving passes', () => {
 })
 
 test('A18 — the round budget trips at maxReviewRounds', async (t) => {
-  const cycle = (i) => run({ headSha: `sha-${i}`, round: i, verdict: ReviewVerdict.changesRequested })
+  const cycle = (i: number): ReviewRun => run({ headSha: `sha-${i}`, round: i, verdict: ReviewVerdict.changesRequested })
 
   await t.test('two cycles of three is not exhausted', () => {
     const facts = summarizeReviewRuns({ runs: [cycle(1), cycle(2)], headSha: 'sha-2' })
@@ -253,7 +256,7 @@ test('summarizeReviewRuns produces reducer-shaped facts with no missing fields',
     'roundBudgetExhausted',
     'failedRetryLimitReached',
   ]) {
-    assert.equal(typeof facts[key], 'boolean', `${key} must be a boolean`)
+    assert.equal(typeof (facts as unknown as Record<string, unknown>)[key], 'boolean', `${key} must be a boolean`)
   }
 })
 

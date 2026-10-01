@@ -444,7 +444,12 @@ export function evaluateSession(input: EvaluateInput): EvaluateResult {
  * consume the auto-retry budget (PRD §7.5).
  */
 export function evaluateManualRequest(input: {
-  prs: readonly PRFactsForPlan[] | undefined | null
+  /**
+   * The PRs to consider. Optional: a worker with no PRs at all is a real state,
+   * and the honest answer for it is `no_pr` rather than a type error at a call
+   * site that has nothing to pass.
+   */
+  prs?: readonly PRFactsForPlan[] | undefined | null
   prUrl?: string
   headSha?: string
 }): { trigger: boolean; reason: string; headsToReview: string[] } {

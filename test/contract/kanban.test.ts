@@ -23,13 +23,18 @@ import {
   prFacts,
 } from '../../src/contract/kanban.ts'
 import { sessionFacts } from '../../src/contract/status.ts'
+import type { KanbanSessionFacts, SessionFactsInput } from '../../src/contract/status.ts'
+import type { KanbanPRFactsInput } from '../../src/contract/kanban.ts'
 
 /** Asserts only the stage-one placement, exactly as AO's `deriveColumn` does. */
-function deriveColumn(session, prs) {
+function deriveColumn(
+  session: SessionFactsInput,
+  prs?: readonly KanbanPRFactsInput[] | undefined,
+): KanbanColumn {
   return deriveKanbanPresentation(sessionFacts(session), (prs ?? []).map(prFacts), 0, 0).column
 }
 
-function sessionAt(activity) {
+function sessionAt(activity: string): KanbanSessionFacts {
   return sessionFacts({ activity })
 }
 
@@ -61,7 +66,12 @@ test('deriveKanbanColumn: session-level rules', async (t) => {
 })
 
 test('deriveKanbanColumn: single PR', async (t) => {
-  const cases = [
+  const cases: ReadonlyArray<{
+    name: string
+    session?: SessionFactsInput
+    pr: KanbanPRFactsInput
+    want: KanbanColumn
+  }> = [
     { name: 'draft is validation work', pr: { url: 'pr/1', draft: true }, want: KanbanColumn.validating },
     { name: 'merged is ready', pr: { url: 'pr/1', merged: true }, want: KanbanColumn.ready },
     { name: 'closed without merge is ready', pr: { url: 'pr/1', closed: true }, want: KanbanColumn.ready },
@@ -207,7 +217,7 @@ test('deriveKanbanColumn: single PR', async (t) => {
   ]
   for (const tc of cases) {
     await t.test(tc.name, () => {
-      assert.equal(deriveColumn(tc.session, [tc.pr]), tc.want)
+      assert.equal(deriveColumn(tc.session ?? {}, [tc.pr]), tc.want)
     })
   }
 })
@@ -259,14 +269,14 @@ test('deriveKanbanColumn: multiple PRs', async (t) => {
       { url: 'pr/a', draft: true, updatedAt: older },
     ]
     const first = deriveColumn({}, prs)
-    const second = deriveColumn({}, [prs[1], prs[0]])
+    const second = deriveColumn({}, [prs[1]!, prs[0]!])
     assert.equal(first, second, 'order-independent')
     assert.equal(first, KanbanColumn.validating)
   })
 })
 
 test('deriveKanbanPresentation: building', async (t) => {
-  const cases = [
+  const cases: ReadonlyArray<readonly [string, KanbanSessionFacts, DisplayStatus]> = [
     ['active worker is working', sessionAt('active'), DisplayStatus.working],
     ['blocked worker is blocked', sessionAt('blocked'), DisplayStatus.blocked],
     ['a worker waiting on input is blocked', sessionAt('waiting_input'), DisplayStatus.blocked],

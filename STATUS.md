@@ -9,9 +9,9 @@ bloated status file costs the next agent more than it saves.
 |---|---|
 | **Goal** | Implement [PRD.md](PRD.md) |
 | **Plan source** | [PRD.md §16 Milestones](PRD.md#16-milestones), verified against [docs/dsh-plugin-contract.md](docs/dsh-plugin-contract.md) |
-| **Last updated** | 2026-10-01, chunk 5 (TypeScript migration) |
-| **Verify** | `npm run verify` → typecheck (src) + `node --test` + build |
-| **Current state** | **All first-party source is TypeScript.** 342 tests pass, `src/` typechecks with **0 errors**, and `npm run build` emits `dist/`. M0 spike 1 is done (the panel seat is proven). No host half or client half exists yet. |
+| **Last updated** | 2026-10-01, chunk 5e (type-clean) |
+| **Verify** | `npm run verify` → typecheck (src) + `node --test` + build · **all three green** |
+| **Current state** | **All first-party source and tests are TypeScript and fully type-clean.** 342 tests pass; `tsc` reports **0 errors across `src/` *and* `test/`**; `npm run build` emits `dist/`. M0 spike 1 is done (the panel seat is proven). No host half or client half exists yet. |
 
 ---
 
@@ -94,27 +94,15 @@ Chunk numbers are this file's own; milestone letters are the PRD's.
 
 | Chunk | Work | PRD | Why now |
 |---|---|---|---|
-| 5e | **🔧 Fence repair: make the test files type-clean.** `src/` is clean, but `npm run typecheck:all` reports **105 errors, all in `test/**`**. Nothing is broken at runtime — `node --test` strips types without checking — but the codebase should be type-clean end to end. | — | Small, bounded, and it should be done before more code lands on top. Inventory below. |
 | 6 | **Host half**: `src/index.ts` → `apply()`; `OrchestratorService` over `ctx.storageDomain`; `WorkerSpawner` using the exact `ctx.agents.create()` recipe; `WorktreeManager`; `GitHubGateway` over `ctx.subprocess` + `gh`; `PrObserver` loop; the tool table; `/dsho/api/*` + `/dsho/events` on `ctx.webServer`. | §6, §12, M1 | The first code that needs a live profile. |
 | 7 | **Client half**: `src/client/**/*.ts` → `dist/client.js` in the `window.__ModuleLoader__` **classic-script** form, plus the `sidebar.panellist` row and the `main` keyed panel, lanes/cards/inspector, themes, locale, keyboard access. | §11, M2 | Needs the routes from chunk 6. |
 | 8 | **M0 spikes 2–4**: `ctx.agents.create()` outside `dsh-webhook`; `attachSession` against a worktree; a `/dsho/api/*` route + SSE from a slot component. | §16 | Spike 1 is done; these are the remaining unknowns. |
+| 9 | **Feedback classification** (actionability, bot detection by `__typename`/`User.Type` never a login substring, per-comment dedup, re-arm only on a definitive clear) and the **report outbox** (§10.5, A23). | §10.3, §10.5 | M4's logic, testable offline. Can be interleaved with 6. |
 
-### 5e inventory — the 105 test-file type errors
-
-Grouped by cause, with the fix for each. **Do not "fix" these by weakening
-`tsconfig.json`** for `src/`; the strictness there is doing real work.
-
-| Count | Cause | Fix |
-|---|---|---|
-| ~33 | Test data tables declared as tuple arrays, so TS infers `string \| X \| Y`. | Annotate each `cases` array: `const cases: ReadonlyArray<[string, SessionFactsInput, KanbanColumn]> = [...]`. |
-| ~25 | Deliberately-invalid input to `normalizePluginConfig` / `normalizeRepoConfig` / `evaluateSession`. The values are *meant* to violate the type. | Add one helper per test file — `const bad = <T>(value: unknown): T => value as T` — and wrap those call sites. This is the honest way: the cast is visible and local to the assertion about runtime validation. |
-| ~16 | `noUncheckedIndexedAccess`: `positions.get('parent').blocked`, `orderCards(...)[0].id`. | Append `!` or `?.` at the assertion site. Tests index arrays by construction. |
-| ~15 | Fixture builders with implicit-`any` params: `function card(overrides)`, `run(overrides)`, `readerReturning(body)`. | Annotate the params with the input types the modules already export (`KanbanPRFactsInput`, `Partial<ReviewRun>`, `string`). |
-| ~12 | `evaluate({})` / `evaluate({ prs })` in `planner.test.ts`: the local helper requires every field. | Change the helper's parameter to `Partial<EvaluateInput>` and fill `session`/`prs`/`runs`/`now` with defaults. This one change likely removes most of the remaining errors. |
-| ~5 | Object literals with a deliberately-wrong property (`{ install: 'pnpm i' }` into `postCreate`). | `bad(...)` cast, same as above. |
-
-Re-run `npm run typecheck:all` after each file; the errors are independent per
-file, so they can be fixed and verified one at a time.
+**Recommended next step: chunk 6.** `src/index.ts` is the last piece that makes the
+package installable at all, and both the build and the install path are now
+verified: `npm run build` → `dsh plugin --profile web add <dir>` → the harness in
+[docs/verification-harness.md](docs/verification-harness.md).
 
 ### ✅ M0 spike 1 DONE — the panel seat is proven, and R1 is closed
 

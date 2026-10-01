@@ -30,12 +30,20 @@ import {
   plan,
 } from '../../src/review/planner.ts'
 import { ReviewRunStatus, ReviewTriggerSource, ReviewVerdict } from '../../src/review/runs.ts'
+import type { ReviewBounds, ReviewRun } from '../../src/review/runs.ts'
+import type {
+  EvaluateInput,
+  EvaluateResult,
+  GateSession,
+  PRFactsForPlan,
+  PRReviewState,
+} from '../../src/review/planner.ts'
 
 const NOW = 10_000_000
 const PR = 'https://github.com/o/r/pull/1'
 
 /** A worker that is idle and has been for longer than the threshold. */
-function idleWorker(overrides) {
+function idleWorker(overrides: GateSession = {}): GateSession {
   return {
     autoReview: true,
     kind: 'worker',
@@ -47,11 +55,11 @@ function idleWorker(overrides) {
   }
 }
 
-function openPr(overrides) {
+function openPr(overrides: Partial<PRFactsForPlan> = {}): PRFactsForPlan {
   return { url: PR, number: 1, title: 'Fix the flaky auth test', headSha: 'sha-1', ...overrides }
 }
 
-function run(overrides) {
+function run(overrides: Partial<ReviewRun> = {}): ReviewRun {
   return {
     workerId: 'wrk-1',
     prUrl: PR,
@@ -63,14 +71,37 @@ function run(overrides) {
   }
 }
 
-function evaluate({ session, prs, runs, bounds }) {
+/**
+ * Evaluates a session, defaulting everything the case does not care about.
+ *
+ * `Partial<EvaluateInput>` is what keeps the cases readable: most of them vary a
+ * single fact, and requiring all four would bury that fact under ceremony.
+ */
+function evaluate(partial: Partial<EvaluateInput> = {}): EvaluateResult {
   return evaluateSession({
-    session: idleWorker(session),
-    prs: prs ?? [openPr()],
-    runs: runs ?? [],
+    session: idleWorker(partial.session),
+    prs: partial.prs ?? [openPr()],
+    runs: partial.runs ?? [],
     now: NOW,
-    bounds,
+    ...(partial.bounds ? { bounds: partial.bounds } : {}),
   })
+}
+
+/**
+ * The single plan row a one-PR case is about.
+ *
+ * `noUncheckedIndexedAccess` makes a destructured `const [state] = plan(...)`
+ * `PRReviewState | undefined`, which is correct in general and noise for a case
+ * that passed exactly one PR. The assertion narrows the type and states the
+ * expectation at the same time.
+ */
+function firstPlan(
+  prs: readonly PRFactsForPlan[],
+  runs: readonly ReviewRun[] = [],
+): PRReviewState {
+  const [state] = plan(prs, runs)
+  assert.ok(state, 'expected the plan to contain one row')
+  return state
 }
 
 // ---------------------------------------------------------------------------
@@ -78,42 +109,42 @@ function evaluate({ session, prs, runs, bounds }) {
 // ---------------------------------------------------------------------------
 
 test('plan: a head with no pass is needs_review', () => {
-  const [state] = plan([openPr()], [])
+  const state = firstPlan([openPr()], [])
   assert.equal(state.status, AOReviewState.needsReview)
   assert.equal(state.targetSha, 'sha-1')
   assert.equal(state.latestRun, undefined)
 })
 
 test('plan: a running pass on the head is running', () => {
-  const [state] = plan([openPr()], [run({ status: ReviewRunStatus.running })])
+  const state = firstPlan([openPr()], [run({ status: ReviewRunStatus.running })])
   assert.equal(state.status, AOReviewState.running)
 })
 
 test('plan: an approving pass makes the head up_to_date', () => {
-  const [state] = plan([openPr()], [run({ verdict: ReviewVerdict.approved })])
+  const state = firstPlan([openPr()], [run({ verdict: ReviewVerdict.approved })])
   assert.equal(state.status, AOReviewState.upToDate)
 })
 
 test('plan: a changes-requested pass is changes_requested', () => {
-  const [state] = plan([openPr()], [run({ verdict: ReviewVerdict.changesRequested })])
+  const state = firstPlan([openPr()], [run({ verdict: ReviewVerdict.changesRequested })])
   assert.equal(state.status, AOReviewState.changesRequested)
 })
 
 test('plan: a failed pass leaves the head needing review, not finished', () => {
   // The reference maps failed and cancelled to needs_review: the pass owed to the
   // PR has not happened, so the head is still owed one.
-  const [state] = plan([openPr()], [run({ status: ReviewRunStatus.failed })])
+  const state = firstPlan([openPr()], [run({ status: ReviewRunStatus.failed })])
   assert.equal(state.status, AOReviewState.needsReview)
   assert.equal(state.latestRun?.status, ReviewRunStatus.failed)
 })
 
 test('plan: a cancelled pass leaves the head needing review', () => {
-  const [state] = plan([openPr()], [run({ status: ReviewRunStatus.cancelled })])
+  const state = firstPlan([openPr()], [run({ status: ReviewRunStatus.cancelled })])
   assert.equal(state.status, AOReviewState.needsReview)
 })
 
 test('plan: merged, closed, and head-less PRs are ineligible', async (t) => {
-  const cases = [
+  const cases: ReadonlyArray<readonly [string, PRFactsForPlan]> = [
     ['a merged pr', openPr({ merged: true })],
     ['a closed pr', openPr({ closed: true })],
     ['a pr with no head sha', openPr({ headSha: '' })],
@@ -121,7 +152,7 @@ test('plan: merged, closed, and head-less PRs are ineligible', async (t) => {
   ]
   for (const [name, pr] of cases) {
     await t.test(name, () => {
-      const [state] = plan([pr], [])
+      const state = firstPlan([pr], [])
       assert.equal(state.status, AOReviewState.ineligible)
     })
   }
@@ -130,14 +161,14 @@ test('plan: merged, closed, and head-less PRs are ineligible', async (t) => {
 test('plan: a draft PR is NOT ineligible — it plans a pass', () => {
   // Ineligibility is about the PR being un-reviewable at all. A draft is
   // reviewable; `draft_pr` is a *skip* reason the coordinator applies later.
-  const [state] = plan([openPr({ draft: true })], [])
+  const state = firstPlan([openPr({ draft: true })], [])
   assert.equal(state.status, AOReviewState.needsReview)
 })
 
 test('plan: only the latest run per (pr, head) is consulted', () => {
   const older = run({ verdict: ReviewVerdict.changesRequested, createdAt: 1 })
   const newer = run({ verdict: ReviewVerdict.approved, createdAt: 2 })
-  const [state] = plan([openPr()], [older, newer])
+  const state = firstPlan([openPr()], [older, newer])
   assert.equal(state.status, AOReviewState.upToDate)
   assert.equal(state.latestRun, newer)
 })
@@ -146,7 +177,7 @@ test('plan: a superseded head is reported as previousRun context', () => {
   // A16: the run for the earlier head is history. It is shown, and it decides
   // nothing.
   const runs = [run({ headSha: 'sha-0', verdict: ReviewVerdict.changesRequested, createdAt: 5 })]
-  const [state] = plan([openPr()], runs)
+  const state = firstPlan([openPr()], runs)
   assert.equal(state.status, AOReviewState.needsReview, 'the current head is unreviewed')
   assert.equal(state.previousRun?.headSha, 'sha-0')
 })
@@ -156,7 +187,7 @@ test('plan: an unattributable run is dropped, not misfiled onto a head', () => {
     run({ prUrl: '', headSha: 'sha-1', verdict: ReviewVerdict.approved }),
     run({ prUrl: PR, headSha: '', verdict: ReviewVerdict.approved }),
   ]
-  const [state] = plan([openPr()], runs)
+  const state = firstPlan([openPr()], runs)
   assert.equal(state.status, AOReviewState.needsReview)
 })
 
@@ -181,7 +212,7 @@ test('plan: an empty input is an empty plan', () => {
 // ---------------------------------------------------------------------------
 
 test('sessionGate: each refusal, in the reference order', async (t) => {
-  const cases = [
+  const cases: ReadonlyArray<readonly [string, GateSession, string]> = [
     ['auto review disabled', { autoReview: false }, SessionGateReason.disabled],
     ['not a worker session', { kind: 'orchestrator' }, SessionGateReason.notWorker],
     ['the session is terminated', { isTerminated: true }, SessionGateReason.terminated],
@@ -311,7 +342,7 @@ test('a changed head supersedes the old pass and starts a new cycle', () => {
 })
 
 test('A18 — the round cap stops scheduling entirely', async (t) => {
-  const cycle = (i) =>
+  const cycle = (i: number): ReviewRun =>
     run({ headSha: `sha-${i}`, round: i, verdict: ReviewVerdict.changesRequested, createdAt: i })
 
   await t.test('under the cap, a new head is reviewed', () => {
@@ -376,7 +407,7 @@ test('a session whose only heads are skipped reports why, and schedules nothing'
 })
 
 test('ineligibleReason names the exact blocker', async (t) => {
-  const cases = [
+  const cases: ReadonlyArray<readonly [string, PRFactsForPlan, string]> = [
     ['a draft', { url: PR, headSha: 's', draft: true }, HeadSkipReason.draftPr],
     ['a merged pr', { url: PR, headSha: 's', merged: true }, HeadSkipReason.mergedPr],
     ['a closed pr', { url: PR, headSha: 's', closed: true }, HeadSkipReason.closedPr],
@@ -391,7 +422,7 @@ test('ineligibleReason names the exact blocker', async (t) => {
 })
 
 test('existingHeadReason: the six conditions, checked in order', async (t) => {
-  const cases = [
+  const cases: ReadonlyArray<readonly [string, ReviewRun[], string]> = [
     ['running wins over everything', [run({ status: ReviewRunStatus.running, verdict: ReviewVerdict.approved })], HeadSkipReason.reviewRunning],
     ['cancelled is respected', [run({ status: ReviewRunStatus.cancelled })], HeadSkipReason.cancelledSameSha],
     ['an approval is not re-reviewed', [run({ verdict: ReviewVerdict.approved })], HeadSkipReason.alreadyApproved],
@@ -440,19 +471,16 @@ test('evaluateSession always reports a reason', () => {
 
 test('orchestrator_run_review: a forced pass bypasses the automation guards', async (t) => {
   await t.test('an already-approved head can be re-reviewed on request', () => {
-    const result = evaluateManualRequest({
-      prs: [openPr()],
-      runs: [run({ verdict: ReviewVerdict.approved })],
-    })
+    // `evaluateManualRequest` takes no run history at all -- that is the point:
+    // a forced pass is decided from PR facts alone, so nothing about a previous
+    // verdict can refuse it.
+    const result = evaluateManualRequest({ prs: [openPr()] })
     assert.equal(result.trigger, true)
     assert.deepEqual(result.headsToReview, ['sha-1'])
   })
 
   await t.test('a round-capped worker can be re-reviewed on request', () => {
-    const result = evaluateManualRequest({
-      prs: [openPr({ headSha: 'sha-9' })],
-      runs: [1, 2, 3].map((i) => run({ headSha: `sha-${i}`, round: i, verdict: ReviewVerdict.changesRequested })),
-    })
+    const result = evaluateManualRequest({ prs: [openPr({ headSha: 'sha-9' })] })
     assert.equal(result.trigger, true)
   })
 
@@ -462,11 +490,12 @@ test('orchestrator_run_review: a forced pass bypasses the automation guards', as
   })
 
   await t.test('but ineligibility is never bypassed', () => {
-    for (const [name, pr, want] of [
+    const cases: ReadonlyArray<readonly [string, PRFactsForPlan, string]> = [
       ['merged', openPr({ merged: true }), HeadSkipReason.mergedPr],
       ['closed', openPr({ closed: true }), HeadSkipReason.closedPr],
       ['draft', openPr({ draft: true }), HeadSkipReason.draftPr],
-    ]) {
+    ]
+    for (const [name, pr, want] of cases) {
       const result = evaluateManualRequest({ prs: [pr] })
       assert.equal(result.trigger, false, name)
       assert.equal(result.reason, want, name)

@@ -26,11 +26,17 @@ import {
   prFacts,
 } from '../../src/contract/kanban.ts'
 import { sessionFacts } from '../../src/contract/status.ts'
+import type {
+  KanbanDerivation,
+  KanbanPRFactsInput,
+  KanbanReviewRunFacts,
+} from '../../src/contract/kanban.ts'
+import type { SessionFactsInput } from '../../src/contract/status.ts'
 
 const NOW = 3_600_000
 const GRACE = 90_000
 
-function derive(session, pr) {
+function derive(session: SessionFactsInput, pr: KanbanPRFactsInput): KanbanDerivation {
   return deriveKanbanPresentation(sessionFacts(session), [prFacts(pr)], NOW, GRACE)
 }
 
@@ -66,7 +72,7 @@ test('row 6 fires only after our pass approves this head, never before', async (
   // Every "our pass has not approved" shape, with the flag on. None may reach
   // needs_review through row 6; all must stay in Validating while the loop is
   // still alive.
-  const notApproved = [
+  const notApproved: ReadonlyArray<readonly [string, Partial<KanbanReviewRunFacts>]> = [
     ['no pass recorded for this head', { present: false }],
     ['a pass is still running', { present: true, running: true }],
     ['a pass requested changes', { present: true, outcome: true, changesRequested: true }],

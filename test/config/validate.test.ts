@@ -25,16 +25,28 @@ import {
   resolvePermissionPresets,
   resolveRepoRelativeFile,
 } from '../../src/config/validate.ts'
+import type { PluginConfigInput, RepoConfigInput, RulesReader } from '../../src/config/validate.ts'
 
 const ROOT = '/Users/me/code/myrepo'
 
+/**
+ * Erases types for an input that is *meant* to violate them.
+ *
+ * Most of this file asserts that a malformed config is rejected at runtime, so
+ * the values passed in must not satisfy `PluginConfigInput` / `RepoConfigInput`.
+ * Casting through `unknown` at each call site keeps that deliberate violation
+ * visible and local to the assertion, instead of loosening the source types that
+ * real callers depend on.
+ */
+const bad = <T>(value: unknown): T => value as T
+
 /** A reader that returns a fixed body, so no test touches disk. */
-function readerReturning(body) {
+function readerReturning(body: string): RulesReader {
   return () => body
 }
 
 /** A reader that fails, standing in for a missing file. */
-function readerFailing(message = 'ENOENT: no such file or directory') {
+function readerFailing(message = 'ENOENT: no such file or directory'): RulesReader {
   return () => {
     throw new Error(message)
   }
@@ -188,14 +200,14 @@ test('normalizePluginConfig does not mutate its input', () => {
 })
 
 test('normalizePluginConfig rejects a bad planGate', () => {
-  assert.throws(() => normalizePluginConfig({ planGate: 'sometimes' }), ConfigError)
+  assert.throws(() => normalizePluginConfig(bad({ planGate: 'sometimes' })), ConfigError)
   for (const gate of PLAN_GATES) {
     assert.equal(normalizePluginConfig({ planGate: gate }).planGate, gate)
   }
 })
 
 test('normalizePluginConfig rejects non-positive and non-integer bounds', async (t) => {
-  const cases = [
+  const cases: ReadonlyArray<readonly [string, Record<string, unknown>]> = [
     ['a zero interval', { pollIntervalMs: 0 }],
     ['a negative bound', { maxReviewRounds: -1 }],
     ['a fractional bound', { noSignalGraceMs: 1.5 }],
@@ -204,7 +216,7 @@ test('normalizePluginConfig rejects non-positive and non-integer bounds', async 
   ]
   for (const [name, raw] of cases) {
     await t.test(name, () => {
-      assert.throws(() => normalizePluginConfig(raw), ConfigError)
+      assert.throws(() => normalizePluginConfig(bad(raw)), ConfigError)
     })
   }
 
@@ -218,8 +230,8 @@ test('normalizePluginConfig rejects non-positive and non-integer bounds', async 
 })
 
 test('normalizePluginConfig rejects a non-boolean flag', () => {
-  assert.throws(() => normalizePluginConfig({ autoReview: 'yes' }), ConfigError)
-  assert.throws(() => normalizePluginConfig({ requireHumanApprovalBeforeReady: 1 }), ConfigError)
+  assert.throws(() => normalizePluginConfig(bad({ autoReview: 'yes' })), ConfigError)
+  assert.throws(() => normalizePluginConfig(bad({ requireHumanApprovalBeforeReady: 1 })), ConfigError)
 })
 
 test('normalizePluginConfig rejects an empty preset name', () => {
@@ -248,16 +260,16 @@ test('repo defaults are inert', () => {
 })
 
 test('repo config rejects malformed command lists', () => {
-  assert.throws(() => normalizeRepoConfig({ verifyCommands: 'pnpm test' }), ConfigError)
+  assert.throws(() => normalizeRepoConfig(bad({ verifyCommands: 'pnpm test' })), ConfigError)
   assert.throws(() => normalizeRepoConfig({ verifyCommands: [''] }), ConfigError)
-  assert.throws(() => normalizeRepoConfig({ verifyCommands: ['pnpm test', 3] }), ConfigError)
-  assert.throws(() => normalizeRepoConfig({ postCreate: { install: 'pnpm i' } }), ConfigError)
+  assert.throws(() => normalizeRepoConfig(bad({ verifyCommands: ['pnpm test', 3] })), ConfigError)
+  assert.throws(() => normalizeRepoConfig(bad({ postCreate: { install: 'pnpm i' } })), ConfigError)
 })
 
 test('repo config accepts a per-repo autoReview override in both directions', () => {
   assert.equal(normalizeRepoConfig({ autoReview: false }).autoReview, false)
   assert.equal(normalizeRepoConfig({ autoReview: true }).autoReview, true)
-  assert.throws(() => normalizeRepoConfig({ autoReview: 'no' }), ConfigError)
+  assert.throws(() => normalizeRepoConfig(bad({ autoReview: 'no' })), ConfigError)
 })
 
 test('REPO_CONFIG_DEFAULTS is not mutated by normalization', () => {

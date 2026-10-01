@@ -21,21 +21,24 @@ import {
   prStatusFacts,
   sessionFacts,
 } from '../../src/contract/status.ts'
+import type { KanbanSessionFacts, PRFacts, SessionFactsInput } from '../../src/contract/status.ts'
 
 const GRACE = 90_000
 const STATUS_NOW = Date.UTC(2026, 5, 10, 12, 0, 0)
 
 /** A session that has reported, at `STATUS_NOW`. Ported from the Go `session()`. */
-function sessionAt(activity) {
+function sessionAt(activity: string): KanbanSessionFacts {
   return sessionFacts({ activity, lastActivityAt: STATUS_NOW, hasSignal: true })
 }
 
-function facts(prs) {
+function facts(prs?: readonly Partial<PRFacts>[] | undefined): PRFacts[] {
   return (prs ?? []).map(prStatusFacts)
 }
 
 test('deriveStatus: precedence', async (t) => {
-  const cases = [
+  const cases: ReadonlyArray<
+    readonly [string, SessionFactsInput, readonly Partial<PRFacts>[] | undefined, SessionStatus]
+  > = [
     ['terminated', sessionFacts({ isTerminated: true }), undefined, SessionStatus.terminated],
     [
       'terminated merged',
@@ -70,7 +73,7 @@ test('deriveStatus: precedence', async (t) => {
   ]
   for (const [name, session, prs, want] of cases) {
     await t.test(name, () => {
-      assert.equal(deriveStatus(session, facts(prs), STATUS_NOW, GRACE), want)
+      assert.equal(deriveStatus(sessionFacts(session), facts(prs), STATUS_NOW, GRACE), want)
     })
   }
 })
@@ -81,7 +84,7 @@ test('deriveStatus: the no-signal rules', async (t) => {
     lastActivityAt: STATUS_NOW - 2 * GRACE,
     hasSignal: false,
   }
-  const cases = [
+  const cases: ReadonlyArray<readonly [string, SessionFactsInput, number, SessionStatus]> = [
     ['past grace', { ...silent, signalExpected: true }, STATUS_NOW, SessionStatus.noSignal],
     ['signal not expected', { ...silent, signalExpected: false }, STATUS_NOW, SessionStatus.idle],
     [
@@ -105,7 +108,7 @@ test('deriveStatus: the no-signal rules', async (t) => {
 })
 
 test('deriveSCMStatus: the pipeline reading, and worst wins', async (t) => {
-  const cases = [
+  const cases: ReadonlyArray<readonly [string, readonly Partial<PRFacts>[], SessionStatus]> = [
     ['closed ignored', [{ closed: true }], ''],
     ['merged', [{ merged: true }], SessionStatus.merged],
     ['open', [{}], SessionStatus.prOpen],
@@ -171,6 +174,6 @@ test('the stack rules', async (t) => {
 
   await t.test('a merged parent no longer blocks its child', () => {
     const positions = buildStacks(facts([{ ...parent, merged: true }, child]))
-    assert.equal(positions.get('child').blocked, false)
+    assert.equal(positions.get('child')!.blocked, false)
   })
 })

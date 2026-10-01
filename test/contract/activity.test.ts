@@ -23,7 +23,8 @@ import {
   normalizeActivity,
 } from '../../src/contract/activity.ts'
 
-const STICKY_AND_NEEDS_INPUT = [ActivityState.waitingInput, ActivityState.blocked]
+/** Typed as plain strings so `includes(state)` accepts any ActivityState. */
+const STICKY_AND_NEEDS_INPUT: readonly string[] = [ActivityState.waitingInput, ActivityState.blocked]
 
 test('isSticky: resists time-demotion for exactly the two paused states', () => {
   for (const state of ACTIVITY_STATES) {
