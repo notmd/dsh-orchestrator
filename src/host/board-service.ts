@@ -135,6 +135,7 @@ export function buildCard(options: {
   issueTitle: string
   issueNumber: number
   prs: KanbanPRFactsInput[]
+  branch?: string
   review?: BoardCard['review']
   activity: string
   config: PluginConfig
@@ -173,6 +174,7 @@ export function buildCard(options: {
     autoInjectCI: config.autoInjectCI,
     requireHumanApprovalBeforeReady: config.requireHumanApprovalBeforeReady,
     prs: options.prs,
+    ...(options.branch ? { branch: options.branch } : {}),
     ...(options.review ? { review: options.review } : {}),
   }
 }
@@ -272,6 +274,7 @@ export async function buildBoard(deps: BoardDeps): Promise<BoardSnapshot> {
       issueTitle: issue?.title ?? '(unknown issue)',
       issueNumber: issue?.number ?? 0,
       prs: toPrFacts(snapshotByWorker.get(worker.id), workerRuns, bounds),
+      ...(worker.branch ? { branch: worker.branch } : {}),
       ...(review ? { review } : {}),
       activity: cardActivity(worker, deps.activityOf),
       config: deps.config,

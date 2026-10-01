@@ -174,6 +174,8 @@ export interface BoardCard {
   prs?: readonly KanbanPRFactsInput[]
   /** The auto-review evidence the inspector shows. */
   review?: CardReview
+  /** The worker's branch, shown only when it says something the title does not. */
+  branch?: string
 }
 
 /**
@@ -306,6 +308,8 @@ export interface BoardCardView {
   statusReadiness: StatusReadiness
   /** The auto-review loop's position and findings, for the inspector. */
   review?: CardReview
+  /** The worker's branch. */
+  branch?: string
   needsAttention: boolean
   showStatusLoader: boolean
   isFinished: boolean
@@ -342,6 +346,7 @@ export function presentCard(
 
   const view: BoardCardView = {
     ...(card.review ? { review: card.review } : {}),
+    ...(card.branch ? { branch: card.branch } : {}),
     id: card.id,
     updatedAt: card.updatedAt,
     sessionId: card.sessionId,

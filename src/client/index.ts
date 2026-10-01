@@ -58,6 +58,10 @@ interface CardView {
   showStatusLoader: boolean
   isFinished: boolean
   escalationReason?: string
+  /** The worker's branch. Mirrors `BoardCardView.branch`. */
+  branch?: string
+  /** Mirrors `BoardCardView.prs` (the slice the card face uses). */
+  prs?: ReadonlyArray<{ url: string; number?: number }>
   /** Mirrors `CardReview`. Present only when a pass has run at this head. */
   review?: {
     round: number
@@ -98,7 +102,8 @@ const BOARD_PATH = '/dsho/api/board'
  */
 const FALLBACK: Record<string, string> = {
   'orchestrator.title': 'Orchestrator',
-  'orchestrator.board.workers': '{count} worker(s)',
+  'orchestrator.board.workerOne': '1 worker',
+  'orchestrator.board.workerMany': '{count} workers',
   'orchestrator.board.needsAttention': '{count} needing attention',
   'orchestrator.board.loading': 'Loading the board...',
   'orchestrator.board.unavailable': 'The board is unavailable: {message}',
@@ -112,6 +117,7 @@ const FALLBACK: Record<string, string> = {
   'orchestrator.card.details': 'Details for {title}',
   'orchestrator.card.reviewRound': 'auto review round {round}/{max}',
   'orchestrator.card.automationStopped': 'automation stopped: {reason}',
+  'orchestrator.card.openPr': 'Open pull request #{number} in your browser',
   'orchestrator.inspector.noReview': 'No automated review has run at this commit.',
   'orchestrator.inspector.noFindings': 'No findings recorded for this commit.',
   'orchestrator.inspector.review': 'review {id}',
@@ -202,50 +208,109 @@ loader.load({
      *
      * Colours are `--dsw-alias-*` tokens so the panel follows the host's theme.
      */
-    const S = {
-      panel: {
-        padding: 'var(--dsh-frame-top-clearance, 48px) 24px 24px',
-        fontFamily: 'inherit',
-        color: 'var(--dsw-alias-text, inherit)',
-        overflow: 'auto',
-        height: '100%',
-      },
-      title: { fontSize: '1.125rem', fontWeight: 600, margin: 0 },
-      meta: { margin: '4px 0 16px', opacity: 0.7, fontSize: '0.8125rem' },
-      note: { opacity: 0.75 },
-      errorNote: { color: 'var(--dsw-alias-status-danger, inherit)', opacity: 1, fontWeight: 500 },
-      lanes: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '12px' },
-      lane: { minWidth: 0, display: 'flex', flexDirection: 'column', gap: '8px' },
-      laneTitle: { fontSize: '0.8125rem', fontWeight: 600, margin: 0, opacity: 0.8 },
-      laneCount: { opacity: 0.6, fontWeight: 400 },
-      laneEmpty: { margin: 0, opacity: 0.45, fontSize: '0.8125rem' },
-      list: { listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: '8px' },
-      card: { border: '1px solid var(--dsw-alias-border, rgba(127,127,127,0.3))', borderRadius: '8px', padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: '4px' },
-      cardAttention: { border: '2px solid var(--dsw-alias-status-danger, #d05)' },
-      cardFinished: { opacity: 0.6 },
-      cardHead: { display: 'flex', alignItems: 'center', gap: '6px' },
-      cardStatus: { fontSize: '0.75rem', fontWeight: 600 },
-      spinner: { width: '8px', height: '8px', borderRadius: '50%', background: 'currentColor', opacity: 0.5 },
-      cardTitle: { fontSize: '0.8125rem' },
-      cardReason: { fontSize: '0.75rem', opacity: 0.75 },
-      archive: { marginTop: '16px', fontSize: '0.8125rem', opacity: 0.6 },
-      // The card body is a BUTTON, not a div with an onClick: that is what makes it
-      // keyboard reachable and announces itself, and it costs nothing. Reset to look
-      // like the card it was.
-      cardButton: {
-        display: 'block', width: '100%', textAlign: 'left', cursor: 'pointer',
-        font: 'inherit', color: 'inherit', background: 'transparent',
-      },
-      tabular: { fontSize: '0.75rem', opacity: 0.7, fontVariantNumeric: 'tabular-nums' },
-      inspector: {
-        marginTop: '16px', padding: '12px 14px', borderRadius: '8px',
-        border: '1px solid var(--dsw-alias-border, rgba(127,127,127,0.3))',
-        maxWidth: '46rem',
-      },
-      inspectorHead: { display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '12px' },
-      finding: { marginBottom: '8px', fontSize: '0.8125rem' },
-      findingWhere: { fontVariantNumeric: 'tabular-nums', opacity: 0.75 },
-    } as const
+    /**
+     * The board's stylesheet.
+     *
+     * A `<style>` element inside this component's own tree, which is what the plugin
+     * contract sanctions: "Copy markup/CSS/behaviour into the plugin, rename classes
+     * under your prefix, keep only token references." An earlier version applied every
+     * rule as an inline style prop -- compliant but crippling, because inline styles
+     * cannot express `:hover`, `:focus-visible`, a media query, a keyframe, or
+     * `-webkit-line-clamp`, which is most of what makes a board readable.
+     *
+     * **Every token here was verified to exist.** Four names the earlier version used do
+     * NOT: `--dsw-alias-text`, `-surface`, `-border`, `-status-danger`. Literal fallbacks
+     * meant nothing looked broken while the board followed the host theme in no respect
+     * at all -- a silent no-op of exactly the kind this project keeps finding.
+     *
+     * Classes are prefixed `dsho-` because these rules enter the host's own document.
+     */
+    const CSS = `
+/* Every token below was MEASURED in a live host, not guessed. The previous version used
+   four names that do not exist -- --dsw-alias-text, -surface, -border, -status-danger --
+   and because each had a literal fallback nothing looked broken while the board followed
+   the theme in no respect at all. Also measured UNSET, so do not reintroduce them:
+   --dsw-alias-fill-l1, -fill-l2, -fill-tertiary, -separator-primary.
+   And --dsw-alias-brand-primary is #f9fafb, nearly white: it is NOT an accent, which is
+   why a "busy" status came out white. The accent is -state-business-primary. */
+.dsho-panel { box-sizing: border-box; height: 100%; overflow: auto; padding: var(--dsh-frame-top-clearance, 48px) 24px 24px;
+  color: var(--dsw-alias-label-primary, inherit); }
+.dsho-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 16px; }
+.dsho-title { font-size: 1.125rem; font-weight: 600; margin: 0; }
+.dsho-sub { font-size: 0.8125rem; color: var(--dsw-alias-label-primary-dimmed, inherit); }
+.dsho-note { color: var(--dsw-alias-label-primary-dimmed, inherit); }
+.dsho-note--error { color: var(--dsw-alias-state-error-primary, #e5484d); font-weight: 500; }
+
+.dsho-lanes { display: grid; grid-template-columns: repeat(4, minmax(240px, 1fr)); gap: 16px; align-items: start; }
+@media (max-width: 1100px) { .dsho-lanes { grid-template-columns: repeat(2, minmax(220px, 1fr)); } }
+.dsho-lane { min-width: 0; display: flex; flex-direction: column; gap: 10px; padding: 12px; border-radius: 12px;
+  background: var(--dsw-alias-bg-layer-1, rgba(127,127,127,0.06));
+  border: 1px solid var(--dsw-alias-border-l1, rgba(127,127,127,0.18)); }
+.dsho-lane__head { display: flex; align-items: center; gap: 8px; }
+.dsho-lane__title { font-size: 0.8125rem; font-weight: 600; margin: 0; }
+.dsho-lane__count { margin-left: auto; padding: 1px 8px; border-radius: 999px; font-size: 0.75rem;
+  font-variant-numeric: tabular-nums; color: var(--dsw-alias-label-primary-dimmed, inherit);
+  background: var(--dsw-alias-border-l1, rgba(127,127,127,0.14)); }
+.dsho-lane__empty { margin: 0; font-size: 0.8125rem; color: var(--dsw-alias-label-primary-dimmed, inherit); opacity: 0.75; }
+.dsho-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+
+/* The card. The click target is the OUTER element; a full-bleed button supplies the
+   accessible name and the keyboard path. A button WRAPPING the card cannot contain the
+   hover actions -- nesting buttons is invalid HTML -- which is why the reference does it
+   this way and why the earlier version could never have grown an action. */
+.dsho-card { position: relative; border: 1px solid var(--dsw-alias-border-l2, rgba(127,127,127,0.3));
+  border-radius: 10px; background: var(--dsw-alias-bg-layer-2, transparent); cursor: pointer;
+  transition: background-color 120ms ease-out, border-color 120ms ease-out, transform 120ms ease-out; }
+.dsho-card:hover, .dsho-card:focus-within { background: var(--dsw-alias-bg-layer-3, rgba(127,127,127,0.12)); }
+.dsho-card:active { transform: scale(0.995); }
+.dsho-card--attention { border-color: var(--dsw-alias-state-warn-primary, #f5a524); }
+.dsho-card--finished { opacity: 0.6; }
+.dsho-card__hit { position: absolute; inset: 0; padding: 0; border: 0; border-radius: 10px;
+  background: transparent; cursor: pointer; outline: none; pointer-events: none; }
+.dsho-card__hit:focus-visible { box-shadow: 0 0 0 2px var(--dsw-alias-state-business-primary, #4c8dff); }
+.dsho-card__body { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; }
+.dsho-card__top { display: flex; align-items: flex-start; gap: 8px; }
+.dsho-glyph { flex: none; margin-top: 2px; }
+.dsho-card__title { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  font-size: 0.8125rem; font-weight: 600; line-height: 1.25; }
+.dsho-card__branch { display: flex; align-items: center; gap: 6px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.6875rem; color: var(--dsw-alias-label-primary-dimmed, inherit); }
+.dsho-card__branch > span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.dsho-card__evidence { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.6875rem;
+  font-variant-numeric: tabular-nums; color: var(--dsw-alias-label-primary-dimmed, inherit); }
+.dsho-card__status { font-size: 0.75rem; font-weight: 600; color: var(--dsw-alias-label-primary-dimmed, inherit); }
+.dsho-card__status[data-tone='attention'] { color: var(--dsw-alias-state-warn-primary, #f5a524); }
+.dsho-card__status[data-tone='error'] { color: var(--dsw-alias-state-error-primary, #e5484d); }
+.dsho-card__status[data-tone='success'] { color: var(--dsw-alias-state-success-primary, #30a46c); }
+.dsho-card__status[data-tone='busy'] { color: var(--dsw-alias-state-business-primary, #4c8dff); }
+.dsho-card__meta { font-size: 0.6875rem; font-variant-numeric: tabular-nums; color: var(--dsw-alias-label-primary-dimmed, inherit); opacity: 0.8; }
+.dsho-card__actions { position: absolute; top: 6px; right: 6px; display: flex; gap: 4px; opacity: 0;
+  transition: opacity 120ms ease-out; }
+.dsho-card:hover .dsho-card__actions, .dsho-card:focus-within .dsho-card__actions { opacity: 1; }
+.dsho-action { display: inline-flex; align-items: center; justify-content: center; padding: 4px; border-radius: 6px;
+  border: 1px solid var(--dsw-alias-border-l2, rgba(127,127,127,0.24));
+  background: var(--dsw-alias-bg-layer-3, transparent); color: var(--dsw-alias-label-primary-dimmed, inherit); cursor: pointer; }
+.dsho-action:hover { color: var(--dsw-alias-label-primary, inherit); background: var(--dsw-alias-button-ghost-active-fill, rgba(127,127,127,0.2)); }
+.dsho-action:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--dsw-alias-state-business-primary, #4c8dff); }
+
+.dsho-inspector { max-width: 52rem; margin-top: 16px; padding: 14px 16px; border-radius: 12px;
+  border: 1px solid var(--dsw-alias-border-l1, rgba(127,127,127,0.2)); background: var(--dsw-alias-bg-layer-1, rgba(127,127,127,0.06)); }
+.dsho-inspector__head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.dsho-inspector__findings { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.dsho-finding { font-size: 0.8125rem; line-height: 1.35; }
+.dsho-finding__where { display: block; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.6875rem;
+  color: var(--dsw-alias-label-primary-dimmed, inherit); }
+.dsho-sev { font-weight: 700; text-transform: uppercase; letter-spacing: 0.02em; }
+.dsho-sev[data-sev='high'] { color: var(--dsw-alias-state-error-primary, #e5484d); }
+.dsho-sev[data-sev='medium'] { color: var(--dsw-alias-state-warn-primary, #f5a524); }
+.dsho-sev[data-sev='low'] { color: var(--dsw-alias-label-primary-dimmed, inherit); }
+.dsho-archive { margin-top: 16px; font-size: 0.8125rem; color: var(--dsw-alias-label-primary-dimmed, inherit); }
+.dsho-btn { font: inherit; padding: 4px 10px; border-radius: 6px; cursor: pointer;
+  border: 1px solid var(--dsw-alias-border-l2, rgba(127,127,127,0.24)); background: transparent; color: inherit; }
+.dsho-btn:hover { background: var(--dsw-alias-button-ghost-active-fill, rgba(127,127,127,0.2)); }
+.dsho-btn:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--dsw-alias-state-business-primary, #4c8dff); }
+@media (prefers-reduced-motion: reduce) { .dsho-card, .dsho-card__actions { transition: none; } }
+`
 
     /** What the panel is currently showing. */
     type View =
@@ -256,8 +321,8 @@ loader.load({
     /**
      * Reads the board once, uncached.
      *
-     * Errors are returned rather than thrown: a throw inside an effect would leave
-     * the panel on `loading` forever, which looks exactly like a hung host.
+     * Errors are returned rather than thrown: a throw inside an effect would leave the
+     * panel on `loading` forever, which looks exactly like a hung host.
      */
     async function readBoard(): Promise<View> {
       try {
@@ -278,44 +343,216 @@ loader.load({
       }
     }
 
+
+    type Tone = 'attention' | 'error' | 'success' | 'busy' | 'neutral'
+
+    /**
+     * The card's tone: one colour per card, never several competing chips.
+     *
+     * **`needsAttention` is the authority for attention, not my reading of the status
+     * text.** The reducer decides whether a person is needed, and it is tested; deciding
+     * it again here produced a card reading `Needs review` with a NEUTRAL tone, because
+     * the first version of this function was written from a partial list of statuses and
+     * had never heard of that one. The lesson generalises: **do not re-derive a decision
+     * that already exists upstream -- consult it.**
+     *
+     * Every other {@link DisplayStatus} is listed EXPLICITLY, neutral ones included, so
+     * that adding a status to the contract forces a decision here instead of silently
+     * defaulting. A test asserts the case labels cover the contract exactly.
+     */
+    /**
+     * Each lane's tone, used when nothing about the card is more specific.
+     *
+     * Copied from the reference, which falls back to the column's own colour. Without a
+     * fallback a card in `Needs review` -- which the reducer rightly says is NOT waiting
+     * on a person -- rendered with no colour at all, so the board read as a list rather
+     * than a board. The fallback is what gives every column a character.
+     */
+    const LANE_TONE: Record<string, Tone> = {
+      building: 'busy',
+      validating: 'busy',
+      needs_review: 'attention',
+      ready: 'success',
+    }
+
+    function toneOf(card: CardView): Tone {
+      if (card.needsAttention === true) return 'attention'
+      switch (card.displayStatus) {
+        case 'CI failing':
+          return 'error'
+        case 'Mergeable':
+        case 'Approved':
+        case 'Merged':
+          return 'success'
+        case 'Working':
+        case 'Reviewing':
+        case 'Review scheduled':
+        case 'Review pending':
+        case 'Addressing comments':
+        case 'Fixing CI failures':
+          return 'busy'
+        // Named one by one so that adding a status to the contract forces a decision
+        // here, and coloured by their LANE -- which is the point of the fallback. An
+        // earlier version returned a flat 'neutral' for this group, and because
+        // `Needs review` is in it, the lane tone never applied and the card stayed
+        // colourless: a fallback that a preceding branch makes unreachable.
+        case 'Blocked':
+        case 'No signal':
+        case 'Exited':
+        case 'Awaiting PR':
+        case 'Needs review':
+        case 'Review failed':
+        case 'Draft':
+        case 'Commented':
+        case 'Changes requested':
+        case 'Needs human review':
+        case 'Closed without merge':
+        case 'Terminated':
+          return LANE_TONE[card.column] ?? 'neutral'
+        default:
+          return LANE_TONE[card.column] ?? 'neutral'
+      }
+    }
+
+    /**
+     * The one status glyph (PRD §11.2): a spinner while work is turning, a dot otherwise.
+     *
+     * Inline SVG rather than a font glyph or an icon package: no new dependency, no
+     * `require` of a `dsh-client-ui-*` package, and it inherits `currentColor` so the
+     * tone set on the parent colours it.
+     */
+    function Glyph(props: { tone: 'attention' | 'error' | 'success' | 'busy' | 'neutral'; spinning: boolean }) {
+      if (props.spinning) {
+        return h(
+          'svg',
+          { className: 'dsho-glyph', width: 12, height: 12, viewBox: '0 0 12 12', 'aria-hidden': 'true' },
+          h('circle', { cx: 6, cy: 6, r: 4.5, fill: 'none', stroke: 'currentColor', strokeWidth: 1.5, opacity: 0.3 }),
+          h(
+            'path',
+            { d: 'M6 1.5a4.5 4.5 0 0 1 4.5 4.5', fill: 'none', stroke: 'currentColor', strokeWidth: 1.5, strokeLinecap: 'round' },
+            h('animateTransform', {
+              attributeName: 'transform', type: 'rotate', from: '0 6 6', to: '360 6 6', dur: '1s', repeatCount: 'indefinite',
+            }),
+          ),
+        )
+      }
+      return h(
+        'svg',
+        { className: 'dsho-glyph', width: 12, height: 12, viewBox: '0 0 12 12', 'aria-hidden': 'true' },
+        h('circle', { cx: 6, cy: 6, r: 4, fill: 'currentColor' }),
+      )
+    }
+
+    /** A compact age, because a board is read at a glance. */
+    function formatAge(updatedAt: number, now: number): string {
+      const seconds = Math.max(0, Math.round((now - updatedAt) / 1000))
+      if (seconds < 60) return `${seconds}s`
+      const minutes = Math.round(seconds / 60)
+      if (minutes < 60) return `${minutes}m`
+      const hours = Math.round(minutes / 60)
+      if (hours < 24) return `${hours}h`
+      return `${Math.round(hours / 24)}d`
+    }
+
+    /** A branch icon, inline, so the branch line reads as a branch. */
+    function BranchIcon() {
+      return h(
+        'svg',
+        { width: 11, height: 11, viewBox: '0 0 16 16', 'aria-hidden': 'true', style: { flex: 'none' } },
+        h('path', {
+          d: 'M5 3.5a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0Zm9 0a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0ZM5 12.5a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0ZM3.5 5v6M12.5 5v1.5A2.5 2.5 0 0 1 10 9H5',
+          fill: 'none', stroke: 'currentColor', strokeWidth: 1.4, strokeLinecap: 'round',
+        }),
+      )
+    }
+
+    /**
+     * One card, in the reference's information order: glyph + title, branch when it adds
+     * identity, PR/review evidence when present, ONE derived status line, then compact
+     * metadata. Two rules from the reference are load-bearing:
+     *
+     *   the status is ONE line with a colour per tone, never several competing chips;
+     *   the branch appears only when it says something the title does not -- repeating it
+     *   is noise on a board read at a glance.
+     */
     function Card(props: { card: CardView; onOpen: (id: string) => void }) {
       const card = props.card
-      const style = {
-        ...S.card,
-        ...S.cardButton,
-        ...(card.needsAttention ? S.cardAttention : {}),
-        ...(card.isFinished ? S.cardFinished : {}),
-      }
       const review = card.review
+      const tone = toneOf(card)
+      const pr = card.prs && card.prs.length > 0 ? card.prs[0] : undefined
+      const showBranch = card.branch !== undefined && card.branch !== ''
+      const className = ['dsho-card', card.needsAttention ? 'dsho-card--attention' : '', card.isFinished ? 'dsho-card--finished' : '']
+        .filter((part) => part !== '')
+        .join(' ')
+      const evidence = [
+        pr && pr.number ? `PR #${pr.number}` : undefined,
+        review && review.verdict !== 'approved' ? `${review.round}/${review.maxRounds}` : undefined,
+      ].filter((part): part is string => part !== undefined)
+
       return h(
         'li',
         null,
         h(
-          'button',
+          'div',
           {
-            type: 'button',
-            style,
+            className,
+            onClick: () => props.onOpen(card.id),
             'data-worker': card.id,
             'data-column': card.column,
-            'aria-label': translate('orchestrator.card.details', { title: card.title }),
-            onClick: () => props.onOpen(card.id),
+            'data-tone': tone,
           },
+          // The accessible name and the keyboard path. `pointer-events: none` so it never
+          // swallows a click meant for the action buttons; a click on it still reaches the
+          // outer element's handler by bubbling, which is how Enter works.
+          h('button', {
+            type: 'button',
+            className: 'dsho-card__hit',
+            'aria-label': translate('orchestrator.card.details', { title: card.title }),
+          }),
           h(
-            'span',
-            { style: S.cardHead },
-            // Never convey state by colour alone: the phrase IS the state, and the
-            // border only reinforces it.
-            h('span', { style: S.cardStatus }, card.displayStatus),
-            card.showStatusLoader ? h('span', { style: S.spinner, 'aria-hidden': 'true' }) : null,
+            'div',
+            { className: 'dsho-card__body' },
+            h(
+              'div',
+              { className: 'dsho-card__top' },
+              h(Glyph, { tone, spinning: card.showStatusLoader === true }),
+              h('span', { className: 'dsho-card__title', title: card.title }, card.title),
+            ),
+            showBranch
+              ? h('div', { className: 'dsho-card__branch' }, h(BranchIcon, null), h('span', { title: card.branch }, card.branch))
+              : null,
+            evidence.length > 0 ? h('div', { className: 'dsho-card__evidence' }, evidence.join(' · ')) : null,
+            h('div', { className: 'dsho-card__status', 'data-tone': tone }, card.displayStatus),
+            card.escalationReason
+              ? h('div', { className: 'dsho-card__meta' }, translate('orchestrator.card.automationStopped', { reason: card.escalationReason }))
+              : null,
+            h('div', { className: 'dsho-card__meta' }, formatAge(card.updatedAt, Date.now())),
           ),
-          h('span', { style: S.cardTitle }, card.title),
-          // The round is on the card face while the loop runs, so the BOUND is visible
-          // rather than arriving as a surprise when it trips.
-          review && review.verdict !== 'approved'
-            ? h('span', { style: S.tabular }, translate('orchestrator.card.reviewRound', { round: review.round, max: review.maxRounds }))
-            : null,
-          card.escalationReason
-            ? h('span', { style: S.cardReason }, translate('orchestrator.card.automationStopped', { reason: card.escalationReason }))
+          pr && pr.url
+            ? h(
+                'div',
+                { className: 'dsho-card__actions' },
+                h(
+                  'a',
+                  {
+                    className: 'dsho-action',
+                    href: pr.url,
+                    target: '_blank',
+                    rel: 'noreferrer',
+                    'aria-label': translate('orchestrator.card.openPr', { number: pr.number ?? 0 }),
+                    title: translate('orchestrator.card.openPr', { number: pr.number ?? 0 }),
+                    onClick: (event: { stopPropagation?: () => void }) => event?.stopPropagation?.(),
+                  },
+                  h(
+                    'svg',
+                    { width: 12, height: 12, viewBox: '0 0 16 16', 'aria-hidden': 'true' },
+                    h('path', {
+                      d: 'M6.5 3H3.5A1.5 1.5 0 0 0 2 4.5v8A1.5 1.5 0 0 0 3.5 14h8a1.5 1.5 0 0 0 1.5-1.5V9.5M9.5 2H14v4.5M14 2 7 9',
+                      fill: 'none', stroke: 'currentColor', strokeWidth: 1.5, strokeLinecap: 'round',
+                    }),
+                  ),
+                ),
+              )
             : null,
         ),
       )
@@ -324,81 +561,88 @@ loader.load({
     /**
      * The card detail view (PRD §11.2).
      *
-     * Its reason is in the PRD rather than in aesthetics: "the reviewer's findings are
-     * reachable from the card -- one click to the latest `ReviewRun`, with severity,
-     * file, and line per finding. **A machine review the user cannot inspect is a
-     * machine review the user cannot trust.**"
+     * Its reason is in the PRD rather than in aesthetics: the reviewer's findings must be
+     * reachable from the card, with severity, file and line, because **"a machine review
+     * the user cannot inspect is a machine review the user cannot trust"**.
      */
     function Inspector(props: { card: CardView; onClose: () => void }) {
       const card = props.card
       const review = card.review
       const findings = review?.findings ?? []
+      const tone = toneOf(card)
       return h(
         'aside',
-        { style: S.inspector, 'aria-label': translate('orchestrator.card.details', { title: card.title }) },
+        { className: 'dsho-inspector', 'aria-label': translate('orchestrator.card.details', { title: card.title }) },
         h(
           'div',
-          { style: S.inspectorHead },
+          { className: 'dsho-inspector__head' },
           h('strong', null, card.title),
-          h('span', { style: S.tabular }, card.displayStatus),
+          h('span', { className: 'dsho-card__status', 'data-tone': tone }, card.displayStatus),
         ),
         h(
           'p',
-          { style: S.tabular },
+          { className: 'dsho-sub' },
           review
-            ? `auto review round ${review.round}/${review.maxRounds}` +
-              (review.verdict ? ` \u00b7 ${review.verdict}` : '') +
-              (review.githubReviewId ? ` \u00b7 review ${review.githubReviewId}` : '')
+            ? translate('orchestrator.card.reviewRound', { round: review.round, max: review.maxRounds }) +
+              (review.verdict ? ` · ${review.verdict}` : '') +
+              (review.githubReviewId ? ` · ${translate('orchestrator.inspector.review', { id: review.githubReviewId })}` : '')
             : translate('orchestrator.inspector.noReview'),
         ),
         findings.length === 0
-          ? h('p', { style: S.note }, translate('orchestrator.inspector.noFindings'))
+          ? h('p', { className: 'dsho-note' }, translate('orchestrator.inspector.noFindings'))
           : h(
               'ul',
-              { style: S.list },
+              { className: 'dsho-inspector__findings' },
               ...findings.map((finding, index) =>
                 h(
                   'li',
-                  { key: `${finding.path ?? ''}:${finding.line ?? index}`, style: S.finding },
+                  { key: `${finding.path ?? ''}:${finding.line ?? index}`, className: 'dsho-finding' },
                   h(
                     'span',
-                    { style: S.findingWhere },
-                    `${finding.severity}${finding.path ? ` \u00b7 ${finding.path}${finding.line ? `:${finding.line}` : ''}` : ''}`,
+                    { className: 'dsho-finding__where' },
+                    h('span', { className: 'dsho-sev', 'data-sev': finding.severity }, finding.severity),
+                    finding.path ? ` · ${finding.path}${finding.line ? `:${finding.line}` : ''}` : '',
                   ),
-                  ` \u2014 ${finding.summary}: ${finding.detail}`,
+                  `${finding.summary}: ${finding.detail}`,
                 ),
               ),
             ),
-        h('button', { type: 'button', onClick: props.onClose }, translate('orchestrator.inspector.close')),
+        h('button', { type: 'button', className: 'dsho-btn', onClick: props.onClose }, translate('orchestrator.inspector.close')),
       )
     }
 
-    function Lane(props: { lane: { key: string; labelKey: string }; cards: CardView[]; onOpen: (id: string) => void }) {
+    /** One lane: a header with a count pill, then its cards. */
+    function Lane(props: {
+      lane: { key: string; labelKey: string }
+      cards: CardView[]
+      onOpen: (id: string) => void
+    }) {
       return h(
         'section',
-        { style: S.lane, 'data-lane': props.lane.key, 'aria-label': translate(props.lane.labelKey) },
+        { className: 'dsho-lane', 'data-lane': props.lane.key, 'aria-label': translate(props.lane.labelKey) },
         h(
-          'h3',
-          { style: S.laneTitle },
-          translate(props.lane.labelKey),
-          h('span', { style: S.laneCount }, ` ${props.cards.length}`),
+          'div',
+          { className: 'dsho-lane__head' },
+          h('h3', { className: 'dsho-lane__title' }, translate(props.lane.labelKey)),
+          h('span', { className: 'dsho-lane__count' }, String(props.cards.length)),
         ),
         props.cards.length === 0
-          ? h('p', { style: S.laneEmpty }, translate('orchestrator.lane.empty'))
+          ? h('p', { className: 'dsho-lane__empty' }, translate('orchestrator.lane.empty'))
           : h(
               'ul',
-              { style: S.list },
+              { className: 'dsho-list' },
               ...props.cards.map((card) => h(Card, { key: card.id, card, onOpen: props.onOpen })),
             ),
       )
     }
 
+    /** The board panel. */
     function Board() {
       const [view, setView] = React.useState<View>({ kind: 'loading' })
       const [openId, setOpenId] = React.useState<string | undefined>(undefined)
 
-      // Escape closes the inspector. A detail view that can only be dismissed by
-      // finding the close button is not keyboard reachable in practice.
+      // Escape closes the inspector. A detail view dismissible only by finding the close
+      // button is not keyboard reachable in practice.
       React.useEffect(() => {
         const onKey = (event: { key?: string }) => {
           if (event?.key === 'Escape') setOpenId(undefined)
@@ -422,44 +666,51 @@ loader.load({
         }
       }, [])
 
+      const style = h('style', null, CSS)
       const header = h(
         'header',
-        { className: 'dsho-header' },
-        h('h2', { style: S.title }, translate('orchestrator.title')),
+        { className: 'dsho-head' },
+        h('h2', { className: 'dsho-title' }, translate('orchestrator.title')),
         view.kind === 'ready'
           ? h(
               'p',
-              { style: S.meta },
-              translate('orchestrator.board.workers', { count: view.board.counts.total }),
-              view.board.counts.needsAttention > 0 ? ` · ${view.board.counts.needsAttention} needing attention` : '',
+              { className: 'dsho-sub', style: { margin: 0 } },
+              view.board.counts.total === 1
+                ? translate('orchestrator.board.workerOne')
+                : translate('orchestrator.board.workerMany', { count: view.board.counts.total }),
+              view.board.counts.needsAttention > 0
+                ? ` · ${translate('orchestrator.board.needsAttention', { count: view.board.counts.needsAttention })}`
+                : '',
             )
           : null,
       )
 
       if (view.kind === 'loading') {
-        return h('div', { style: S.panel }, header, h('p', { style: S.note }, translate('orchestrator.board.loading')))
+        return h('div', { className: 'dsho-panel' }, style, header, h('p', { className: 'dsho-note' }, translate('orchestrator.board.loading')))
       }
       if (view.kind === 'error') {
         // A real state, not a blank panel: "the plugin is broken" and "there are no
         // workers" must not look the same.
         return h(
           'div',
-          { style: S.panel },
+          { className: 'dsho-panel' },
+          style,
           header,
-          h('p', { style: S.errorNote, role: 'status' }, translate('orchestrator.board.unavailable', { message: view.message })),
+          h('p', { className: 'dsho-note dsho-note--error', role: 'status' }, translate('orchestrator.board.unavailable', { message: view.message })),
         )
       }
 
       const board = view.board
       return h(
         'div',
-        { style: S.panel },
+        { className: 'dsho-panel' },
+        style,
         header,
         board.counts.total === 0
-          ? h('p', { style: S.note }, translate('orchestrator.board.empty'))
+          ? h('p', { className: 'dsho-note' }, translate('orchestrator.board.empty'))
           : h(
               'div',
-              { style: S.lanes },
+              { className: 'dsho-lanes' },
               ...LANES.map((lane) =>
                 h(Lane, { key: lane.key, lane, cards: board.lenses.lanes[lane.key] ?? [], onOpen: setOpenId }),
               ),
@@ -473,24 +724,24 @@ loader.load({
           return card ? h(Inspector, { card, onClose: () => setOpenId(undefined) }) : null
         })(),
         board.lenses.archive.length > 0
-          ? h(
-              'p',
-              { style: S.archive },
-              `${board.lenses.archive.length} archived session(s) — not a lane.`,
-            )
+          ? h('p', { className: 'dsho-archive' }, translate('orchestrator.archive', { count: board.lenses.archive.length }))
           : null,
       )
     }
 
-    /** The sidebar navigation row. */
+    /** The sidebar navigation row: a board glyph, inline, so no font or icon package is needed. */
     function PanelIcon(props: { size?: number; active?: boolean }) {
       return h(
-        'span',
+        'svg',
         {
+          width: props.size ?? 16,
+          height: props.size ?? 16,
+          viewBox: '0 0 16 16',
           'aria-hidden': 'true',
-          style: { fontSize: `${props.size ?? 16}px`, lineHeight: 1, display: 'block', textAlign: 'center' },
+          style: { display: 'block' },
         },
-        '▦',
+        h('rect', { x: 1.5, y: 1.5, width: 13, height: 13, rx: 2, fill: 'none', stroke: 'currentColor', strokeWidth: 1.4 }),
+        h('path', { d: 'M6 1.5v13M10.5 1.5v13', fill: 'none', stroke: 'currentColor', strokeWidth: 1.4, opacity: 0.55 }),
       )
     }
 
