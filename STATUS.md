@@ -133,11 +133,23 @@ not work.** Evidence, gathered 2026-10-01:
 
 Workable paths, in order of preference:
 
-1. **The user runs one `install_bundle`** (or grants this session the
-   `plugin_manager` tool), then verifies by refresh and reports what renders. This
-   is the only path that can prove the one residual unknown — whether a
-   *third-party* bundle is accepted into `main` at activation — and it is one
-   action.
+1. **The user installs the bundle through the GUI's own Settings → Plugins
+   surface, then reports what renders.** This is the only path that can prove the
+   one residual unknown — whether a *third-party* bundle is accepted into `main`
+   at activation. Precise steps, because the obvious instruction is wrong:
+   - `plugin_manager` (the tool the plugin-development skill names) **is not
+     present in this build's installed packages**, and this session's tool list
+     does not include it, so it cannot be called from here at all. It appears to
+     be scoped to a shipped agent preset inside `app.asar`, which is not
+     inspectable as a directory.
+   - What *is* installed and enabled is the GUI surface: `dsh-web-app/cordis.patch.yml`
+     enables `plugin-inventory` (host, line 98), `ui-settings-plugin-inventory`
+     (line 299), and `ui-settings-plugins` (line 399) — a read-only projection of
+     the Loader entries plus a Plugins section in Settings.
+   - So: Settings → Plugins, install the bundle from its **absolute package
+     directory** (`/Users/notmd/dev/game/dsh-orchestrator`), then reload. A **new**
+     bundle can activate through HMR; replacing an installed package needs a
+     restart to load a fresh module generation.
 2. **Verify the client half's *contract* in Node, with no browser.** A React shim
    plus a fake `ctx.slots` lets a test assert the module-loader format, the
    `main` registration's key, the `sidebar.panellist` row's id/order/label, the
