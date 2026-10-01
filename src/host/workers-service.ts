@@ -86,10 +86,14 @@ async function findIssue(
  * Accepts either an existing `issueId`, or a `title` (+`description`) for an
  * ad-hoc task — the PRD's "direct task" secondary flow (AO's "New task"). The
  * ad-hoc form creates the issue first, so there is exactly one path afterwards.
+ *
+ * `nameTheTask` is the new-task flow's only addition: a task created from a *brief*
+ * is named provisionally from it, and the worker is asked to replace that name. An
+ * ad-hoc task started from a title it was given is already named, so it is not set.
  */
 export async function startWorkerForTool(
   deps: WorkerToolDeps,
-  args: { issueId?: string; title?: string; description?: string; repoId?: string },
+  args: { issueId?: string; title?: string; description?: string; repoId?: string; nameTheTask?: boolean },
 ): Promise<string> {
   let store: Awaited<ReturnType<LazyFactStore['get']>>
   try {
@@ -214,6 +218,10 @@ export async function startWorkerForTool(
         // worker is told. Until this existed both were validated and reached no one.
         draftPrs: deps.config.draftPrs,
         ...(deps.config.prBodyTemplate ? { prBodyTemplate: deps.config.prBodyTemplate } : {}),
+        // The new-task flow's one addition to the contract: this task was named from a
+        // brief, so the worker is asked to name it properly. Set only when an
+        // expectation is actually outstanding (see `./tasks-service.ts`).
+        ...(args.nameTheTask === true ? { nameTheTask: true } : {}),
       })}`,
       hideFromWorkspace: deps.config.hideWorktreeWorkspaces,
       permissionPreset: deps.config.workerPermissionPreset,

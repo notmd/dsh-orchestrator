@@ -117,7 +117,8 @@ Three ordering rules the diagram encodes, and which the rest of this document de
 
 ### 4.2 Secondary flows
 
-- **Direct task.** `orchestrator_worker_start({ title, description })` — skip the issue record and start a worker straight away (AO's "New task").
+- **New task.** `POST /dsho/api/tasks` with `{ repoId, brief }` — the board panel's New task button, and the same path AO's *New task* dialog takes. The task is named **from the brief immediately** (whitespace collapsed, capped at 100 characters, `Untitled task` when the brief says nothing), so a card exists with a name on it before anything is asked of a model. The worker is then asked **exactly once**, as its first instruction, to replace that provisional name with `orchestrator_task_title`; the replacement is compare-and-swap against the provisional title, is one-shot, and is abandoned after a minute. A brief that names nothing is allowed — AO's promptless worker — and is simply never refined.
+- **Direct task.** `orchestrator_worker_start({ title, description })` — skip the issue record and start a worker straight away, under the title the caller gave it (already named, so never refined).
 - **Orchestrator plans.** The orchestrator session, being a normal DSH agent, uses its existing tools (read/grep/glob/bash/subagent) to explore the repo, then creates several issues and prioritizes them.
 - **Steer.** The user opens a worker session from a card and types into it directly — DSH's own chat is the steering surface; no bespoke messenger needed.
 - **Recover.** A worker's session is durable. If DSH restarts, the board reattaches to the same sessions.
@@ -1295,8 +1296,9 @@ Restricted to **worker** sessions with `ctx.tools.restrict()`. These are the plu
 | Tool | Durable effect |
 |---|---|
 | `orchestrator_report` | **The single worker→orchestrator channel** (mirrors `ao report`). `{ state?: 'checkpoint'\|'needs_input'\|'stuck'\|'done', note, outputs?: [{kind:'artifact'\|'pr_created'\|'pr_reviewed', ref}] }` |
+| `orchestrator_task_title` | `{ title }` → replaces the **provisional** title of the worker's own task (§4.2 *New task*). Accepted only from the worker whose task is still waiting, only once per task, and only while the task still carries the provisional title — a person's rename is never overwritten. |
 
-That is deliberately one tool, not five. `state` and `outputs` are orthogonal, `outputs` applies to any state, and the batching/delivery policy is owned by the report outbox (§10.5) rather than duplicated per tool. `pr_created` binding replaces a separate PR-reporting tool; `stuck`/`needs_input` additionally set `activity_state`.
+That is deliberately reporting as ONE tool, not five. `state` and `outputs` are orthogonal, `outputs` applies to any state, and the batching/delivery policy is owned by the report outbox (§10.5) rather than duplicated per tool. `pr_created` binding replaces a separate PR-reporting tool; `stuck`/`needs_input` additionally set `activity_state`. `orchestrator_task_title` is a second worker tool for a different job: it is not a report, it is the answer to the one question the new-task flow asks, and it identifies its target from the **calling session** rather than from an id — the same rule the report tool follows.
 
 ### 12.3 Reviewer-protocol tools
 

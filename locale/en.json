@@ -70,5 +70,15 @@
   "orchestrator.settings.saving": "Saving…",
   "orchestrator.settings.saved": "Saved",
   "orchestrator.settings.saveFailed": "Could not save: {message}",
-  "orchestrator.settings.close": "Close project settings"
+  "orchestrator.settings.close": "Close project settings",
+  "orchestrator.task.new": "New task",
+  "orchestrator.task.title": "New task",
+  "orchestrator.task.close": "Close the new-task dialog",
+  "orchestrator.task.brief": "What needs doing?",
+  "orchestrator.task.placeholder": "Describe the task in your own words. A worker starts on it immediately.",
+  "orchestrator.task.hint": "The card is named from your first line straight away, and renamed once the worker has named the task.",
+  "orchestrator.task.cancel": "Cancel",
+  "orchestrator.task.start": "Start task",
+  "orchestrator.task.starting": "Starting…",
+  "orchestrator.task.failed": "Could not create the task: {message}"
 }

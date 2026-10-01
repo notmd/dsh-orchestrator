@@ -42,6 +42,8 @@ import { fillSlots } from './host/workers-service.ts'
 import { createBoardRoute } from './host/board-route.ts'
 import { createSettingsRoutes } from './host/settings-route.ts'
 import { createConnectRoutes } from './host/connect-route.ts'
+import { createTaskRoutes } from './host/tasks-route.ts'
+import { createTaskRefinements } from './host/task-refinements.ts'
 import type { WorkspaceListerLike } from './host/connect-route.ts'
 import { restrictionFor, sessionKind } from './host/tools.ts'
 import { lazyFactStore, openFactStore } from './host/store.ts'
@@ -114,12 +116,16 @@ export function apply(ctx: HostContext, config?: PluginConfigInput): PluginConfi
   const store = lazyFactStore(() => openFactStore({ facility: ctx.storageDomain, schemas: FACT_SCHEMAS }))
   const spawn = createSpawnDeps(ctx)
   const live = createLiveWorkers()
+  // Outstanding title refinements (the new-task flow). Process-local and in memory on
+  // purpose: the durable fact is the task's title, and a restart loses only the chance
+  // to improve a name -- see `./host/task-refinements.ts`.
+  const refinements = createTaskRefinements()
 
   own(
     ctx,
     () => {
       const disposers: Array<() => void> = []
-      const tools = buildOrchestratorTools({ config: resolved, run, store, spawn, live })
+      const tools = buildOrchestratorTools({ config: resolved, run, store, spawn, live, refinements })
 
       // The board's read endpoint. Registered under the same effect as the tools, so
       // unloading disposes the route rather than leaving a handler on a dead service.
@@ -156,6 +162,13 @@ export function apply(ctx: HostContext, config?: PluginConfigInput): PluginConfi
         run,
         workspaces: readWorkspaceLister(ctx),
       })) {
+        disposers.push(ctx.webServer.register(route))
+      }
+
+      // The new-task write. A route rather than a tool for the reason the reference has a
+      // New-task dialog: the person typing a brief has no session in the loop, so there is
+      // no model to call a tool for them.
+      for (const route of createTaskRoutes({ run, store, spawn, config: resolved, live, refinements })) {
         disposers.push(ctx.webServer.register(route))
       }
 

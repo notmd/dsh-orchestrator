@@ -135,11 +135,20 @@ test('focus goes in, is trapped, and comes back', () => {
   assert.match(dialog, /opener\.focus\(\)/, 'and focuses it again on close')
   assert.match(client, /settingsOpener\.current = opener/, 'the Board captures the "..." trigger')
   assert.match(client, /restoreFocusTo: settingsOpener\.current/, 'and hands it to the dialog')
-  const trap = functionBody(client, 'const trapTab =')
+  // The trap itself is shared, so it is asserted once, on the helper -- and both dialogs are
+  // asserted to USE it, because the failure this guards is a second dialog that copies the
+  // markup and forgets the keyboard rules.
+  const trap = functionBody(client, 'function trapTabWithin(')
   assert.match(trap, /event\?\.key !== 'Tab'/)
   assert.match(trap, /event\.shiftKey === true/, 'Shift+Tab wraps backwards')
   assert.match(trap, /last\?\.focus\(\)/)
   assert.match(trap, /first\?\.focus\(\)/)
+  assert.match(dialog, /trapTabWithin\(dialog\.current, event\)/, 'the settings dialog uses the shared trap')
+  assert.match(
+    functionBody(client, 'function NewTaskDialog('),
+    /trapTabWithin\(dialog\.current, event\)/,
+    'and the new-task dialog does too',
+  )
 })
 
 test('every token the settings stylesheet uses is a token the host really defines', () => {

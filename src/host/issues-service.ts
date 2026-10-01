@@ -66,8 +66,12 @@ async function loadIssues(store: Awaited<ReturnType<LazyFactStore['get']>>): Pro
  * Returns the id, or a message explaining why it could not be resolved — so the
  * caller never has to guess which of "no repos", "several repos" and "unknown id"
  * it is looking at.
+ *
+ * Exported because the new-task flow needs the same inference: a panel asking for
+ * "a task in this project" and a model asking for "an issue" must resolve the same
+ * repository the same way, or the two paths disagree about which project is meant.
  */
-async function resolveRepoId(
+export async function resolveRepoId(
   store: Awaited<ReturnType<LazyFactStore['get']>>,
   requested: string | undefined,
 ): Promise<{ repoId: string } | { message: string }> {

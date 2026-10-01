@@ -168,6 +168,13 @@ const WORKSPACES_PATH = '/dsho/api/workspaces'
 const CONNECT_PATH = '/dsho/api/connect'
 
 /**
+ * The new-task write. One POST, and the task exists the moment the host answers:
+ * the panel does not create anything itself, so a refusal (no repository connected,
+ * storage down) is shown as the host phrased it rather than guessed at here.
+ */
+const TASKS_PATH = '/dsho/api/tasks'
+
+/**
  * The English fallback, keyed by the locale namespace.
  *
  * Mirrors `locale/en.json`, and a test asserts the two agree -- so a string cannot be
@@ -253,6 +260,19 @@ const FALLBACK: Record<string, string> = {
   'orchestrator.settings.saved': 'Saved',
   'orchestrator.settings.saveFailed': 'Could not save: {message}',
   'orchestrator.settings.close': 'Close project settings',
+  // The new-task flow (the reference's New task). The hint is the one string worth reading
+  // twice: it is where the provisional title is explained, and a card that renames itself
+  // with no explanation looks like a bug.
+  'orchestrator.task.new': 'New task',
+  'orchestrator.task.title': 'New task',
+  'orchestrator.task.close': 'Close the new-task dialog',
+  'orchestrator.task.brief': 'What needs doing?',
+  'orchestrator.task.placeholder': 'Describe the task in your own words. A worker starts on it immediately.',
+  'orchestrator.task.hint': 'The card is named from your first line straight away, and renamed once the worker has named the task.',
+  'orchestrator.task.cancel': 'Cancel',
+  'orchestrator.task.start': 'Start task',
+  'orchestrator.task.starting': 'Starting…',
+  'orchestrator.task.failed': 'Could not create the task: {message}',
 }
 
 type Translate = (key: string, params?: Record<string, string | number>) => string
@@ -322,6 +342,48 @@ function makeTranslate(locale: unknown): Translate {
 }
 
 /** How often the board refreshes, since the stream is unverified. */
+/**
+ * The Tab trap every dialog in this plugin uses.
+ *
+ * Tab on the last control wraps to the first, Shift+Tab on the first wraps to the last,
+ * and the focusable list is read from the DOM at each keypress rather than cached -- the
+ * list changes as rows are added and an inline editor is opened. It is a module-level
+ * function rather than two copies inside two components, because a dialog whose trap is
+ * subtly different from the other one is a bug nobody notices until they keyboard through
+ * it.
+ */
+/** The focusable surface a dialog offers to the trap. */
+type FocusRoot = { querySelectorAll(selector: string): ArrayLike<{ focus(): void }> } | null
+
+/** The key event the trap reads. Structural, because this script has no DOM lib types. */
+type TrapKeyEvent = { key?: string; shiftKey?: boolean; preventDefault?: () => void }
+
+function trapTabWithin(root: FocusRoot, event: TrapKeyEvent): void {
+  if (event?.key !== 'Tab') return
+  if (!root) return
+  const focusable = Array.from(
+    root.querySelectorAll(
+      'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    ),
+  )
+  if (focusable.length === 0) return
+  const first = focusable[0]
+  const last = focusable[focusable.length - 1]
+  // `unknown`, because the DOM's `activeElement` is an `Element` and the two sides of this
+  // comparison are structural shapes: the compiler refuses the overlap it cannot see, and
+  // the comparison is exactly right at runtime.
+  const active: unknown = document.activeElement
+  if (event.shiftKey === true && (active === first || active === root)) {
+    event.preventDefault?.()
+    last?.focus()
+    return
+  }
+  if (event.shiftKey !== true && active === last) {
+    event.preventDefault?.()
+    first?.focus()
+  }
+}
+
 const POLL_MS = 5_000
 
 /**
@@ -587,6 +649,37 @@ loader.load({
   border-radius: inherit; background-color: color-mix(in srgb, var(--dsw-alias-state-warn-primary, #f59e0b) 9%, transparent);
   animation: dsho-attention-pulse 3.5s cubic-bezier(0.45, 0, 0.55, 1) infinite; }
 .dsho-card[data-tone='busy'] .dsho-glyph { animation: dsho-status-pulse 1.8s ease-in-out infinite; }
+/* The new-task dialog: the settings dialog's own surface and head, sized for one field
+   rather than a list of rows. Sharing them is the point -- two dialogs in one panel that
+   looked different would read as two plugins. NOTE, as above: no backticks in this prose,
+   because the stylesheet is a template literal. */
+.dsho-task { width: min(34rem, 100%); max-height: 100%; display: flex; flex-direction: column;
+  border-radius: var(--dsw-radius-panel, 14px); background: var(--dsw-alias-bg-layer-2, #232324);
+  box-shadow: var(--dsw-elevation-prominent, 0 10px 40px rgba(0,0,0,0.35)); overflow: hidden;
+  --dsh-scrollbar-thumb: var(--dsw-alias-scrollbar-bg-l2);
+  --dsh-scrollbar-thumb-hover: var(--dsw-alias-scrollbar-hover-l2); }
+.dsho-task:focus { outline: none; }
+.dsho-task__label { display: block; padding: 14px 0 6px; font-size: 0.75rem; font-weight: 500;
+  line-height: 18px; color: var(--dsw-alias-label-tertiary, inherit); }
+.dsho-task__input { box-sizing: border-box; width: 100%; min-height: 7rem; resize: vertical;
+  font: inherit; font-size: 0.875rem; line-height: 22px; padding: 10px 12px;
+  color: var(--dsw-alias-label-primary, inherit);
+  background: var(--dsw-alias-bg-layer-1, rgba(127,127,127,0.08));
+  border: 1px solid var(--dsw-alias-border-l2, rgba(127,127,127,0.24));
+  border-radius: var(--dsw-radius-md, 12px); }
+.dsho-task__input:focus-visible { outline: var(--dsw-focus-ring-width, 2px) solid
+  var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary, #4c8dff)); outline-offset: 1px; }
+.dsho-task__hint { margin: 8px 0 0; font-size: 0.75rem; line-height: 18px;
+  color: var(--dsw-alias-label-tertiary, inherit); }
+.dsho-task__footer { flex: none; display: flex; align-items: center; justify-content: flex-end;
+  gap: 8px; padding: 14px 20px 18px; }
+.dsho-btn--quiet { min-height: 28px; padding: 4px 12px; border-color: transparent; }
+.dsho-btn--primary { display: inline-flex; align-items: center; gap: 6px; min-height: 28px;
+  padding: 4px 12px; border-color: transparent; background: var(--dsw-alias-brand-primary, #f9fafb);
+  color: var(--dsw-alias-label-primary-foreground, #111); font-weight: 500; }
+.dsho-btn--primary:hover { opacity: 0.9; }
+.dsho-btn--primary:disabled { cursor: default; opacity: 0.45; }
+
 @media (prefers-reduced-motion: reduce) {
   .dsho-card, .dsho-card__actions { transition: none; }
   .dsho-card--attention::before { animation: none; opacity: 0.5; }
@@ -1254,6 +1347,40 @@ loader.load({
     }
 
     /**
+     * Creates a task from a brief, and starts a worker on it.
+     *
+     * No optimistic card is drawn: the next board read carries the real one, and the board
+     * is derived from durable facts -- a locally invented card would be a card the host
+     * never created, which is exactly the class of lie this plugin exists to avoid.
+     */
+    async function createTask(
+      repoId: string,
+      brief: string,
+    ): Promise<{ ok: true; title: string; workerId?: string } | { ok: false; message: string }> {
+      try {
+        const response = await fetch(TASKS_PATH, {
+          method: 'POST',
+          cache: 'no-store',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ repoId, brief }),
+        })
+        const payload = (await response.json().catch(() => undefined)) as
+          | { ok?: boolean; message?: string; title?: string; workerId?: string }
+          | undefined
+        if (!response.ok || payload?.ok !== true) {
+          return { ok: false, message: payload?.message ?? (await failureMessage(response)) }
+        }
+        return {
+          ok: true,
+          title: typeof payload.title === 'string' ? payload.title : '',
+          ...(typeof payload.workerId === 'string' ? { workerId: payload.workerId } : {}),
+        }
+      } catch (error) {
+        return { ok: false, message: error instanceof Error ? error.message : 'unreachable' }
+      }
+    }
+
+    /**
      * The switch.
      *
      * A `<button role="switch">` with `aria-checked`, which is the host's own control --
@@ -1693,41 +1820,9 @@ loader.load({
         return () => window.removeEventListener('keydown', onKey as never)
       }, [])
 
-      /**
-       * The trap: Tab on the last control wraps to the first, Shift+Tab on the first wraps
-       * to the last. The focusable list is read from the DOM at each keypress rather than
-       * cached, because the list changes as rows are added and an inline editor is opened.
-       */
-      const trapTab = (event: {
-        key?: string
-        shiftKey?: boolean
-        preventDefault?: () => void
-      }): void => {
-        if (event?.key !== 'Tab') return
-        const root = dialog.current
-        if (!root) return
-        const focusable = Array.from(
-          root.querySelectorAll(
-            'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
-          ),
-        )
-        if (focusable.length === 0) return
-        const first = focusable[0]
-        const last = focusable[focusable.length - 1]
-        // `unknown`, because the DOM's `activeElement` is an `Element` and the two sides of
-        // this comparison are structural shapes: the compiler refuses the overlap it cannot
-        // see, and the comparison is exactly right at runtime.
-        const active: unknown = document.activeElement
-        if (event.shiftKey === true && (active === first || active === root)) {
-          event.preventDefault?.()
-          last?.focus()
-          return
-        }
-        if (event.shiftKey !== true && active === last) {
-          event.preventDefault?.()
-          first?.focus()
-        }
-      }
+      // The Tab trap is shared with the new-task dialog: two copies of a focus rule is one
+      // copy that gets fixed and another that keeps trapping Tab behind the dialog.
+      const trapTab = (event: TrapKeyEvent): void => trapTabWithin(dialog.current, event)
 
       const save = (patch: Record<string, unknown>): void => {
         const fields = Object.keys(patch)
@@ -2019,6 +2114,180 @@ loader.load({
     }
 
     /**
+     * The New-task dialog (the reference's New Task).
+     *
+     * A brief, and a button. Nothing else is asked for, and both omissions are deliberate:
+     *
+     *   - the PROJECT is the panel's own, so the row the person clicked and the task that
+     *     appears cannot disagree -- which is the reference's own reason for scoping a board
+     *     to one project in the first place;
+     *   - the TITLE is derived. The host names the task from the brief the moment it exists
+     *     and asks the worker for a better name afterwards, so there is no title field to
+     *     fill in -- and a person describing work in their own words is not worse at it than
+     *     a form is.
+     */
+    function NewTaskDialog(props: {
+      repoId: string
+      repository: string
+      onClose: () => void
+      onCreated: (title: string) => void
+      /** The button that opened it, so closing hands focus back instead of dropping it. */
+      restoreFocusTo?: unknown
+    }) {
+      const [brief, setBrief] = React.useState('')
+      const [status, setStatus] = React.useState<{ kind: 'idle' | 'starting' | 'error'; message?: string }>({
+        kind: 'idle',
+      })
+      const dialog = React.useRef<{ focus(): void; querySelectorAll(selector: string): ArrayLike<{ focus(): void }> } | null>(
+        null,
+      )
+      const field = React.useRef<{ focus(): void } | null>(null)
+
+      // The BRIEF is focused, not the dialog: a dialog that opens with nothing focused makes
+      // the person press Tab before they can type, and typing is the only thing to do here.
+      React.useEffect(() => {
+        field.current?.focus()
+      }, [])
+
+      React.useEffect(() => {
+        // Focus returns to the trigger, which is what the settings dialog does and what a
+        // keyboard user needs: without it focus lands on the body and the next Tab starts
+        // from the top of the page.
+        const opener = (props.restoreFocusTo ?? null) as { focus?(): void } | null
+        return () => {
+          if (opener && typeof opener.focus === 'function' && document.contains(opener as never)) opener.focus()
+        }
+      }, [])
+
+      React.useEffect(() => {
+        const onKey = (event: { key?: string }): void => {
+          if (event?.key === 'Escape') props.onClose()
+        }
+        window.addEventListener('keydown', onKey as never)
+        return () => window.removeEventListener('keydown', onKey as never)
+      }, [])
+
+      const start = (): void => {
+        if (brief.trim() === '' || status.kind === 'starting') return
+        setStatus({ kind: 'starting' })
+        void createTask(props.repoId, brief).then((result) => {
+          if (!result.ok) {
+            // The host's own words, because it is the only side that knows WHY: nothing is
+            // connected, storage is down, or every slot is taken.
+            setStatus({ kind: 'error', message: result.message })
+            return
+          }
+          props.onCreated(result.title)
+          props.onClose()
+        })
+      }
+
+      const head = h(
+        'div',
+        { className: 'dsho-settings__head' },
+        h(
+          'div',
+          { className: 'dsho-settings__titles' },
+          h('h2', { className: 'dsho-settings__title', id: 'dsho-task-title' }, translate('orchestrator.task.title')),
+          h('span', { className: 'dsho-settings__sub' }, props.repository),
+        ),
+        h('span', { className: 'dsho-settings__spacer' }),
+        status.kind === 'error'
+          ? h(
+              'span',
+              { className: 'dsho-settings__status', 'data-status': 'error', role: 'status' },
+              translate('orchestrator.task.failed', { message: status.message ?? '' }),
+            )
+          : null,
+        h(
+          'button',
+          {
+            type: 'button',
+            className: 'dsho-settings__close',
+            'aria-label': translate('orchestrator.task.close'),
+            title: translate('orchestrator.task.close'),
+            onClick: props.onClose,
+          },
+          h(
+            'svg',
+            { width: 14, height: 14, viewBox: '0 0 16 16', 'aria-hidden': 'true' },
+            h('path', { d: 'M4 4l8 8M12 4l-8 8', fill: 'none', stroke: 'currentColor', strokeWidth: 1.5, strokeLinecap: 'round' }),
+          ),
+        ),
+      )
+
+      return h(
+        'div',
+        {
+          className: 'dsho-settings-scrim',
+          // `target === currentTarget`, for the reason the settings dialog gives: a click
+          // that started inside the dialog and ended on the scrim fires here too, and
+          // without the check a slightly-too-long drag would throw the brief away.
+          onMouseDown: (event: { target?: unknown; currentTarget?: unknown }) => {
+            if (event?.target === event?.currentTarget) props.onClose()
+          },
+        },
+        h(
+          'div',
+          {
+            className: 'dsho-task',
+            role: 'dialog',
+            'aria-modal': 'true',
+            'aria-labelledby': 'dsho-task-title',
+            tabIndex: -1,
+            ref: dialog,
+            onKeyDown: (event: TrapKeyEvent) => trapTabWithin(dialog.current, event),
+          },
+          head,
+          h(
+            'div',
+            { className: 'dsho-settings__body' },
+            h('label', { className: 'dsho-task__label', htmlFor: 'dsho-task-brief' }, translate('orchestrator.task.brief')),
+            h('textarea', {
+              id: 'dsho-task-brief',
+              className: 'dsho-task__input',
+              rows: 6,
+              value: brief,
+              placeholder: translate('orchestrator.task.placeholder'),
+              ref: field,
+              onChange: (event: { target?: { value?: string } }) => {
+                setBrief(event?.target?.value ?? '')
+                // A new brief clears the previous refusal: leaving it up would blame the
+                // text the user has already replaced.
+                if (status.kind === 'error') setStatus({ kind: 'idle' })
+              },
+              onKeyDown: (event: { key?: string; metaKey?: boolean; ctrlKey?: boolean; preventDefault?: () => void }) => {
+                if (event?.key === 'Enter' && (event.metaKey === true || event.ctrlKey === true)) {
+                  event.preventDefault?.()
+                  start()
+                }
+              },
+            }),
+            h('p', { className: 'dsho-task__hint' }, translate('orchestrator.task.hint')),
+          ),
+          h(
+            'div',
+            { className: 'dsho-task__footer' },
+            h(
+              'button',
+              { type: 'button', className: 'dsho-btn dsho-btn--quiet', onClick: props.onClose },
+              translate('orchestrator.task.cancel'),
+            ),
+            h(
+              'button',
+              {
+                type: 'button',
+                className: 'dsho-btn dsho-btn--primary',
+                disabled: brief.trim() === '' || status.kind === 'starting',
+                onClick: start,
+              },
+              status.kind === 'starting' ? translate('orchestrator.task.starting') : translate('orchestrator.task.start'),
+            ),
+          ),
+        ),
+      )
+    }
+    /**
      * The connect panel — the plugin's ONE global surface, and the reason it exists.
      *
      * The board's rows are built from the host's **connected project list**, so an install
@@ -2236,6 +2505,18 @@ loader.load({
       const [settingsOpen, setSettingsOpen] = React.useState(false)
       /** The "..." trigger that opened it, so closing can put focus back where it was. */
       const settingsOpener = React.useRef<unknown>(null)
+      /** Whether the new-task dialog is open. */
+      const [taskOpen, setTaskOpen] = React.useState(false)
+      /** The button that opened it, for the same focus reason. */
+      const taskOpener = React.useRef<unknown>(null)
+      /**
+       * Bumped after a task is created, so the board reads again AT ONCE.
+       *
+       * The dialog closing is not feedback: the card it produced is the feedback, and
+       * waiting up to a poll interval to show it would look like nothing happened. It is a
+       * counter rather than a boolean because a second task must trigger a second read.
+       */
+      const [refreshNonce, setRefreshNonce] = React.useState(0)
 
       // Escape closes the inspector. A detail view dismissible only by finding the close
       // button is not keyboard reachable in practice.
@@ -2247,11 +2528,11 @@ loader.load({
       // first render's `settingsOpen` forever.
       React.useEffect(() => {
         const onKey = (event: { key?: string }) => {
-          if (event?.key === 'Escape' && !settingsOpen) setOpenId(undefined)
+          if (event?.key === 'Escape' && !settingsOpen && !taskOpen) setOpenId(undefined)
         }
         window.addEventListener('keydown', onKey as never)
         return () => window.removeEventListener('keydown', onKey as never)
-      }, [settingsOpen])
+      }, [settingsOpen, taskOpen])
 
       React.useEffect(() => {
         let cancelled = false
@@ -2266,7 +2547,9 @@ loader.load({
           cancelled = true
           clearInterval(timer)
         }
-      }, [props.repoId])
+        // `refreshNonce` is a dependency on purpose: a created task re-runs this effect, which
+        // reads once immediately instead of waiting for the next interval.
+      }, [props.repoId, refreshNonce])
 
       /**
        * What a card's body click does.
@@ -2325,6 +2608,33 @@ loader.load({
                   setSettingsOpen(true)
                 },
               }),
+            ),
+        // The new-task entry point. Rendered only with a project: a task belongs to one, and
+        // a button whose only possible answer is a refusal is worse than no button.
+        activeProject === undefined
+          ? null
+          : h(
+              'button',
+              {
+                type: 'button',
+                className: 'dsho-btn dsho-btn--primary',
+                onClick: (event: { currentTarget?: unknown }) => {
+                  taskOpener.current = event?.currentTarget
+                  setTaskOpen(true)
+                },
+              },
+              h(
+                'svg',
+                { width: 14, height: 14, viewBox: '0 0 16 16', 'aria-hidden': 'true' },
+                h('path', {
+                  d: 'M8 3.5v9M3.5 8h9',
+                  fill: 'none',
+                  stroke: 'currentColor',
+                  strokeWidth: 1.5,
+                  strokeLinecap: 'round',
+                }),
+              ),
+              translate('orchestrator.task.new'),
             ),
         h('span', { className: 'dsho-topbar__spacer' }),
         view.kind === 'ready'
@@ -2431,6 +2741,17 @@ loader.load({
         // rather than pushing it: a modal that reflows what is behind it is a layout, not a
         // dialog. It is inside the panel's own tree, which is what keeps every style and
         // token here scoped to this component.
+        // The new-task dialog, for the same reasons: inside the panel's own tree, absolutely
+        // positioned, and last, so it covers the board rather than reflowing it.
+        taskOpen && activeProject !== undefined
+          ? h(NewTaskDialog, {
+              repoId: props.repoId,
+              repository: activeProject.repository,
+              restoreFocusTo: taskOpener.current,
+              onClose: () => setTaskOpen(false),
+              onCreated: () => setRefreshNonce((previous) => previous + 1),
+            })
+          : null,
         settingsOpen
           ? h(SettingsDialog, {
               // The panel's OWN project, explicitly -- never "the first one", which is how the

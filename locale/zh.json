@@ -70,5 +70,15 @@
   "orchestrator.settings.saving": "正在保存…",
   "orchestrator.settings.saved": "已保存",
   "orchestrator.settings.saveFailed": "无法保存：{message}",
-  "orchestrator.settings.close": "关闭项目设置"
+  "orchestrator.settings.close": "关闭项目设置",
+  "orchestrator.task.new": "新建任务",
+  "orchestrator.task.title": "新建任务",
+  "orchestrator.task.close": "关闭新建任务对话框",
+  "orchestrator.task.brief": "需要做什么？",
+  "orchestrator.task.placeholder": "用你自己的话描述这个任务，worker 会立即开始。",
+  "orchestrator.task.hint": "卡片会先用你的第一行命名，待 worker 命名任务后再更新。",
+  "orchestrator.task.cancel": "取消",
+  "orchestrator.task.start": "开始任务",
+  "orchestrator.task.starting": "正在开始…",
+  "orchestrator.task.failed": "无法创建任务：{message}"
 }

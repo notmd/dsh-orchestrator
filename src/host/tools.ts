@@ -46,6 +46,8 @@ import { createIssueForTool, listIssuesForTool, updateIssueForTool } from './iss
 import { messageWorkerForTool, startWorkerForTool, stopWorkerForTool } from './workers-service.ts'
 import type { LiveWorkers } from './handle-registry.ts'
 import { reportForTool } from './reports-service.ts'
+import { setTaskTitleForTool } from './tasks-service.ts'
+import type { TaskRefinements } from './task-refinements.ts'
 import { reportReviewFailure, startReviewPass, submitVerdict } from './reviewer-service.ts'
 import { buildBoard, renderBoard } from './board-service.ts'
 import { OutputKind, ReportState } from '../domain/reports.ts'
@@ -88,8 +90,15 @@ export function buildOrchestratorTools(options: {
   spawn: SpawnDeps
   /** Live handles, so a running worker can be messaged or stopped. */
   live?: LiveWorkers
+  /**
+   * Outstanding title refinements (the new-task flow).
+   *
+   * Optional because a host that never creates a task from a brief has nothing to
+   * refine, and a required registry would make every existing tool test build one.
+   */
+  refinements?: TaskRefinements
 }): Array<ToolDescriptor<never, unknown>> {
-  const { config, run, store, spawn, live } = options
+  const { config, run, store, spawn, live, refinements } = options
   const tools: Array<ToolDescriptor<never, unknown>> = [
     defineTool({
       name: 'orchestrator_config',
@@ -247,6 +256,29 @@ export function buildOrchestratorTools(options: {
       },
       outputType: 'string',
       execute: async (args, exec) => reportForTool({ store, run, maxReportCharacters: config.maxReportCharacters }, args as never, exec?.agent?.session?.id),
+    }) as ToolDescriptor<never, unknown>,
+
+    defineTool({
+      name: 'orchestrator_task_title',
+      description:
+        'Name the task you were started on, once, when your brief did not name it. The task already ' +
+        'carries a provisional title taken from that brief; this replaces it on the board. It is ' +
+        'accepted only while a title is still awaited for your task, and it changes nothing about ' +
+        'the work itself.',
+      parameters: {
+        title: {
+          type: 'string',
+          required: true,
+          description: 'The task, named in one line of at most 100 characters.',
+        },
+      },
+      outputType: 'string',
+      execute: async (args, exec) =>
+        setTaskTitleForTool(
+          { run, store, spawn, config, ...(refinements ? { refinements } : {}), ...(live ? { live } : {}) },
+          args as never,
+          exec?.agent?.session?.id,
+        ),
     }) as ToolDescriptor<never, unknown>,
 
     defineTool({
@@ -485,11 +517,17 @@ export function describeConfig(config: PluginConfig): string {
 /**
  * The worker-protocol tools, available only in a worker session.
  *
- * One tool, because `state` and `outputs` are orthogonal: `outputs` applies to any
- * state, so a worker can attach an artifact mid-task without changing what the board
- * thinks it is doing.
+ * `orchestrator_report` is the one reporting channel, because `state` and `outputs`
+ * are orthogonal: `outputs` applies to any state, so a worker can attach an artifact
+ * mid-task without changing what the board thinks it is doing.
+ *
+ * `orchestrator_task_title` is the new-task flow's one extra: a task created from a
+ * brief is named provisionally, and this is how the worker replaces that name. It is
+ * a worker tool rather than a user tool for the same reason the report is -- it acts
+ * on the worker's OWN task, identified from the calling session, never by an id the
+ * caller supplies.
  */
-export const WORKER_TOOLS: readonly string[] = ['orchestrator_report']
+export const WORKER_TOOLS: readonly string[] = ['orchestrator_report', 'orchestrator_task_title']
 
 /** The reviewer-protocol tools, available only in a reviewer session. */
 export const REVIEWER_TOOLS: readonly string[] = ['orchestrator_review_verdict', 'orchestrator_review_failed']
@@ -511,6 +549,7 @@ export const ORCHESTRATOR_TOOL_NAMES: readonly string[] = [
   'orchestrator_run_review',
   'orchestrator_board',
   'orchestrator_report',
+  'orchestrator_task_title',
   'orchestrator_review_verdict',
   'orchestrator_review_failed',
 ]
