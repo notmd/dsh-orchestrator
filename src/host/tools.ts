@@ -21,9 +21,9 @@
  * | Tool | Status | Blocked on |
  * |---|---|---|
  * | `orchestrator_config` | **shipped** | — |
- * | `orchestrator_repo_connect` | next | `ctx.subprocess` (verify `gh` auth) |
- * | `orchestrator_issue_create` / `_list` / `_update` | next | `ctx.storageDomain` |
- * | `orchestrator_worker_start` / `_message` / `_stop` / `_attach_pr` | next | `ctx.agents` |
+ * | `orchestrator_repo_connect` | **shipped** | — |
+ * | `orchestrator_issue_create` / `_list` / `_update` | next | an issue record + store accessors |
+ * | `orchestrator_worker_start` / `_message` / `_stop` / `_attach_pr` | next | wiring the spawner into a tool |
  * | `orchestrator_board` | next | the issue + worker stores |
  * | `orchestrator_pr_sync` | next | the PR observer |
  * | `orchestrator_run_review` | next | the reviewer spawner |
@@ -35,6 +35,10 @@ import { PLUGIN_DEFAULTS } from '../config/validate.ts'
 import type { PluginConfig } from '../config/validate.ts'
 import { defineTool } from './tool.ts'
 import type { ToolDescriptor } from './tool.ts'
+import { connectRepo, describeRepoConnect } from './repo.ts'
+import type { Repo } from './repo.ts'
+import type { LazyFactStore } from './store.ts'
+import type { RunCommand } from './worktree.ts'
 
 /**
  * The three flags that decide whether the requested flow happens (PRD §13).
@@ -58,7 +62,14 @@ const DIVERGENCE_NOTE =
  * close over the resolved configuration — and because a static array would tempt
  * a caller into registering a table that was never configured.
  */
-export function buildOrchestratorTools(config: PluginConfig): Array<ToolDescriptor<never, unknown>> {
+export function buildOrchestratorTools(options: {
+  config: PluginConfig
+  /** The command seam. Supplied by the caller so this module stays testable. */
+  run: RunCommand
+  /** Opened on first use, so activation stays synchronous. */
+  store: LazyFactStore
+}): Array<ToolDescriptor<never, unknown>> {
+  const { config, run, store } = options
   const tools: Array<ToolDescriptor<never, unknown>> = [
     defineTool({
       name: 'orchestrator_config',
@@ -71,8 +82,78 @@ export function buildOrchestratorTools(config: PluginConfig): Array<ToolDescript
       outputType: 'string',
       execute: () => describeConfig(config),
     }) as ToolDescriptor<never, unknown>,
+
+    defineTool({
+      name: 'orchestrator_repo_connect',
+      description:
+        'Register a local git checkout so workers can be spawned against it. Verifies that the ' +
+        'path is a git work tree, that the worktree root is gitignored, and that `gh` is ' +
+        'installed and authenticated. Call this before creating issues. Connecting an already ' +
+        'connected repository is idempotent.',
+      parameters: {
+        path: {
+          type: 'string',
+          description: 'Absolute path to the local checkout. Defaults to the configured defaultRepo.',
+        },
+        worktreeRoot: {
+          type: 'string',
+          description: 'Where per-issue worktrees live, relative to the checkout. Defaults to .dsho/worktrees.',
+        },
+        verifyCommands: {
+          type: 'array',
+          items: { type: 'string' },
+          description:
+            'The commands a worker must pass before opening a PR, e.g. ["pnpm typecheck", "pnpm test"].',
+        },
+      },
+      outputType: 'string',
+      execute: async (args) => connectRepoForTool({ config, run, store }, args),
+    }) as ToolDescriptor<never, unknown>,
   ]
   return tools
+}
+
+/** The `orchestrator_repo_connect` body, split out so it is testable directly. */
+export async function connectRepoForTool(
+  options: { config: PluginConfig; run: RunCommand; store: LazyFactStore },
+  args: { path?: string; worktreeRoot?: string; verifyCommands?: readonly string[] },
+): Promise<string> {
+  const rootPath = (args.path ?? options.config.defaultRepo ?? '').trim()
+  if (!rootPath) {
+    return (
+      'No repository path given, and no defaultRepo is configured.\n\n' +
+      'Pass the absolute path to a local git checkout, or set `defaultRepo` in the plugin config.'
+    )
+  }
+
+  let existing: Repo | undefined
+  let store: Awaited<ReturnType<LazyFactStore['get']>> | undefined
+  try {
+    store = await options.store.get()
+    // Idempotence: reconnecting the same checkout must reuse its record, or every
+    // call would mint a new repo id and orphan the issues pointing at the old one.
+    existing = (await store.repos.list()).filter(isRepoRecord).find((record) => record.rootPath === rootPath)
+  } catch (error) {
+    return (
+      'The plugin could not open its storage, so the repository cannot be registered.\n\n' +
+      `Storage error: ${error instanceof Error ? error.message : String(error)}`
+    )
+  }
+
+  const result = await connectRepo({
+    run: options.run,
+    rootPath,
+    ...(args.worktreeRoot ? { worktreeRoot: args.worktreeRoot } : {}),
+    ...(args.verifyCommands ? { verifyCommands: args.verifyCommands } : {}),
+    ...(existing ? { id: existing.id, now: existing.createdAt } : {}),
+  })
+  if (result.ok) await store.repos.put(result.repo.id, result.repo)
+  return describeRepoConnect(result)
+}
+
+/** Narrows an opaque stored record to a `Repo` well enough to compare roots. */
+function isRepoRecord(value: unknown): value is Repo {
+  return typeof value === 'object' && value !== null && typeof (value as Repo).rootPath === 'string'
 }
 
 /**

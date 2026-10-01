@@ -15,6 +15,8 @@
  */
 
 import type { ToolDescriptor } from './tool.ts'
+import type { SubprocessLike } from './exec.ts'
+import type { StorageLike } from './store.ts'
 
 /** The tool registry, as far as this plugin is concerned. */
 export interface ToolRegistryLike {
@@ -37,6 +39,17 @@ export interface ToolRegistryLike {
  */
 export interface HostContext {
   tools: ToolRegistryLike
+  /**
+   * The subprocess capability seam, for git and `gh`.
+   *
+   * Required rather than optional, and listed in `inject`: a plugin that cannot
+   * shell out cannot do its job, so the honest outcome is to stay inactive until
+   * the service exists — which is what `inject` achieves — rather than to activate
+   * and fail at the first tool call.
+   */
+  subprocess: SubprocessLike
+  /** Host-side structured storage, for the board's records. Same reasoning. */
+  storage: StorageLike
   effect(callback: () => (() => void) | void, label?: string): () => void
   logger?: { info(message: string): void; warn(message: string): void; error(message: string): void }
 }

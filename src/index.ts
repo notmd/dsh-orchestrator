@@ -30,6 +30,8 @@ import type { PluginConfig, PluginConfigInput } from './config/validate.ts'
 import type { HostContext } from './host/context.ts'
 import { own } from './host/context.ts'
 import { buildOrchestratorTools } from './host/tools.ts'
+import { createRunCommand } from './host/exec.ts'
+import { lazyFactStore, openFactStore } from './host/store.ts'
 
 /** The plugin row name. Must match `cordis.patch.yml` and `package.json`. */
 export const name = 'dsh-orchestrator'
@@ -37,13 +39,18 @@ export const name = 'dsh-orchestrator'
 /**
  * Services this plugin requires before it may activate.
  *
- * `tools` is the only hard requirement today: the orchestrator surface is the
- * plugin's whole interface to the user's session. Storage, agents, subprocess,
- * and the web server arrive with the services that need them — declaring them
- * now would keep the plugin inactive in a profile that has no use for the board
- * yet, which is a worse failure than an incomplete feature.
+ * `subprocess` and `storage` are declared because the plugin cannot function
+ * without them: every GitHub fact comes from `gh`, and every board record lives in
+ * storage. Declaring them means a profile that lacks either keeps the plugin
+ * **inactive** rather than activating it and failing at the first tool call — the
+ * documented rule is to stay inactive rather than throw.
+ *
+ * `agents`, `workspaceRegistry`, `agentPresets`, `sessionTitle`,
+ * `permissionPresets` and `webServer` arrive with the tools that need them: the
+ * worker spawner and the board routes. Declaring them now would keep the plugin
+ * inactive in a profile that has no use for the board yet.
  */
-export const inject = ['tools']
+export const inject = ['tools', 'subprocess', 'storage']
 
 /**
  * Activates the plugin.
@@ -60,17 +67,28 @@ export const inject = ['tools']
 export function apply(ctx: HostContext, config?: PluginConfigInput): PluginConfig {
   const resolved = normalizePluginConfig(config)
 
+  // Built once, shared by every tool that needs them. The command seam is
+  // stateless; the store is opened on first use so that activation stays
+  // synchronous and a storage problem surfaces at a tool call, where the user can
+  // act on it, rather than at load time where it would disable the plugin.
+  const run = createRunCommand({ subprocess: ctx.subprocess, cwd: resolved.defaultRepo || process.cwd() })
+  const store = lazyFactStore(() => openFactStore({ storage: ctx.storage }))
+
   own(
     ctx,
     () => {
       const disposers: Array<() => void> = []
-      const tools = buildOrchestratorTools(resolved)
+      const tools = buildOrchestratorTools({ config: resolved, run, store })
       for (const tool of tools) {
         disposers.push(ctx.tools.register(tool as never))
       }
       log(ctx, 'info', `${name}: registered ${tools.length} orchestrator tool(s)`)
       return () => {
         for (const dispose of disposers) dispose()
+        // Best effort: a disposal failure must not mask the unload.
+        void store.close().catch((error: unknown) => {
+          log(ctx, 'warn', `${name}: releasing storage failed during unload: ${String(error)}`)
+        })
       }
     },
     `${name}: orchestrator tools`,

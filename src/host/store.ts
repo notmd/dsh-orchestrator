@@ -270,3 +270,67 @@ export function createMemoryFactStore(): FactStore & { readonly writes: number }
     },
   }
 }
+
+/** A store that is opened on first use rather than at activation. */
+export interface LazyFactStore {
+  /** The open store, opening it once. A failure does not poison later calls. */
+  get(): Promise<FactStore>
+  /** True once the store has been opened successfully. */
+  readonly opened: boolean
+  /**
+   * Releases the unit if it was opened, and does nothing if it was not.
+   *
+   * Unload must not *cause* an open: a plugin that was never used should dispose
+   * without touching storage.
+   */
+  close(): Promise<void>
+}
+
+/**
+ * Defers opening the store until something needs it.
+ *
+ * **This is what keeps `apply()` synchronous.** Opening is `async`, and doing it
+ * during activation would either force `apply` to return a promise — putting an
+ * await between activation and registration, which the loader's expectations do
+ * not obviously tolerate — or register the tools late. Neither is necessary:
+ * registering a tool and *using* storage are separable, so the tools register
+ * immediately and the store opens on the first call that needs it.
+ *
+ * A failed open is **not memoised**: the rejected promise is discarded so the next
+ * call retries. A transient backend problem must not permanently disable the
+ * plugin, which is what a cached rejection would do.
+ */
+export function lazyFactStore(open: () => Promise<FactStore>): LazyFactStore {
+  let pending: Promise<FactStore> | undefined
+  let opened = false
+  return {
+    get() {
+      if (!pending) {
+        pending = open().then(
+          (store) => {
+            opened = true
+            return store
+          },
+          (error: unknown) => {
+            pending = undefined
+            throw error
+          },
+        )
+      }
+      return pending
+    },
+    get opened() {
+      return opened
+    },
+    async close() {
+      if (!pending) return
+      try {
+        const store = await pending
+        await store.close()
+      } finally {
+        pending = undefined
+        opened = false
+      }
+    },
+  }
+}

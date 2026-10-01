@@ -9,9 +9,9 @@ bloated status file costs the next agent more than it saves.
 |---|---|
 | **Goal** | Implement [PRD.md](PRD.md) |
 | **Plan source** | [PRD.md §16 Milestones](PRD.md#16-milestones), verified against [docs/dsh-plugin-contract.md](docs/dsh-plugin-contract.md) |
-| **Last updated** | 2026-10-01, chunk 6g |
+| **Last updated** | 2026-10-01, chunk 6g.2 |
 | **Verify** | `npm run verify` → `tsc` (src + test) + `node --test` + build · **all green** |
-| **Current state** | **507 tests, 0 type errors.** The board's read model, configuration, the host plane's low-level layers (spawn, worktree, exec, GitHub access), **persistence, and the repository preflight** are done and verified — worktrees against real git, activation in a real GUI. **The storage question is settled** (see decisions 20–21). Still missing: the observer, the routes, the client half, and the *wiring* of `repo_connect` as a tool. |
+| **Current state** | **516 tests, 0 type errors — but see the ⚠ below.** The board's read model, configuration, the host plane's low-level layers (spawn, worktree, exec, GitHub access), **persistence, and the repository preflight** are done and verified — worktrees against real git, activation in a real GUI. **The storage question is settled** (see decisions 20–21). Still missing: the observer, the routes, the client half. **⚠ `orchestrator_repo_connect` is wired and its preflight is tested, but its persistence step calls a storage API that does not exist** (§3, "The storage API was misread") and would fail at the first call. Fix that before building on it. |
 
 ---
 
@@ -94,6 +94,25 @@ DevTools MCP `new_page`. Install with `npm run build && dsh plugin --profile web
 `src/spike/` (excluded from the shipped bundle, built by `npm run build:spike`) and
 are inserted with a `--patch` overlay, because a host result is otherwise invisible
 from outside the process.
+
+**⚠ The storage API was misread, and the fakes could not catch it.** `openFactStore`
+was written against `ctx.storage.form('kv')`. Neither half is real: `ctx.storage` is
+a **form hub** reached as `ctx.storage.<form>` (not `.form(name)`), and there is **no
+`kv` form anywhere** — the only form is `domain`, i.e. `ctx.storage.domain.open()`.
+`KvFacet`/`KvUnit` are *backend* interfaces that a plugin does not call.
+
+The real path therefore **does** need zod, because
+`DomainSpec.tables[name].valueSchema` is a `ZodType`. The earlier reasoning that
+avoided zod was wrong. The fix is known and small: `zod` is a normal public package
+(present in the profile, installable from the registry — the symlink problem that
+ruled out other DSH imports does not apply to it), so add it, **pin it to the
+profile's version** so the schemas are the same `ZodType` the host validates with,
+and rewrite the adapter over `ctx.storage.domain.open(...)`. `FactStore` and
+`LazyFactStore` are unaffected.
+
+This is the **second** bug of exactly this shape, after the worktree
+canonicalization: **a fake cannot catch a wrong API, because it implements whatever
+interface the author imagined.** The tests were green throughout.
 
 **A live session's log buffers.** "No turn events on disk" does **not** mean no turn
 happened. Read the log after the session closes, or watch the GUI.
