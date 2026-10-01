@@ -35,6 +35,7 @@ import { createSpawnDeps } from './host/spawn-deps.ts'
 import { createLiveWorkers } from './host/handle-registry.ts'
 import { OUTBOX_TICK_MS, deliverPendingReports } from './host/outbox-service.ts'
 import { observeAll } from './host/observer-service.ts'
+import { sweepReviewPasses } from './host/reviewer-service.ts'
 import { lazyFactStore, openFactStore } from './host/store.ts'
 import { FACT_SCHEMAS } from './host/schemas.ts'
 
@@ -141,6 +142,23 @@ export function apply(ctx: HostContext, config?: PluginConfigInput): PluginConfi
           })
       }, resolved.pollIntervalMs)
       observer.unref?.()
+
+      // The review sweep. This is the loop that makes the requested flow happen
+      // without a human: every worker whose current head has no pass gets one, and
+      // the per-worker decision (one pass per head, retry limits, the round cap) is
+      // the planner's, so the board and the scheduler cannot disagree.
+      const reviewer = setInterval(() => {
+        void sweepReviewPasses({ store, spawn, config: resolved, live })
+          .then((outcome) => {
+            if (outcome.scheduled.length > 0) {
+              log(ctx, 'info', `${name}: scheduled ${outcome.scheduled.length} review pass(es)`)
+            }
+          })
+          .catch((error: unknown) => {
+            log(ctx, 'warn', `${name}: the review sweep failed: ${String(error)}`)
+          })
+      }, resolved.reviewSweepIntervalMs)
+      reviewer.unref?.()
       for (const tool of tools) {
         disposers.push(ctx.tools.register(tool as never))
       }
@@ -148,6 +166,7 @@ export function apply(ctx: HostContext, config?: PluginConfigInput): PluginConfi
       return () => {
         clearInterval(tick)
         clearInterval(observer)
+        clearInterval(reviewer)
         for (const dispose of disposers) dispose()
         // A9: unloading leaves sessions and worktrees INTACT. Disposing an agent
         // handle stops and removes its session, so this drops the references and

@@ -15,6 +15,7 @@ import {
   runningRunForSession,
   startReviewPass,
   submitVerdict,
+  sweepReviewPasses,
 } from '../../src/host/reviewer-service.ts'
 import { createLiveWorkers } from '../../src/host/handle-registry.ts'
 import { createMemoryFactStore, lazyFactStore } from '../../src/host/store.ts'
@@ -31,6 +32,9 @@ function fakeHandle(): { handle: AgentHandle; readonly followups: Array<{ conten
   const followups: Array<{ content: Array<{ text: string }> }> = []
   const agent: AgentLike = {
     session: { id: 's' },
+    // A quiet worker: the review gate reads this, so a fixture with no status would
+    // (correctly) be treated as UNKNOWN and nothing would ever be scheduled.
+    status: 'idle',
     followup(message) {
       followups.push(message as { content: Array<{ text: string }> })
     },
@@ -317,4 +321,69 @@ test('a worker with no pull request is refused before anything is spawned', asyn
   const worker = { ...((await raw.workers.get('wrk-1')) as Record<string, unknown>) }
   delete worker.pr
   assert.match(await startReviewPass(deps, worker as never), /has no pull request to review/)
+})
+
+
+// ---------------------------------------------------------------------------
+// The sweep, and the activity gate it reads
+// ---------------------------------------------------------------------------
+
+test('the sweep schedules for a worker whose head has no pass', async () => {
+  const { deps, raw } = await review()
+  await raw.reviewRuns.delete('run-1')
+  const outcome = await sweepReviewPasses(deps)
+  assert.equal(outcome.considered, 1)
+  assert.equal(outcome.scheduled.length, 1)
+  assert.match(outcome.scheduled[0]!.summary, /Review scheduled for acme\/widgets#42/)
+})
+
+test('the gate reads the LIVE activity: a worker mid-turn is not reviewed', async () => {
+  // The reviewer must not race a worker whose diff is still moving. AgentStatus is
+  // only idle | running, and that is exactly the signal the gate wants.
+  const { deps, raw } = await review()
+  await raw.reviewRuns.delete('run-1')
+  const busy = createLiveWorkers()
+  busy.register({
+    workerId: 'wrk-1',
+    sessionId: 'dsho-wrk-1',
+    handle: {
+      agent: { session: { id: 's' }, status: 'running', followup() {} },
+      async dispose() {},
+    },
+  })
+  deps.live = busy
+  const outcome = await sweepReviewPasses(deps)
+  assert.equal(outcome.scheduled.length, 0, 'nothing was scheduled')
+})
+
+test('no live handle means UNKNOWN, and unknown is not idle', async () => {
+  // After a restart we genuinely do not know. Refusing to review is the safe
+  // direction, and the pass starts as soon as the worker next reports.
+  const { deps, raw } = await review()
+  await raw.reviewRuns.delete('run-1')
+  deps.live = createLiveWorkers()
+  const outcome = await sweepReviewPasses(deps)
+  assert.equal(outcome.scheduled.length, 0)
+  assert.equal((await raw.reviewRuns.list()).length, 0, 'no run was created')
+})
+
+test('the sweep skips workers with no pull request, and contains a failure', async () => {
+  const { deps, raw } = await review()
+  await raw.reviewRuns.delete('run-1')
+  const worker = { ...((await raw.workers.get('wrk-1')) as Record<string, unknown>) }
+  delete worker.pr
+  await raw.workers.put('wrk-1', worker)
+  const outcome = await sweepReviewPasses(deps)
+  assert.equal(outcome.considered, 0, 'the worker has no PR, so it is not considered')
+})
+
+test('a store failure is contained, not thrown at the sweep caller', async () => {
+  const outcome = await sweepReviewPasses({
+    store: lazyFactStore(async () => {
+      throw new Error('backend offline')
+    }),
+    spawn: {} as never,
+    config: {} as never,
+  })
+  assert.deepEqual(outcome, { scheduled: [], considered: 0 })
 })

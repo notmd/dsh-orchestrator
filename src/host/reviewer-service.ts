@@ -140,14 +140,22 @@ export async function startReviewPass(deps: ReviewerToolDeps, worker: Worker): P
     },
   ]
 
+  // The gate reads the **live** activity, not an assumption. `AgentStatus` is only
+  // `idle | running`, and that is exactly the signal the gate wants: a reviewer must
+  // not race a worker mid-turn, because the diff would still be moving.
+  //
+  // No handle means we genuinely do not know — after a restart, before the worker
+  // does anything. `unknown` is deliberately NOT `idle`: refusing to review is the
+  // safe direction, and the pass starts as soon as the worker next reports.
+  const liveStatus = deps.live?.byWorker(worker.id)?.handle.agent.status
+  const activity = liveStatus === 'running' ? 'active' : liveStatus === 'idle' ? 'idle' : 'unknown'
+
   const decision = evaluateSession({
     session: {
       autoReview: true,
       kind: 'worker',
       isTerminated: false,
-      // The reviewer runs only when the worker is quiet (PRD §7.5): it must not race
-      // a worker mid-turn, because the diff would still be moving.
-      activity: 'idle',
+      activity,
       lastActivityAt: worker.lastSignalAt,
       reviewerHarness: deps.config.reviewerAgentPreset,
     },
@@ -162,7 +170,13 @@ export async function startReviewPass(deps: ReviewerToolDeps, worker: Worker): P
   })
 
   if (!decision.trigger || !decision.headsToReview.includes(headSha)) {
-    return `No pass scheduled for ${repository}#${worker.pr.number}: ${decision.reason}.`
+    const why =
+      decision.reason === 'not_idle'
+        ? "the worker is not idle, so the diff may still be moving"
+        : decision.reason === 'idle_threshold_not_met'
+          ? 'the worker has not been quiet long enough'
+          : decision.reason
+    return `No pass scheduled for ${repository}#${worker.pr.number}: ${why}.`
   }
 
   const round = changesRequestedCycles(runs) + 1
@@ -372,4 +386,40 @@ export async function reportReviewFailure(
       ? `${remaining} retry/retries remain on this commit.`
       : 'The retry budget for this commit is spent, so the card is released to you.',
   ].join('\n')
+}
+
+
+/**
+ * Schedules passes for every worker that is owed one.
+ *
+ * This is what makes the loop turn without a human: on each sweep, every worker
+ * whose current head has no pass gets one. It is deliberately a thin loop over
+ * `startReviewPass`, because the decision belongs to the planner and duplicating it
+ * here is how the board and the scheduler start disagreeing.
+ *
+ * Serialised rather than fanned out: a sweep that spawns five reviewers at once
+ * would burn five sessions' worth of tokens in a burst, and the per-worker decision
+ * is cheap enough that the delay does not matter.
+ */
+export async function sweepReviewPasses(
+  deps: ReviewerToolDeps,
+): Promise<{ scheduled: Array<{ workerId: string; summary: string }>; considered: number }> {
+  const scheduled: Array<{ workerId: string; summary: string }> = []
+  let store
+  try {
+    store = await deps.store.get()
+  } catch {
+    return { scheduled, considered: 0 }
+  }
+
+  const workers = (await store.workers.list()).map(normalizeWorker).filter((worker) => !!worker.pr)
+  for (const worker of workers) {
+    try {
+      const summary = await startReviewPass(deps, worker)
+      if (summary.startsWith('Review scheduled')) scheduled.push({ workerId: worker.id, summary })
+    } catch {
+      // One worker's failure must not stop the sweep.
+    }
+  }
+  return { scheduled, considered: workers.length }
 }
