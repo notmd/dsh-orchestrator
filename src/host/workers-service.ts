@@ -33,6 +33,7 @@ import { spawnWorker } from './spawn.ts'
 import type { SpawnDeps } from './spawn.ts'
 import { createMemoryFactStore } from './store.ts'
 import { WorktreeManager } from './worktree.ts'
+import { normalizeRepo } from './repo.ts'
 import { workerTaskMessage, workerSystemPrompt } from '../domain/worker-contract.ts'
 import type { PluginConfig } from '../config/validate.ts'
 import type { LiveWorkers } from './handle-registry.ts'
@@ -155,19 +156,17 @@ export async function startWorkerForTool(
     return `${issue.id} is ${issue.state}, so there is nothing to work. Reopen it first.`
   }
 
-  const repos = (await store.repos.list()) as Array<{ id?: unknown; rootPath?: unknown; defaultBranch?: unknown; verifyCommands?: unknown }>
+  const repos = (await store.repos.list()).map(normalizeRepo)
   const repo = repos.find((candidate) => candidate.id === issue.repoId)
-  if (!repo || typeof repo.rootPath !== 'string') {
+  if (!repo || repo.rootPath === '') {
     return (
       `The repository ${issue.repoId} this issue belongs to is not connected, so no worktree can be ` +
       'created. Call `orchestrator_repo_connect` first.'
     )
   }
   const repoRoot = repo.rootPath
-  const defaultBranch = typeof repo.defaultBranch === 'string' ? repo.defaultBranch : ''
-  const verifyCommands = Array.isArray(repo.verifyCommands)
-    ? repo.verifyCommands.filter((c): c is string => typeof c === 'string')
-    : []
+  const defaultBranch = repo.defaultBranch
+  const verifyCommands = repo.verifyCommands
 
   const now = deps.now ?? Date.now
   const worktrees = new WorktreeManager({ run: deps.run, rootPath: repoRoot })
@@ -180,6 +179,9 @@ export async function startWorkerForTool(
       issueNumber: issue.number || 1,
       title: issue.title,
       ...(defaultBranch ? { baseBranch: defaultBranch } : {}),
+      // The project's namespace segment, read live off its record so a settings
+      // change applies to the next worker without a reload.
+      ...(repo.sessionPrefix ? { prefix: repo.sessionPrefix } : {}),
     })
   } catch (error) {
     return `Could not create a worktree for ${issue.id}: ${error instanceof Error ? error.message : String(error)}`
@@ -215,7 +217,10 @@ export async function startWorkerForTool(
       })}`,
       hideFromWorkspace: deps.config.hideWorktreeWorkspaces,
       permissionPreset: deps.config.workerPermissionPreset,
-      agentPreset: deps.config.workerAgentPreset,
+      // The project's assigned preset wins over the plugin default. This is the
+      // "Assignee" row: which agent works this project's issues. Read live off the
+      // record, so a change applies to the next worker rather than to the next reload.
+      agentPreset: repo.workerAgentPreset !== '' ? repo.workerAgentPreset : deps.config.workerAgentPreset,
     })
   } catch (error) {
     // A failed spawn must not strand the tree it just made; R4's disk bound is
@@ -389,6 +394,12 @@ export async function stopWorkerForTool(
  * behaves exactly like a direct one, including the worktree, the session title and the
  * report tool restriction.
  *
+ * **Issue intake is per project** (`Repo.intakeEnabled`): a project with intake off has
+ * its queued work skipped rather than the sweep abandoned, so one paused repository
+ * cannot hold up every other project's queue. Skipped issues keep their `pendingWorker`
+ * flag, which is what makes the setting reversible -- turning intake back on starts
+ * them on the next tick, with nothing to re-queue by hand.
+ *
  * Bounded by the cap at the TOP of each iteration and stopped on the first failure, so
  * a spawn that fails cannot become an infinite loop.
  */
@@ -405,9 +416,19 @@ export async function fillSlots(deps: WorkerToolDeps): Promise<{ started: string
     const active = (await store.workers.list()).map(normalizeWorker).filter((c) => !isTerminalPhase(c.phase))
     if (active.length >= deps.config.maxConcurrentWorkers) return { started, active: active.length }
 
+    const repos = (await store.repos.list()).map(normalizeRepo)
+    const openToIntake = (repoId: string): boolean => {
+      const repo = repos.find((candidate) => candidate.id === repoId)
+      // An issue whose repository is not connected is left alone: `startWorkerForTool`
+      // would refuse it with a clear message, but refusing it every tick forever is
+      // noise, and reconnecting is what makes it work.
+      return repo !== undefined && repo.intakeEnabled
+    }
+
     const next = (await store.issues.list())
       .map(normalizeIssue)
       .filter((candidate) => candidate.pendingWorker === true && candidate.state === IssueState.open && !candidate.workerId)
+      .filter((candidate) => openToIntake(candidate.repoId))
       .sort(byQueueOrder)[0]
     if (!next) return { started, active: active.length }
 

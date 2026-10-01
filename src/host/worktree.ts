@@ -331,8 +331,21 @@ export class WorktreeManager {
     issueNumber: number
     title: string
     baseBranch?: string
+    /**
+     * The project's branch-namespace segment (PRD §13.1's `sessionPrefix`).
+     *
+     * Plumbed through rather than read from a config here, because this class is
+     * constructed with a repository root and nothing else. Until a settings page
+     * existed there was no writer for the prefix, so this parameter was the missing
+     * half of a setting the PRD had specified and nothing could set.
+     */
+    prefix?: string
   }): Promise<{ path: string; branch: string; created: boolean }> {
-    const branch = branchName({ issueNumber: options.issueNumber, title: options.title })
+    const branch = branchName({
+      issueNumber: options.issueNumber,
+      title: options.title,
+      ...(options.prefix ? { prefix: options.prefix } : {}),
+    })
     const path = canonicalize(this.pathFor(options.issueNumber, options.title))
 
     const existing = await this.list()

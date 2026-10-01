@@ -94,12 +94,9 @@ test("the client's fallback table agrees with en.json", () => {
   assert.ok(entries.length > 10, `parsed ${entries.length} fallback entries`)
 
   const fallback: Record<string, string> = {}
-  for (const [, key, value] of entries) fallback[key!] = value!.replace(/\\u2026/g, '\u2026')
+  for (const [, key, value] of entries) fallback[key!] = value!.replace(/\\u2026/g, '\u2026').replace(/\\u2019/g, '\u2019')
   const en = dict('en')
 
-  // The separator characters differ deliberately (the client uses ASCII for the
-  // loading ellipsis and the archive dash, since the source is a plain script); so the
-  // comparison is on the KEY SET and on the placeholder shape, not on punctuation.
   // A SUBSET, not an equality: `en.json` also holds the panellist label, which is
   // passed to the slot registration and never goes through `translate`. Every key the
   // client DOES translate must exist in the dictionary, and vice versa is not required.
@@ -108,6 +105,16 @@ test("the client's fallback table agrees with en.json", () => {
   assert.ok(Object.keys(en).length >= Object.keys(fallback).length, 'and the dictionary is not behind')
   for (const [key, value] of Object.entries(fallback)) {
     assert.deepEqual(placeholders(value), placeholders(en[key]!), `${key} placeholders`)
+  }
+
+  // And the TEXT has to agree, not only the placeholders. This started as a placeholder-only
+  // check on the theory that "the separator characters differ deliberately" -- but that
+  // excused any drift at all, and three strings were found copied from an older revision,
+  // so a host without the locale service would have shown different copy from a host with
+  // it. The escapes are normalized (the client writes `\u2019` and `\u2026` because it is a
+  // classic script) and nothing else is.
+  for (const [key, value] of Object.entries(fallback)) {
+    assert.equal(value, en[key]!, `${key} differs between the client's table and en.json`)
   }
 })
 

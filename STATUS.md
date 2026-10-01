@@ -11,9 +11,9 @@ bloated status file costs the next agent more than it saves.
 |---|---|
 | **Goal** | Implement [PRD.md](PRD.md) |
 | **Plan source** | [PRD.md §16 Milestones](PRD.md#16-milestones), verified against [docs/dsh-plugin-contract.md](docs/dsh-plugin-contract.md) |
-| **Last updated** | 2026-10-01, chunk 34 (the restriction's wiring is verified) |
+| **Last updated** | 2026-10-01, chunk 38 (the settings entry point becomes a real menu button) |
 | **Verify** | `npm run verify` (src only + suite + host/client build) and `npm run verify:all` (src + test + client + spike typechecked, all built, suite run) · **both exit 0** |
-| **Current state** | **754 tests, 0 type errors; `npm run verify` and `npm run verify:all` both exit 0.** The second exists because the first does NOT cover everything: `verify` typechecks `tsconfig.src.json`, which excludes `test/**` and `src/spike/**`, so the suite's types and the spikes' types were never checked by it — a claim this line made and the user's question disproved. The client bundle carries **0 module statements**, so it stays the classic script the loader needs. **The PRD's scope is implemented, audited and demonstrated.** Evidence, each checkable: the whole requested flow runs in `test/integration/flow.test.ts` against a **mock provider with real git**; the board UI was verified rendering in a live GUI at `2018835`, which is the client half's CURRENT commit (the 16 commits since are host-side); all 26 config keys are read by acting code; the R-audit closed R14 and R7; and §12.2's wiring is verified with the platform's honouring taken on its documented contract. **Open:** M6 (the PRD marks it optional), two housekeeping items, and A4 — which the user decided to leave mocked. |
+| **Current state** | **818 tests, 0 type errors; `npm run verify` and `npm run verify:all` both exit 0.** The second exists because the first does NOT cover everything: `verify` typechecks `tsconfig.src.json`, which excludes `test/**` and `src/spike/**`, so the suite's types and the spikes' types were never checked by it — a claim this line made and the user's question disproved. The client bundle carries **0 module statements**, so it stays the classic script the loader needs. **The PRD's scope is implemented, audited and demonstrated.** Evidence, each checkable: the whole requested flow runs in `test/integration/flow.test.ts` against a **mock provider with real git**; the settings page's four writes are proven to reach the work in `test/integration/settings-flow.test.ts` (a real branch on disk, the preset name the spawn resolved, a queue held and then released); the board UI was verified rendering in a live GUI at `2018835`; all 26 config keys are read by acting code; the R-audit closed R14 and R7; and §12.2's wiring is verified with the platform's honouring taken on its documented contract. The settings dialog was verified **LIVE in the web GUI** at `127.0.0.1:50148` in **both themes**, where its geometry, its one-line row hints and its focus trap were measured rather than eyeballed. **Open:** M6 (the PRD marks it optional), two housekeeping items, and A4 (which the user decided to leave mocked). |
 
 
 ---
@@ -67,6 +67,10 @@ everything else inherits.
 | 6j | **`orchestrator_worker_start`** — the moment three separately-verified layers meet: `WorktreeManager` (real git) → `spawnWorker` (real host, spike 2) → `assignWorker`. Plus the **worker contract** (PRD §12.4), the `Worker` record and its phases (§7.3/§5.2), and per-repo issue **numbers** | 27 tests |
 | 6h/6i | **The issue record and its tools.** `createIssue`/`updateIssue`/`assignWorker` with two invariants the record enforces (at most one active worker per issue; an empty patch is not a change), plus `orchestrator_issue_create` / `_list` / `_update` over the verified store | 32 tests |
 | 6g | **Persistence and the repository preflight.** The fact store on `ctx.storage`'s KV layer, record ids, and `connectRepo`'s three checks (git work tree → worktree root ignored → `gh` installed and authenticated) with a refusal that names the fix | 33 tests |
+| 38 | **The settings entry point is now a menu button.** The `...` in the board topbar advertised `aria-haspopup="menu"` and delivered none of it: measured live, a click followed by **ArrowDown did not move focus at all** -- the only way in was Tab, and there was no arrow/Home/End navigation and no rule closing the menu when focus left it. It now follows the WAI-ARIA menu-button contract (arrows open onto the first/last item and move with wrapping, Home/End jump, Escape closes and hands focus back to the trigger) with **Tab deliberately unhandled**: closing on Tab while the focused item is being unmounted is how focus ends up on `document.body`, so a focusout rule closes the menu instead -- verified live, Tab lands on the next control and the menu closes. The surface was then aligned to the host's menu, measured off one: 16px radius (`radius-lg`), the translucent material (`specific-menu` over `menu-backdrop-filter` = 45% fill + `blur(40px) saturate(1.5)`), 144px min-width, items 34px at 13px/20px with a **12px** radius (`radius-md`, half the surface's) and the same prominent elevation. Note the host's own menus are **mouse-only** -- portaled to the end of the body, so Tab leaves them and the arrows do nothing -- which is why this follows the contract rather than the host. | 818 tests; every key path exercised with real key presses in the GUI |
+| 37 | **The reviewer preset became reachable, and failures became locatable.** §13.1 asks for a per-repo `reviewerAgentPreset` and the contract already carried the field; **nothing read it**, so every install ran the plugin's reviewer. The page now has a **Reviewers** section whose one row writes it, and the reviewer pass reads it for all three things it feeds (the harness recorded on the `ReviewRun`, the preset it spawns, and the session facts the planner keys on) — per repo, falling back to the plugin default when empty. Alongside it: a **failed save is now reported on the row that caused it** (the host's refusal names the rejected key and every save sends exactly one, so the message lands where the user is looking, in place of that row's hint), `Saved` is now a receipt that clears itself rather than a permanent header, and the **inline editor gives focus back to its pencil** (measured live: Escape in the editor left focus on `document.body`), and the dialog **dismisses on a scrim press** like the host's own -- guarded on `target === currentTarget`, because a drag that ends on the scrim is delivered there too and would otherwise throw the edit away. | 817 tests; the reviewer preset was followed through a REAL pass in the flow test; the row error, the receipt and the focus return were all measured live in the GUI |
+| 36 | **The settings dialog rebuilt on the HOST's pattern.** The user's pointer was decisive: the reference (AO) is the right shape for a FORM, the host's own Settings is the right shape for THIS host, and the difference shows in every row. Measured off a live host dialog and transcribed: the mask (`bg-mask-1` + `mask-blur`, not a hand-mixed scrim), the panel surface (`bg-layer-2`, `radius-panel` = 28px, `elevation-prominent`), a fixed header over a scrolling body, rows as **hairline-divided** rows (not the reference's bordered card) with the label column taking the slack behind a 48px gutter, a 14px/22px title over a 12px/18px tertiary description, the **36x20 button switch with `aria-checked`** in the BRAND tone (green is a status colour here, not an "on" colour), 28px outline buttons, and `--dsw-focus-ring-*` outlines. Plus the accessibility the first version lacked: a **Tab trap** and focus RETURN to the `...` trigger. | 811 tests; measured live in **dark and light**, incl. Shift+Tab wrapping to the last control and Escape returning focus to the trigger |
+| 35 | **Project settings.** The client's board topbar now names the connected project and carries a `...` menu that opens a modal settings dialog (the reference's Project Settings shape: section headings, one bordered group of rows, label left / control right — and the same Look: no project row menu exists in DSH, so the entry point is ours). Rows: Default branch, Session prefix (Worktrees); Enable issue intake, Repository, Assignee (Issues); Auto review PRs (Pull requests). Host side: `/dsho/api/settings` GET+POST, a pure validated patch contract, and the settings stored ON the `Repo` record so every consumer reads them live. **Four settings that were previously unreachable now reach the work**: `sessionPrefix` → a real branch, `workerAgentPreset` → the preset the spawn resolves, `intakeEnabled` → the queue sweep, `autoReview` → the review pass (that last one was already read; nothing could write it). | 35 tests across 3 files, incl. **`test/integration/settings-flow.test.ts`** — a real worktree branch on disk (`dsho/web/issue-1-…`), the resolved preset recorded by the spawn seam, and a queue held by intake-off then released by intake-on. **Verified LIVE in the web GUI**: the topbar names `acme/widgets`, `...` → Project settings opens the dialog, a switch and an inline edit each persisted (read back over the API), Escape closes it, and a record with NONE of the new fields read as the defaults |
 
 
 Spikes: **M0 spike 1** (the panel seat is real) and **M0 spike 2**
@@ -496,6 +500,46 @@ happened. Read the log after the session closes, or watch the GUI.
 ---
 
 
+### Three findings from rebuilding the settings dialog against the HOST
+
+1. **`React.createElement` gives one child's ELEMENT, not an array.** A
+   `...(props.children ?? [])` spread worked for the three-row sections and threw
+   `Spread syntax requires ...iterable[Symbol.iterator] to be a function` for the one
+   section holding a single row -- and because it threw during render, the slot's error
+   boundary blanked the ENTIRE panel with no visible cause. `?? []` does not help: the
+   value is not null. Normalize with `Array.isArray`, and pass rows as one array argument
+   at the call site. Caught only in a live host; `tsc` and 810 tests were green.
+2. **The host's switch is a `<button role="switch" aria-checked>`, 36x20, in
+   `--dsw-alias-brand-primary`** -- which is `#f9fafb` in dark and near-black in light, so
+   the "on" tone is monochrome and flips with the theme. Green (`state-success-primary`)
+   reads as "the thing is healthy", not "the thing is on", and the host reserves it for
+   status. The same dialog also defines `--dsw-alias-bg-mask-1` and `--dsw-mask-blur` for
+   the scrim and `--dsw-elevation-prominent` for the shadow, so no colour literal and no
+   `color-mix` is needed anywhere in a modal.
+3. **Focus return is not "focus what was focused".** The opener was the menu ITEM, which
+   unmounts with the menu, so the restore was a silent no-op. Capture the control that
+   OUTLIVES the action (the `...` trigger) at the call site and pass it down.
+
+
+### The fact store is shared by every DSH process, and the last writer wins
+
+Two settings flipped back on their own during this work, which looked like a bug in the settings path and was not:
+
+- `~/.dsh/storages/dsho.json` is **one JSON unit** and it is not scoped to a profile, so **every** `dsh` process
+  that loads this plugin -- the desktop app, each `dsh --profile web`, every server started earlier in the session --
+  reads it into its own memory and writes the whole unit back.
+- A process that has been running since before a change therefore holds a **stale copy**, and the next time it writes
+  anything it puts that stale copy back, reverting fields it knows nothing about. Seven orphaned seed servers were
+  alive, and one of them was the GUI hosting the session itself.
+- Proof it is contention and not loss: a value written through the API, followed by `kill` and a fresh start, comes
+  back intact; the file on disk matched every write at the moment of the write.
+
+The practical rules: **verify settings through the server you are editing through**, and kill leftover
+`dsh --profile web --patch /tmp/dsho-seed-patch.yml --port 0` servers before believing a settings bug.
+Check the port first (`lsof -a -nP -p <pid> -iTCP -sTCP:LISTEN`): one of those processes was listening on the port the
+session's GUI uses, and killing it would have ended the session.
+
+
 ## 4. Next
 
 **Only genuinely-open items belong here, and this table has repeatedly drifted** — rows stayed
@@ -509,6 +553,17 @@ reader believes the stale one and re-does finished work. **Prune it whenever §2
 | **§12.2's platform half** | Assumption, not a task | The wiring is verified (fake `agent/created`, four tests). What remains is whether DSH honours `restrict` for a scope — three instruments failed to measure it and the documented contract says it does. Do not add a fourth instrument without proving it can measure the property. |
 | **Spike workspaces** | Housekeeping, needs the registry or the user | `workspace.json` in the web profile still holds workspace entries the spikes registered. Not hand-edited: it is a running service's own state, with the user's real workspaces in the same table. |
 | **A4: a real pull request** | **DECIDED by the user** | Do not open one for now; mock the provider. `test/integration/flow.test.ts` covers the whole flow against a mock `gh` with real git. What a mock cannot cover: whether the real CLI accepts the flags sent. |
+
+**The settings page has since had three chunks of its own** (35 the page and the four settings that reach acting
+code, 36 rebuilt on the host's own pattern, 37 the reviewer preset plus row-level failures, 38 the entry point as a
+menu). Anything further is polish chosen by the user, not by the PRD.
+
+**The settings dialog was CLOSED as unrendered** (it was in this table for one turn): the running
+`dsh web` held the pre-change host module, so `/dsho/api/settings` answered 404 there. The user
+approved a restart, and the page was then verified live — see §2 chunk 35. **The lesson worth
+keeping:** a host module is loaded at activation and does **not** hot-reload (`touch`ing
+`dist/index.js` does nothing), so any host-half change needs a restart before a GUI check, and a
+404 on a new route is the symptom to expect rather than a bug in the route.
 
 **Nothing here is required by the PRD except M6, which the PRD itself marks optional.** The next
 chunk should therefore be chosen by the user rather than assumed: M6, or the two housekeeping
@@ -633,6 +688,27 @@ Everything else in `src/contract/kanban.ts` is AO's reducer verbatim.
 `dsho/issue-<n>-<slug>` while §13.1 shows `dsho/<prefix>/issue-<n>/root`. This
 implements the first as the default with the prefix as a middle segment. The two
 shapes are not reconciled upstream; it is one function to change.
+
+
+### The settings page, and where its rows come from
+
+The page's LAYOUT is the reference's project settings exactly — Worktrees / Issues /
+Pull requests, section headings over one bordered group of rows, the label left and
+the control right, an inline pencil for a text value and a switch for a flag. Two
+things are ours, and both are deliberate:
+
+| Reference row | Ours | Why |
+|---|---|---|
+| **Assignee** — the GitHub login whose assigned issues are picked up | the **agent preset** this project's workers run as (`Repo.workerAgentPreset`) | Our intake is the local issue queue, not a tracker with assignees. The store key is named honestly (`workerAgentPreset`) while the LABEL keeps the reference's meaning: who works this project's issues. Wiring the row to a login nothing reads would have made the page lie. |
+| **Enable issue intake** — auto-spawn from matching tracker issues | the per-repo gate on `fillSlots`'s queue sweep (`Repo.intakeEnabled`) | Same meaning, and it is a real switch: off holds the queue and keeps the `pendingWorker` flag, so turning it back on starts the work with nothing re-queued by hand. |
+
+**A third difference is structural, not cosmetic: the project's `...` menu is OURS.**
+DSH's sidebar has a `...` menu only for SESSION rows (`sidebar.workspaces.session.menu.item`
+is a real list slot); the workspace/project row's menu (Rename / Delete workspace) is
+hard-coded in `dsh-client-ui-workspace` and exposes no seat, and `sidebar.workspaces`
+itself is a `single` slot that package already owns. So the entry point is the board
+panel's own topbar: it names the connected project and carries the `...` that opens the
+dialog — which is also why the snapshot now carries `projects`.
 
 
 ---

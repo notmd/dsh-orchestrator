@@ -40,6 +40,7 @@ import { sweepCompletions } from './host/completion.ts'
 import { sweepHumanFeedback } from './host/feedback-service.ts'
 import { fillSlots } from './host/workers-service.ts'
 import { createBoardRoute } from './host/board-route.ts'
+import { createSettingsRoutes } from './host/settings-route.ts'
 import { restrictionFor, sessionKind } from './host/tools.ts'
 import { lazyFactStore, openFactStore } from './host/store.ts'
 import { FACT_SCHEMAS } from './host/schemas.ts'
@@ -115,6 +116,14 @@ export function apply(ctx: HostContext, config?: PluginConfigInput): PluginConfi
         },
       }
       disposers.push(ctx.webServer.register(createBoardRoute(boardDeps)))
+
+      // The settings page's read AND write endpoint. Same effect, same reasoning: a
+      // route must not outlive the plugin that owns its handler. It is a separate
+      // route from the board because it is only fetched when the dialog opens -- the
+      // board poll must not grow with every setting the page gains.
+      for (const route of createSettingsRoutes({ store, config: resolved })) {
+        disposers.push(ctx.webServer.register(route))
+      }
 
       // Restrict the protocol tools to the session kinds they belong to (PRD §12.2).
       //

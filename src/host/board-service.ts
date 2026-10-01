@@ -38,6 +38,10 @@ import type { ReviewRun } from '../review/runs.ts'
 import { isBotAuthor } from '../domain/pr-snapshot.ts'
 import type { PrSnapshot } from '../domain/pr-snapshot.ts'
 import type { PluginConfig } from '../config/validate.ts'
+import { normalizeRepo } from './repo.ts'
+import type { Repo } from './repo.ts'
+import { toProjectRef } from './settings-service.ts'
+import type { ProjectRef } from './settings-service.ts'
 import type { LazyFactStore } from './store.ts'
 
 /** What the board needs. */
@@ -64,6 +68,15 @@ export interface BoardSnapshot {
     archive: BoardCardView[]
   }
   counts: { total: number; needsAttention: number; byLane: Record<string, number> }
+  /**
+   * The connected projects, oldest first.
+   *
+   * Carried on the snapshot rather than fetched separately so the panel can name the
+   * project whose settings its "..." menu opens, from the poll it already makes. The
+   * settings payload is a separate request because it is only needed once the dialog
+   * opens -- and the board poll must not grow with every setting the page gains.
+   */
+  projects: ProjectRef[]
 }
 
 /**
@@ -263,11 +276,12 @@ export async function buildBoard(deps: BoardDeps): Promise<BoardSnapshot> {
   const now = (deps.now ?? Date.now)()
   const store = await deps.store.get()
 
-  const [workers, issues, snapshots, runs] = await Promise.all([
+  const [workers, issues, snapshots, runs, repos] = await Promise.all([
     store.workers.list(),
     store.issues.list(),
     store.prSnapshots.list(),
     store.reviewRuns.list(),
+    store.repos.list(),
   ])
 
   const normalizedIssues = issues.map(normalizeIssue)
@@ -338,7 +352,30 @@ export async function buildBoard(deps: BoardDeps): Promise<BoardSnapshot> {
       needsAttention: views.filter((view) => view.needsAttention).length,
       byLane,
     },
+    projects: orderProjects(repos.map(normalizeRepo), deps.config),
   }
+}
+
+/**
+ * The projects as the panel shows them: the install's configured one FIRST, then oldest first.
+ *
+ * The order is load-bearing rather than cosmetic. The panel labels its `...` menu with the
+ * FIRST project in this list, and the settings route picks a project by its own rule
+ * (`settings-service.selectProject`, which also prefers `defaultRepo`). Two orderings would
+ * mean the header naming one project while the dialog edits another -- and the user would
+ * have no way to see the disagreement.
+ */
+export function orderProjects(repos: readonly Repo[], config: PluginConfig): ProjectRef[] {
+  const configured = (config.defaultRepo ?? '').trim()
+  const ordered = [...repos].sort((left, right) => {
+    if (configured !== '') {
+      const leftChosen = left.rootPath === configured
+      const rightChosen = right.rootPath === configured
+      if (leftChosen !== rightChosen) return leftChosen ? -1 : 1
+    }
+    return left.createdAt - right.createdAt || left.id.localeCompare(right.id)
+  })
+  return ordered.map(toProjectRef)
 }
 
 /** Renders the board for the model. */

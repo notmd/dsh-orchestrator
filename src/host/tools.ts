@@ -424,6 +424,9 @@ export async function connectRepoForTool(
     rootPath,
     ...(args.worktreeRoot ? { worktreeRoot: args.worktreeRoot } : {}),
     ...(args.verifyCommands ? { verifyCommands: args.verifyCommands } : {}),
+    // The stored record is passed THROUGH, so a reconnect refreshes the repository
+    // facts while keeping every setting the user chose on the settings page.
+    ...(existing ? { previous: existing } : {}),
     ...(existing ? { id: existing.id, now: existing.createdAt } : {}),
   })
   if (result.ok) await store.repos.put(result.repo.id, result.repo)

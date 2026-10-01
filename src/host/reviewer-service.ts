@@ -33,6 +33,7 @@
 
 import { newId } from '../domain/ids.ts'
 import { normalizeIssue } from '../domain/issues.ts'
+import { normalizeRepo } from './repo.ts'
 import { normalizeWorker } from '../domain/workers.ts'
 import type { Worker } from '../domain/workers.ts'
 import { reviewerSystemPrompt, reviewerTaskMessage } from '../domain/reviewer-contract.ts'
@@ -113,16 +114,23 @@ export async function startReviewPass(
   if (!worker.pr || worker.pr.number <= 0) return `${worker.id} has no pull request to review.`
 
   const issue = normalizeIssue(await store.issues.get(worker.issueId))
-  const repo = (await store.repos.list()).find((candidate) =>
-    typeof candidate === 'object' && candidate !== null && (candidate as { id?: unknown }).id === issue.repoId,
-  ) as { owner?: unknown; name?: unknown; defaultBranch?: unknown; autoReview?: unknown } | undefined
-  const repository = typeof repo?.owner === 'string' && typeof repo?.name === 'string' ? `${repo.owner}/${repo.name}` : ''
-  if (repository === '') return `The repository for ${worker.id} is not connected, so it cannot be reviewed.`
+  // Normalized rather than cast: a record written before the per-repo fields existed must
+  // read as the DEFAULTS, and a cast would hand `undefined` to the code below.
+  const repo = (await store.repos.list()).map(normalizeRepo).find((candidate) => candidate.id === issue.repoId)
+  if (repo === undefined || (repo.owner === '' && repo.rootPath === '')) {
+    return `The repository for ${worker.id} is not connected, so it cannot be reviewed.`
+  }
+  const repository = repo.owner !== '' && repo.name !== '' ? `${repo.owner}/${repo.name}` : repo.rootPath
 
   // Auto review can be turned off per repo, which the reference stores per project
   // because the right answer genuinely differs by repository.
-  const autoReview = typeof repo?.autoReview === 'boolean' ? repo.autoReview : deps.config.autoReview
+  const autoReview = repo.autoReview ?? deps.config.autoReview
   if (!autoReview) return `Auto review is off for ${repository}, so no pass was scheduled.`
+
+  // The reviewer's preset is per project too (PRD §13.1), so a heavy repository can run a
+  // stricter reviewer than the rest. Empty means "the plugin's default", which is why this
+  // is a fallback and not a required field.
+  const reviewerPreset = repo.reviewerAgentPreset !== '' ? repo.reviewerAgentPreset : deps.config.reviewerAgentPreset
 
   const runs = await runsForWorker(store, worker.id)
   const snapshot = (await store.prSnapshots.get(worker.id)) as { headSha?: unknown } | undefined
@@ -170,7 +178,7 @@ export async function startReviewPass(
       isTerminated: false,
       activity,
       lastActivityAt: worker.lastSignalAt,
-      reviewerHarness: deps.config.reviewerAgentPreset,
+      reviewerHarness: reviewerPreset,
     },
     prs,
     runs,
@@ -195,7 +203,7 @@ export async function startReviewPass(
 
   const round = changesRequestedCycles(runs) + 1
   const sessionId = `dsho-${newId('rev', (deps.now ?? Date.now)())}`
-  const baseBranch = typeof repo?.defaultBranch === 'string' ? repo.defaultBranch : ''
+  const baseBranch = repo.defaultBranch
 
   let spawned: SpawnedWorker
   try {
@@ -216,7 +224,7 @@ export async function startReviewPass(
         attempt: round,
       })}`,
       permissionPreset: deps.config.reviewerPermissionPreset,
-      agentPreset: deps.config.reviewerAgentPreset,
+      agentPreset: reviewerPreset,
     })
   } catch (error) {
     return `Could not start a reviewer for ${repository}#${worker.pr.number}: ${error instanceof Error ? error.message : String(error)}`
@@ -235,7 +243,7 @@ export async function startReviewPass(
     triggerSource: options.force ? 'manual' : 'auto',
     sessionId,
     startedAt: at,
-    harness: deps.config.reviewerAgentPreset,
+    harness: reviewerPreset,
   }
   await store.reviewRuns.put(runId, run)
   deps.live?.register({ workerId: `reviewer:${runId}`, sessionId, handle: spawned.handle, ...(spawned.scope ? { scope: spawned.scope } : {}) })

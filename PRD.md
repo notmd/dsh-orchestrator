@@ -1198,7 +1198,9 @@ Same-origin HTTP against the DSH web server that already serves the page.
 
 | Route | Method | Purpose |
 |---|---|---|
-| `/dsho/api/board` | GET | Full board snapshot: repos, issues, workers, derived placements, PR snapshots |
+| `/dsho/api/board` | GET | Full board snapshot: repos, issues, workers, derived placements, PR snapshots, **the connected projects** |
+| `/dsho/api/settings` | GET | Project settings: the connected projects, the selected project, its settings, and the plugin defaults an unset override inherits |
+| `/dsho/api/settings` | POST | Apply a settings patch (`{ repoId?, patch }`) and answer the whole payload back |
 | `/dsho/api/worker/:id` | GET | Worker detail: phase history, PR facts, review runs, changed files |
 | `/dsho/api/review/:runId` | GET | One `ReviewRun`: verdict, summary, findings with severity/file/line, reviewer session id |
 | `/dsho/api/worker/:id/actions/:action` | POST | Explicit UI actions (`stop`, `answer`, `runReview`, `archive`, `openPr`) |
@@ -1209,6 +1211,8 @@ Same-origin HTTP against the DSH web server that already serves the page.
 Registered with `ctx.webServer.register({ … })`; every route returns a disposer. Handlers throw → the server answers `400` and logs a warning (documented behaviour), so handlers validate input and return explicit errors rather than throwing on user error.
 
 **Duplicate-operation rule.** Every UI action and every agent tool calls the **same** `OrchestratorService` method. There is no second implementation of an operation in the UI path. Actions that grant or confirm authority — answering a worker's question, approving a plan, stopping a worker, merging — stay user-only and are **not** exposed as agent tools.
+
+**Project settings.** Per-repo configuration is edited through a modal dialog opened from the board panel's topbar — the project name plus a `...` menu — rather than from a second panel, so the board keeps its one seat and the dialog is scoped to the panel it belongs to. The page owns five settings, each of which acting code reads: `defaultBranch`, `sessionPrefix`, `intakeEnabled` (the queue sweep's per-project gate), `workerAgentPreset` ("Assignee": which agent works this project's issues) and `reviewerAgentPreset` ("Default reviewer": which agent reviews them, the per-repo override §13.1 asks for), plus the tri-state per-repo `autoReview` override. All writes go through `/dsho/api/settings`, validated on the host, so the page cannot accept a value the plugin would refuse. One row (`Repository`) is a read-only fact of the connected project rather than a setting, and a failed write is reported **on the row that caused it** — the host's refusal names the rejected key, and every save sends exactly one.
 
 ### 11.5 UI constraints (from DSH's plugin rules)
 
@@ -1416,7 +1420,7 @@ Plugin-level `Config` above is deployment-wide. The things that genuinely vary p
 | `agentRulesFile` | Repo-relative path to a rules file | **Must be validated as repo-relative and non-escaping** — AO rejects absolute paths and any `..` segment, and a missing/unreadable file is a **hard spawn error** rather than a silently dropped rule |
 | `orchestratorRules` | Standing rules for the planning session | |
 | `autoReview` | Per-repo override of the auto-review default | AO stores this per project, not only globally |
-| `reviewerAgentPreset` | Which reviewer preset to use here | Per-repo, so a heavy repo can use a stricter reviewer |
+| `reviewerAgentPreset` | Which reviewer preset to use here | Per-repo, so a heavy repo can use a stricter reviewer. Reachable since chunk 37: edited on the project settings page as "Default reviewer", read by every reviewer pass for the harness it records and the preset it spawns |
 | `disabled` | Park a repo without removing it | |
 
 **Two AO behaviours worth copying verbatim.** First, `agentRulesFile` failures are **loud**: *"Missing/unreadable files are returned as errors so spawn can fail with a clear config problem instead of silently dropping standing rules."* A rule the user wrote and the worker never received is worse than a failed spawn. Second, `postCreate` is where the cost lives — pre-warming dependencies per worktree is the difference between a worker that starts in seconds and one that starts in minutes, and it is the natural companion to the speculative worktree preparation in [Appendix B §B15.10](docs/agent-orchestrator-reference.md).

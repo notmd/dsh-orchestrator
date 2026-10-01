@@ -74,11 +74,40 @@ interface CardView {
   }
 }
 
+/** One connected project, as the snapshot and the settings payload serialise it. Mirrors `ProjectRef`. */
+interface ProjectView {
+  id: string
+  repository: string
+  rootPath: string
+  defaultBranchDetected: boolean
+}
+
+/** The settings payload. Mirrors `SettingsView`. */
+interface SettingsPayload {
+  projects: ProjectView[]
+  project: ProjectView | null
+  /** `null` when no project is connected — a state the dialog renders, not an error. */
+  settings: {
+    defaultBranch: string
+    sessionPrefix: string
+    intakeEnabled: boolean
+    workerAgentPreset: string
+    /** The preset this project's reviewer runs as. Empty = the plugin default. */
+    reviewerAgentPreset: string
+    /** `null` means "inherit the plugin default"; it is not `false`. */
+    autoReview: boolean | null
+  } | null
+  /** The plugin defaults an unset per-project override falls back to, so the page can name them. */
+  defaults: { autoReview: boolean; workerAgentPreset: string; reviewerAgentPreset: string }
+}
+
 /** The board snapshot. Mirrors `BoardSnapshot`. */
 interface BoardSnapshot {
   generatedAt: number
   lenses: { lanes: Record<string, CardView[]>; archive: CardView[] }
   counts: { total: number; needsAttention: number; byLane: Record<string, number> }
+  /** The connected projects. Absent on a snapshot from a host that predates the settings page. */
+  projects?: ProjectView[]
 }
 
 /** The lane order the board renders, and the labels it uses. */
@@ -91,6 +120,9 @@ const LANES: ReadonlyArray<{ key: string; labelKey: string }> = [
 
 /** The endpoint this panel reads. The client's only coupling to the host. */
 const BOARD_PATH = '/dsho/api/board'
+
+/** The settings dialog's endpoint. Fetched only when the dialog opens. */
+const SETTINGS_PATH = '/dsho/api/settings'
 
 /**
  * The English fallback, keyed by the locale namespace.
@@ -107,7 +139,7 @@ const FALLBACK: Record<string, string> = {
   'orchestrator.board.workerOne': '1 worker',
   'orchestrator.board.workerMany': '{count} workers',
   'orchestrator.board.needsAttention': '{count} needing attention',
-  'orchestrator.board.loading': 'Loading the board...',
+  'orchestrator.board.loading': 'Loading the board\u2026',
   'orchestrator.board.unavailable': 'The board is unavailable: {message}',
   'orchestrator.board.stale': 'The board could not be refreshed: {message}. Showing the last reading.',
   'orchestrator.board.emptyTitle': 'No workers yet',
@@ -129,6 +161,40 @@ const FALLBACK: Record<string, string> = {
   'orchestrator.inspector.noFindings': 'No findings recorded for this commit.',
   'orchestrator.inspector.review': 'review {id}',
   'orchestrator.inspector.close': 'Close',
+  'orchestrator.settings.open': 'Project options',
+  'orchestrator.settings.menuItem': 'Project settings\u2026',
+  'orchestrator.settings.title': 'Project settings',
+  'orchestrator.settings.loading': 'Loading project settings\u2026',
+  'orchestrator.settings.unavailable': 'Project settings are unavailable: {message}',
+  'orchestrator.settings.noProject': 'No repository is connected yet. Ask a session to connect one, then open this dialog again.',
+  'orchestrator.settings.worktrees': 'Worktrees',
+  'orchestrator.settings.issues': 'Issues',
+  'orchestrator.settings.pullRequests': 'Pull requests',
+  'orchestrator.settings.defaultBranch': 'Default branch',
+  'orchestrator.settings.defaultBranchHint': 'Base for worktrees and pull requests.',
+  'orchestrator.settings.defaultBranchAuto': 'auto',
+  'orchestrator.settings.sessionPrefix': 'Session prefix',
+  'orchestrator.settings.sessionPrefixHint': 'Namespaces every branch this project pushes.',
+  'orchestrator.settings.intake': 'Enable issue intake',
+  'orchestrator.settings.intakeHint': 'Auto-spawn workers for matching issues.',
+  'orchestrator.settings.repository': 'Repository',
+  'orchestrator.settings.assignee': 'Assignee',
+  'orchestrator.settings.assigneeHint': 'Agent preset for this project\u2019s workers.',
+  'orchestrator.settings.assigneeDefault': 'default',
+  'orchestrator.settings.autoReview': 'Auto review PRs',
+  'orchestrator.settings.reviewers': 'Reviewers',
+  'orchestrator.settings.defaultReviewer': 'Default reviewer',
+  'orchestrator.settings.reviewerHint': 'Agent preset that reviews this project\u2019s pull requests.',
+  'orchestrator.settings.autoReviewHint': 'Our read-only reviewer runs on every PR head.',
+  'orchestrator.settings.autoReviewInherited': 'Inheriting the plugin default ({value}).',
+  'orchestrator.settings.autoReviewReset': 'Use the plugin default',
+  'orchestrator.settings.on': 'on',
+  'orchestrator.settings.off': 'off',
+  'orchestrator.settings.edit': 'Edit {label}',
+  'orchestrator.settings.saving': 'Saving\u2026',
+  'orchestrator.settings.saved': 'Saved',
+  'orchestrator.settings.saveFailed': 'Could not save: {message}',
+  'orchestrator.settings.close': 'Close project settings',
 }
 
 type Translate = (key: string, params?: Record<string, string | number>) => string
@@ -219,6 +285,7 @@ loader.load({
       createElement: (type: unknown, props?: unknown, ...children: unknown[]) => unknown
       useState: <T>(initial: T) => [T, (next: T | ((previous: T) => T)) => void]
       useEffect: (effect: () => void | (() => void), deps?: unknown[]) => void
+      useRef: <T>(initial: T) => { current: T }
     }
     const h = React.createElement
 
@@ -264,7 +331,7 @@ loader.load({
    And --dsw-alias-brand-primary is #f9fafb, nearly white: it is NOT an accent, which is
    why a "busy" status came out white. The accent is -state-business-primary. */
 .dsho-panel, .dsho-panel * { box-sizing: border-box; }
-.dsho-panel { height: 100%; display: flex; flex-direction: column; overflow: hidden;
+.dsho-panel { height: 100%; display: flex; flex-direction: column; overflow: hidden; position: relative;
   padding: var(--dsh-frame-top-clearance, 48px) 24px 24px; color: var(--dsw-alias-label-primary, inherit); }
 /* The reference's board topbar: a fixed-height row with an icon and a title, a flexible
    spacer, and actions at the right, closed by a BOTTOM BORDER so the chrome and the board
@@ -466,6 +533,154 @@ loader.load({
   .dsho-card, .dsho-card__actions { transition: none; }
   .dsho-card--attention::before { animation: none; opacity: 0.5; }
   .dsho-card[data-tone='busy'] .dsho-glyph { animation: none; }
+}
+
+/* ---------------------------------------------------------------------------
+   The project row in the topbar, and the settings dialog it opens.
+
+   The dialog is ABSOLUTE inside the panel rather than fixed over the window. The host's
+   own Settings dialog covers the whole window because it belongs to the whole app; this
+   panel is one column of a shell, and a fixed overlay would blank the sidebar and the
+   conversation a user may still need while reading a setting.
+
+   EVERY rule below is transcribed from the host's own Settings dialog, measured in a
+   live one rather than guessed: the mask (bg-mask-1 + mask-blur), the panel surface
+   (bg-layer-2, radius-panel, elevation-prominent), the row (a hairline divider, a
+   label column that takes the slack with a 48px gutter, a 14px/22px title over a
+   12px/18px tertiary description), the 36x20 switch, and the 28px outline button.
+   An earlier version used the REFERENCE's bordered card group instead; the reference is
+   the right shape for a form, but the host's is the right shape for THIS host, and the
+   difference is visible in every row. */
+.dsho-project { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.dsho-project__name { display: flex; align-items: center; gap: 6px; min-width: 0;
+  font-size: 0.875rem; font-weight: 600; }
+.dsho-project__name > svg { flex: none; color: var(--dsw-alias-label-tertiary, inherit); }
+.dsho-project__name > span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.dsho-project__select { font: inherit; font-size: 0.8125rem; padding: 2px 6px; border-radius: var(--dsw-radius-sm, 6px);
+  max-width: 16rem; color: inherit; background: var(--dsw-alias-bg-module-platform, transparent);
+  border: 1px solid var(--dsw-alias-border-l2, rgba(127,127,127,0.24)); }
+.dsho-menu { position: relative; flex: none; }
+.dsho-menu__trigger { display: inline-flex; align-items: center; justify-content: center; padding: 4px 6px;
+  border-radius: var(--dsw-radius-md, 6px); cursor: pointer; color: var(--dsw-alias-label-tertiary, inherit);
+  border: 0; background: transparent; }
+.dsho-menu__trigger:hover, .dsho-menu__trigger[aria-expanded='true'] {
+  color: var(--dsw-alias-label-primary, inherit); background: var(--dsw-alias-interactive-bg-hover, rgba(127,127,127,0.2)); }
+.dsho-menu__trigger:focus-visible { outline: var(--dsw-focus-ring-width, 2px) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary, #4c8dff)); outline-offset: 2px; }
+/* The host's menu, measured off one: a 16px radius (radius-lg) carrying the menu's
+   translucent material (specific-menu over menu-backdrop-filter) inside a 4px pad,
+   lifted by the same prominent elevation and stroked with its elevation stroke colour.
+   Items are 34px tall at 13px/20px with a 12px radius (radius-md) -- the item radius is
+   HALF the surface's, which is what makes the highlight read as a pill inside the panel
+   rather than a second panel. The fallbacks are the values the tokens resolve to, because
+   a fallback that disagrees is a second, wrong answer that only shows up when the token is
+   missing -- which is exactly when it is trusted. */
+.dsho-menu__list { position: absolute; top: calc(100% + 4px); right: 0; z-index: 30; min-width: 144px; padding: 4px;
+  border-radius: var(--dsw-radius-lg, 16px); background: var(--dsw-specific-menu, rgba(67, 69, 74, 0.45));
+  backdrop-filter: var(--dsw-menu-backdrop-filter, blur(40px) saturate(1.5));
+  --dsw-elevation-stroke-color: var(--dsw-alias-border-l1);
+  box-shadow: var(--dsw-elevation-prominent, 0 10px 40px rgba(0,0,0,0.35)); }
+.dsho-menu__item { display: flex; align-items: center; width: 100%; min-height: 34px; text-align: left;
+  font: inherit; font-size: 0.8125rem; line-height: 20px; padding: 6px 8px;
+  border-radius: var(--dsw-radius-md, 12px); cursor: pointer; color: inherit; border: 0; background: transparent; }
+.dsho-menu__item:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(127,127,127,0.2)); }
+/* Focus and hover show the same highlight, so a keyboard user sees the item the mouse user
+   would, and the ring is drawn INSIDE the item's own radius rather than around it. */
+.dsho-menu__item:focus { background: var(--dsw-alias-interactive-bg-hover, rgba(127,127,127,0.2)); outline: none; }
+.dsho-menu__item:focus-visible { outline: var(--dsw-focus-ring-width, 2px) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary, #4c8dff)); outline-offset: -1px; }
+
+.dsho-settings-scrim { position: absolute; inset: 0; z-index: 40; display: flex; align-items: center;
+  justify-content: center; padding: clamp(12px, 4vh, 32px) 16px;
+  background: var(--dsw-alias-bg-mask-1, rgba(0,0,0,0.45)); backdrop-filter: var(--dsw-mask-blur, none); }
+/* The host's panel: radius-panel, bg-layer-2, and the prominent elevation. It is a fixed
+   header over a scrolling body, which is what keeps the title and the close button still
+   while a long list moves. */
+.dsho-settings { width: min(46rem, 100%); max-height: 100%; display: flex; flex-direction: column;
+  border-radius: var(--dsw-radius-panel, 14px); background: var(--dsw-alias-bg-layer-2, #232324);
+  box-shadow: var(--dsw-elevation-prominent, 0 10px 40px rgba(0,0,0,0.35)); overflow: hidden;
+  --dsh-scrollbar-thumb: var(--dsw-alias-scrollbar-bg-l2);
+  --dsh-scrollbar-thumb-hover: var(--dsw-alias-scrollbar-hover-l2); }
+.dsho-settings:focus { outline: none; }
+.dsho-settings__head { flex: none; display: flex; align-items: center; gap: 8px; padding: 18px 14px 10px 20px; }
+.dsho-settings__titles { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.dsho-settings__title { margin: 0; font-size: 1rem; font-weight: 500; line-height: 24px;
+  color: var(--dsw-alias-label-primary, inherit); }
+.dsho-settings__sub { font-size: 0.75rem; line-height: 18px; color: var(--dsw-alias-label-tertiary, inherit);
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.dsho-settings__spacer { flex: 1; min-width: 8px; }
+.dsho-settings__status { flex: none; font-size: 0.75rem; line-height: 18px; color: var(--dsw-alias-label-tertiary, inherit); }
+.dsho-settings__status[data-status='error'] { color: var(--dsw-alias-state-error-primary, #e5484d); }
+.dsho-settings__body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 0 20px 20px; }
+/* The host's close button: a 28px square, no border, filled only on hover. */
+.dsho-settings__close { flex: none; display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; padding: 0; cursor: pointer; border: 0; border-radius: var(--dsw-radius-sm, 6px);
+  color: var(--dsw-alias-label-primary, inherit); background: transparent; }
+.dsho-settings__close:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(127,127,127,0.2)); }
+.dsho-settings__close:focus-visible { outline: var(--dsw-focus-ring-width, 2px) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary, #4c8dff)); outline-offset: 2px; }
+
+/* One section: a caption over its rows. The host's General page is a flat list, but the
+   reference groups by concern and the user's screenshot shows it, so the group survives
+   -- as a caption in the host's own caption colour rather than a card. */
+.dsho-section { display: flex; flex-direction: column; }
+.dsho-section + .dsho-section { margin-top: 8px; }
+.dsho-section__title { margin: 0; padding: 14px 0 0; font-size: 0.75rem; font-weight: 500; line-height: 18px;
+  color: var(--dsw-alias-label-tertiary, inherit); }
+/* The host's row, measured: a .5px hairline under every row but the last, the label column
+   taking the slack with a 48px gutter so a long description never runs into the control,
+   and the title/description pair on the host's own type scale. */
+.dsho-row { display: flex; align-items: center; gap: 8px; padding: 16px 0;
+  border-bottom: 0.5px solid var(--dsw-alias-border-l2, rgba(127,127,127,0.24)); }
+.dsho-row:last-child { border-bottom: 0; }
+.dsho-row__label { display: flex; flex-direction: column; flex: 1 1 0%; gap: 4px; min-width: 0; padding-right: 48px; }
+.dsho-row__label > span:first-child { font-size: 0.875rem; font-weight: 400; line-height: 22px;
+  color: var(--dsw-alias-label-primary, inherit); }
+.dsho-row__hint { font-size: 0.75rem; font-weight: 400; line-height: 18px;
+  color: var(--dsw-alias-label-tertiary, inherit); }
+/* A row that failed to save says so in its own label column, in the host's error tone.
+   The message is the host's, verbatim -- a paraphrase here would be a second explanation
+   to keep in step with the first, and the host's names the key that was refused. */
+.dsho-row__error { font-size: 0.75rem; font-weight: 400; line-height: 18px;
+  color: var(--dsw-alias-state-error-primary, #e5484d); }
+.dsho-row__control { flex: none; display: flex; align-items: center; justify-content: flex-end; gap: 10px; }
+.dsho-row__value { font-size: 0.875rem; line-height: 22px; color: var(--dsw-alias-label-tertiary, inherit);
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+/* The inline edit: the value and a pencil, which swaps for an input in place, because a
+   dialog of always-open inputs reads as a form to fill in rather than a list to change.
+   The trigger is the host's small outline button; the input is its 36px selector. */
+.dsho-inline { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.dsho-inline__value { font-size: 0.875rem; line-height: 22px; color: var(--dsw-alias-label-primary, inherit);
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis; max-width: 18rem; }
+.dsho-inline__input { font: inherit; font-size: 0.875rem; line-height: 22px; height: 36px; padding: 0 12px;
+  min-width: 14rem; border-radius: var(--dsw-radius-md, 6px); color: var(--dsw-alias-label-primary, inherit);
+  background: var(--dsw-alias-bg-module-platform, var(--dsw-alias-bg-layer-3, transparent)); border: 0; }
+.dsho-inline__input:focus-visible { outline: var(--dsw-focus-ring-width, 2px) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary, #4c8dff)); outline-offset: 2px; }
+.dsho-inline__edit, .dsho-inline__reset { display: inline-flex; align-items: center; gap: 5px; flex: none;
+  height: 28px; padding: 0 10px; font: inherit; font-size: 0.75rem; line-height: 18px; cursor: pointer;
+  color: var(--dsw-alias-label-primary, inherit); background: transparent;
+  border: 1px solid var(--dsw-alias-border-l2, rgba(255,255,255,0.16)); border-radius: var(--dsw-radius-sm, 8px); }
+.dsho-inline__edit:hover, .dsho-inline__reset:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(127,127,127,0.2)); }
+.dsho-inline__edit:focus-visible, .dsho-inline__reset:focus-visible {
+  outline: var(--dsw-focus-ring-width, 2px) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary, #4c8dff)); outline-offset: 2px; }
+/* The switch, the host's own: a 36x20 button with aria-checked, a 2px inset thumb, and
+   the BRAND tone rather than the success tone. Green is a status colour here -- the host
+   reserves it for state, and a green switch reads as "the thing is healthy" rather than
+   "the thing is on".
+   The THUMB changes colour WITH the state, which is the part that is easy to miss: its
+   base tone is label-primary-foreground (near-black against the near-white brand track)
+   and only the OFF state swaps in the grey switch-thumb. One colour for both states
+   leaves a grey dot on a white track -- which is what this did until the host's own rule
+   was read out of the CSSOM. */
+.dsho-switch { box-sizing: border-box; position: relative; flex: 0 0 auto; width: 36px; height: 20px;
+  padding: 2px; border: 0; border-radius: 999px; corner-shape: round; cursor: pointer;
+  background: var(--dsw-alias-border-l3, rgba(127,127,127,0.35)); }
+.dsho-switch[aria-checked='true'] { background: var(--dsw-alias-brand-primary, #f9fafb); }
+.dsho-switch:disabled { cursor: default; opacity: 0.5; }
+.dsho-switch:focus-visible { outline: var(--dsw-focus-ring-width, 2px) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary, #4c8dff)); outline-offset: 2px; }
+.dsho-switch__thumb { display: block; width: 16px; height: 16px; border-radius: 50%; corner-shape: round;
+  background: var(--dsw-alias-label-primary-foreground, #151517); transition: transform 0.12s; }
+.dsho-switch[aria-checked='false'] .dsho-switch__thumb { background: var(--dsw-alias-switch-thumb, #adb2b8); }
+.dsho-switch[aria-checked='true'] .dsho-switch__thumb { transform: translateX(16px); }
+@media (prefers-reduced-motion: reduce) {
+  .dsho-switch__thumb { transition: none; }
 }
 `
 
@@ -908,20 +1123,857 @@ loader.load({
       )
     }
 
-    /** The board panel. */
-    function Board() {
-      const [view, setView] = React.useState<View>({ kind: 'loading' })
-      const [openId, setOpenId] = React.useState<string | undefined>(undefined)
+    /**
+     * The settings page's transport.
+     *
+     * Errors are RETURNED, never thrown: these run inside effects and promise chains that
+     * have nowhere to catch, and a throw would leave the dialog on "loading" forever --
+     * which is indistinguishable from a hung host.
+     */
+    type SettingsResult = { ok: true; payload: SettingsPayload } | { ok: false; message: string }
 
-      // Escape closes the inspector. A detail view dismissible only by finding the close
-      // button is not keyboard reachable in practice.
+    /** The host's own words for a failure, so the page shows the refusal verbatim. */
+    async function failureMessage(response: Response): Promise<string> {
+      try {
+        const body = (await response.json()) as { message?: string }
+        if (body && typeof body.message === 'string' && body.message !== '') return body.message
+      } catch {
+        // A non-JSON error body is still an error; the status is the answer.
+      }
+      return `HTTP ${response.status}`
+    }
+
+    async function readSettings(repoId: string): Promise<SettingsResult> {
+      const query = repoId === '' ? '' : `?repoId=${encodeURIComponent(repoId)}`
+      try {
+        const response = await fetch(`${SETTINGS_PATH}${query}`, { cache: 'no-store' })
+        if (!response.ok) return { ok: false, message: await failureMessage(response) }
+        return { ok: true, payload: (await response.json()) as SettingsPayload }
+      } catch (error) {
+        return { ok: false, message: error instanceof Error ? error.message : 'unreachable' }
+      }
+    }
+
+    /**
+     * One edit, one round trip.
+     *
+     * The host answers with the WHOLE payload after a write, and the dialog renders what
+     * came back rather than what it sent. That is what keeps a control from showing a
+     * value the host refused or normalized -- a branch with its whitespace stripped, a
+     * prefix the validator rejected -- and it is why there is no optimistic local copy to
+     * reconcile.
+     */
+    async function writeSettings(repoId: string, patch: Record<string, unknown>): Promise<SettingsResult> {
+      try {
+        const response = await fetch(SETTINGS_PATH, {
+          method: 'POST',
+          cache: 'no-store',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(repoId === '' ? { patch } : { repoId, patch }),
+        })
+        if (!response.ok) return { ok: false, message: await failureMessage(response) }
+        return { ok: true, payload: (await response.json()) as SettingsPayload }
+      } catch (error) {
+        return { ok: false, message: error instanceof Error ? error.message : 'unreachable' }
+      }
+    }
+
+    /**
+     * The switch.
+     *
+     * A `<button role="switch">` with `aria-checked`, which is the host's own control --
+     * measured at 36x20 with a 2px inset thumb. A checkbox with `role="switch"` is equally
+     * valid ARIA, and this was one until the host's markup was read: matching it buys the
+     * exact geometry, `aria-checked` (which is what styling keys off, so there is no
+     * `:checked` mirror to keep in step), and Space/Enter activation from the platform.
+     */
+    function Switch(props: {
+      id: string
+      checked: boolean
+      label: string
+      disabled?: boolean
+      onChange: (next: boolean) => void
+    }) {
+      return h(
+        'button',
+        {
+          id: props.id,
+          type: 'button',
+          role: 'switch',
+          'aria-checked': props.checked ? 'true' : 'false',
+          'aria-label': props.label,
+          disabled: props.disabled === true,
+          className: 'dsho-switch',
+          onClick: () => props.onChange(!props.checked),
+        },
+        h('span', { className: 'dsho-switch__thumb', 'aria-hidden': 'true' }),
+      )
+    }
+
+    /** One row: label (and optional hint) on the left, the control pushed right. */
+    function SettingsRow(props: { label: string; hint?: string; error?: string; children?: unknown }) {
+      // The error REPLACES the hint rather than joining it: a row that failed to save has
+      // one thing to say, and stacking the two pushes the row taller than its neighbours
+      // for no gain.
+      return h(
+        'div',
+        { className: 'dsho-row', 'data-error': props.error ? 'true' : 'false' },
+        h(
+          'div',
+          { className: 'dsho-row__label' },
+          h('span', null, props.label),
+          props.error
+            ? h('span', { className: 'dsho-row__error', role: 'status' }, props.error)
+            : props.hint
+              ? h('span', { className: 'dsho-row__hint' }, props.hint)
+              : null,
+        ),
+        h('div', { className: 'dsho-row__control' }, props.children),
+      )
+    }
+
+    /**
+     * One section: a caption over its rows.
+     *
+     * The rows are the section's DIRECT children, with no wrapper element, because the
+     * host's rows carry their own hairline divider and `:last-child` has to be able to see
+     * the last one. A wrapper would make every row a last child and draw a divider under
+     * all of them.
+     *
+     * `props.children` is normalized rather than spread, and that is not defensiveness:
+     * React hands back **a single element for one child and an array for several**, so
+     * `...(props.children ?? [])` worked for the three-row sections and threw `Spread syntax
+     * requires ...iterable[Symbol.iterator] to be a function` for the one section holding a
+     * single row. Caught in a live host, where it blanked the whole panel through the slot's
+     * error boundary. The type says array; React does not promise one.
+     */
+    function SettingsSection(props: { title: string; children?: unknown }) {
+      const rows = Array.isArray(props.children) ? props.children : props.children === undefined ? [] : [props.children]
+      return h(
+        'section',
+        { className: 'dsho-section', 'aria-label': props.title },
+        h('h3', { className: 'dsho-section__title' }, props.title),
+        ...rows,
+      )
+    }
+
+    /**
+     * A value with a pencil, which swaps for an input in place.
+     *
+     * Enter commits, Escape abandons, blur commits -- and the commit is skipped when
+     * nothing changed, so opening and closing the editor is never a write. Copied from the
+     * reference's `ProjectSettingsInputRow`, including the focus-and-select on open, which
+     * is what makes the pencil a one-keystroke edit rather than a click into an empty box.
+     *
+     * The pencil is kept in a ref and focused again when the editor closes, because the
+     * input is the focused element and it is unmounted. Without this the keyboard user is
+     * dropped on `document.body`, which is where a measured Escape-in-editor left them --
+     * the dialog survived, but the next Tab started again from the top of the page.
+     */
+    function InlineEdit(props: {
+      id: string
+      label: string
+      value: string
+      display: string
+      placeholder: string
+      disabled?: boolean
+      onCommit: (next: string) => void
+    }) {
+      const [editing, setEditing] = React.useState(false)
+      const [draft, setDraft] = React.useState(props.value)
+      const input = React.useRef<{ focus(): void; select(): void } | null>(null)
+      const pencil = React.useRef<{ focus(): void } | null>(null)
+
       React.useEffect(() => {
-        const onKey = (event: { key?: string }) => {
-          if (event?.key === 'Escape') setOpenId(undefined)
+        if (!editing) return
+        input.current?.focus()
+        input.current?.select()
+      }, [editing])
+
+      const close = (): void => {
+        setEditing(false)
+        // The editor owned focus; give it back to the control that opened it. Deferred by a
+        // microtask because the pencil does not exist in the DOM until React has re-rendered
+        // the read-only branch.
+        void Promise.resolve().then(() => pencil.current?.focus())
+      }
+      const open = (): void => {
+        setDraft(props.value)
+        setEditing(true)
+      }
+      const commit = (): void => {
+        const next = draft
+        close()
+        if (next !== props.value) props.onCommit(next)
+      }
+      // Escape must not close the dialog underneath: the editor owns the key while it is
+      // open, which is why the event is stopped rather than merely handled.
+      const onKeyDown = (event: { key?: string; preventDefault?: () => void; stopPropagation?: () => void }): void => {
+        if (event?.key === 'Enter') {
+          event.preventDefault?.()
+          commit()
+        } else if (event?.key === 'Escape') {
+          event.preventDefault?.()
+          event.stopPropagation?.()
+          setDraft(props.value)
+          close()
+        }
+      }
+
+      if (editing) {
+        return h(
+          'div',
+          { className: 'dsho-inline' },
+          h('input', {
+            ref: input,
+            id: props.id,
+            className: 'dsho-inline__input',
+            value: draft,
+            placeholder: props.placeholder,
+            'aria-label': props.label,
+            onChange: (event: { target?: { value?: string } }) => setDraft(event?.target?.value ?? ''),
+            onBlur: commit,
+            onKeyDown,
+          }),
+        )
+      }
+      return h(
+        'div',
+        { className: 'dsho-inline' },
+        h('span', { className: 'dsho-inline__value', title: props.display }, props.display),
+        h(
+          'button',
+          {
+            ref: pencil,
+            type: 'button',
+            className: 'dsho-inline__edit',
+            disabled: props.disabled === true,
+            'aria-label': translate('orchestrator.settings.edit', { label: props.label }),
+            title: translate('orchestrator.settings.edit', { label: props.label }),
+            onClick: open,
+          },
+          h(
+            'svg',
+            { width: 11, height: 11, viewBox: '0 0 16 16', 'aria-hidden': 'true' },
+            h('path', {
+              d: 'M11.5 2.5l2 2L5 13l-2.8.8L3 11l8.5-8.5Z',
+              fill: 'none',
+              stroke: 'currentColor',
+              strokeWidth: 1.4,
+              strokeLinejoin: 'round',
+            }),
+          ),
+        ),
+      )
+    }
+
+    /** The three-dot glyph. Inline, like every other icon here, so no icon package is required. */
+    function DotsIcon() {
+      return h(
+        'svg',
+        { width: 15, height: 15, viewBox: '0 0 16 16', 'aria-hidden': 'true' },
+        h('circle', { cx: 3.5, cy: 8, r: 1.4, fill: 'currentColor' }),
+        h('circle', { cx: 8, cy: 8, r: 1.4, fill: 'currentColor' }),
+        h('circle', { cx: 12.5, cy: 8, r: 1.4, fill: 'currentColor' }),
+      )
+    }
+
+    /** The project glyph: the same repository mark the panel's own topbar uses. */
+    function ProjectIcon() {
+      return h(
+        'svg',
+        { width: 13, height: 13, viewBox: '0 0 16 16', 'aria-hidden': 'true' },
+        h('path', {
+          d: 'M2.5 4.5A1.5 1.5 0 0 1 4 3h2.2l1.2 1.6H12a1.5 1.5 0 0 1 1.5 1.5v5.4A1.5 1.5 0 0 1 12 13H4a1.5 1.5 0 0 1-1.5-1.5v-7Z',
+          fill: 'none',
+          stroke: 'currentColor',
+          strokeWidth: 1.4,
+          strokeLinejoin: 'round',
+        }),
+      )
+    }
+
+    /**
+     * The project name and its "..." menu.
+     *
+     * The menu holds one item today, and it is a menu rather than a bare button because
+     * that is the affordance the reference uses and the one a later item has a place in --
+     * a lone settings button invites the next action to be a second lone button.
+     *
+     * The dismissal listener is registered only while open, and the trigger stops the
+     * mousedown from reaching it: otherwise the same click that opens the menu would
+     * close it again, which is the classic way this control ends up needing a double click.
+     *
+     * The TRIGGER is handed to `onOpenSettings` so the dialog can give focus back to it.
+     * Reading `document.activeElement` in the dialog instead would capture the menu ITEM,
+     * which unmounts with the menu -- so the restore would be a silent no-op and the user
+     * would be dropped at the top of the document.
+     */
+    function ProjectMenu(props: { repository: string; onOpenSettings: (opener: unknown) => void }) {
+      const [open, setOpen] = React.useState(false)
+      const trigger = React.useRef<unknown>(null)
+      const list = React.useRef<unknown>(null)
+      // An index to focus once the open menu is actually in the DOM. A ref rather than
+      // state: it is a message to the effect below, not something the render depends on.
+      const pending = React.useRef<number | null>(null)
+
+      const items = (): Array<{ focus(): void }> => {
+        const root = list.current as { querySelectorAll(selector: string): ArrayLike<{ focus(): void }> } | null
+        return root ? Array.from(root.querySelectorAll('.dsho-menu__item')) : []
+      }
+      const focusAt = (index: number): void => {
+        const all = items()
+        if (all.length === 0) return
+        all[Math.max(0, Math.min(all.length - 1, index))]?.focus()
+      }
+      /** Move from whatever holds focus now, wrapping at both ends. */
+      const moveBy = (delta: number): void => {
+        const all = items()
+        if (all.length === 0) return
+        const current = all.indexOf(document.activeElement as never)
+        focusAt(current === -1 ? 0 : (current + delta + all.length) % all.length)
+      }
+
+      const openMenu = (index: number): void => {
+        pending.current = index
+        setOpen(true)
+      }
+      const closeMenu = (restoreFocus: boolean): void => {
+        setOpen(false)
+        if (!restoreFocus) return
+        // Same microtask trick as the inline editor: the trigger is always mounted, but
+        // focus has to move after the menu's own focusout handling has settled.
+        void Promise.resolve().then(() => (trigger.current as { focus(): void } | null)?.focus())
+      }
+
+      React.useEffect(() => {
+        if (!open) return
+        const index = pending.current
+        pending.current = null
+        if (index !== null) focusAt(index)
+      }, [open])
+
+      React.useEffect(() => {
+        if (!open) return
+        const onPointerDown = (): void => setOpen(false)
+        window.addEventListener('mousedown', onPointerDown as never)
+        return () => window.removeEventListener('mousedown', onPointerDown as never)
+      }, [open])
+
+      /**
+       * The menu button the host does not have.
+       *
+       * The host's own "..." menus are portaled to the end of the body, so Tab leaves them
+       * and the arrow keys do nothing -- measured live on its workspace menu, where
+       * ArrowDown with the trigger focused did not move focus at all. Ours is NOT portaled
+       * (it is positioned in the topbar), so Tab reaches it naturally; what was missing was
+       * everything else. This is the WAI-ARIA menu-button contract: ArrowDown/ArrowUp open
+       * it onto the first/last item, move through them with wrapping, Home/End jump, Escape
+       * closes and hands focus back to the trigger, and Tab is deliberately NOT handled --
+       * the browser moves focus and the focusout rule below closes the menu, which avoids
+       * the classic bug of unmounting the focused item and stranding focus on the body.
+       */
+      const onKeyDown = (event: {
+        key?: string
+        defaultPrevented?: boolean
+        preventDefault?: () => void
+        stopPropagation?: () => void
+      }): void => {
+        const key = event?.key
+        if (key === 'Escape') {
+          if (!open) return
+          event.preventDefault?.()
+          event.stopPropagation?.()
+          closeMenu(true)
+          return
+        }
+        if (key === 'ArrowDown' || key === 'ArrowUp') {
+          event.preventDefault?.()
+          // On the closed trigger this opens the menu; inside it, it moves. ArrowUp opens
+          // onto the LAST item, which is why the index is clamped rather than named: the
+          // item list is read from the DOM, so the caller cannot know its length here.
+          if (!open) openMenu(key === 'ArrowDown' ? 0 : Number.MAX_SAFE_INTEGER)
+          else if (key === 'ArrowDown') moveBy(1)
+          else moveBy(-1)
+          return
+        }
+        if (open && (key === 'Home' || key === 'End')) {
+          event.preventDefault?.()
+          focusAt(key === 'Home' ? 0 : items().length - 1)
+        }
+      }
+
+      /** Close when focus leaves the menu -- see the Tab note above. */
+      const onBlur = (event: { relatedTarget?: unknown }): void => {
+        const next = event?.relatedTarget ?? null
+        // Anything that is not inside the menu or back on the trigger closes it. A null
+        // target (focus left the document) closes it too.
+        const inList = next !== null && (list.current as { contains(node: unknown): boolean } | null)?.contains(next) === true
+        if (!inList && next !== trigger.current) setOpen(false)
+      }
+
+      const swallow = (event: { stopPropagation?: () => void }): void => event?.stopPropagation?.()
+
+      return h(
+        'div',
+        { className: 'dsho-menu', onMouseDown: swallow, onKeyDown, onBlur },
+        h(
+          'button',
+          {
+            ref: trigger,
+            type: 'button',
+            className: 'dsho-menu__trigger',
+            'aria-haspopup': 'menu',
+            'aria-expanded': open ? 'true' : 'false',
+            'aria-label': translate('orchestrator.settings.open'),
+            title: translate('orchestrator.settings.open'),
+            onClick: () => (open ? closeMenu(false) : setOpen(true)),
+          },
+          h(DotsIcon, null),
+        ),
+        open
+          ? h(
+              'div',
+              { ref: list, className: 'dsho-menu__list', role: 'menu' },
+              h(
+                'button',
+                {
+                  type: 'button',
+                  role: 'menuitem',
+                  className: 'dsho-menu__item',
+                  onClick: () => {
+                    setOpen(false)
+                    props.onOpenSettings(trigger.current)
+                  },
+                },
+                translate('orchestrator.settings.menuItem'),
+              ),
+            )
+          : null,
+      )
+    }
+
+    /**
+     * The project settings dialog.
+     *
+     * Four states, and each is designed rather than improvised: loading, unavailable,
+     * nothing connected, and ready. "No repository is connected" is deliberately NOT the
+     * error state -- an install that has not connected a project yet is the normal first
+     * run, and showing it a failure would teach the user the plugin is broken.
+     *
+     * ## Focus, which is the part a dialog usually gets wrong
+     *
+     * Three things have to hold, and only the first is obvious:
+     *
+     *   - focus moves INTO the dialog on open, or a keyboard user is still typing into the
+     *     page behind it;
+     *   - **Tab cycles within the dialog**, because the board behind it is still in the DOM
+     *     and focusable -- our overlay covers the panel without making anything inert, so
+     *     without a trap the next Tab lands on a card behind the modal;
+     *   - focus returns to the control that opened it on close, or the user is dropped at
+     *     the top of the document with no idea where they were.
+     */
+    function SettingsDialog(props: { repoId: string; restoreFocusTo?: unknown; onClose: () => void }) {
+      type State =
+        | { kind: 'loading' }
+        | { kind: 'ready'; payload: SettingsPayload }
+        | { kind: 'error'; message: string }
+      const [state, setState] = React.useState<State>({ kind: 'loading' })
+      const [status, setStatus] = React.useState<{
+        kind: 'idle' | 'saving' | 'saved' | 'error'
+        message?: string
+        /** The keys this save touched, so a failure can be shown on its own row. */
+        fields?: string[]
+      }>({ kind: 'idle' })
+      const dialog = React.useRef<{ focus(): void; querySelectorAll(selector: string): ArrayLike<{ focus(): void }> } | null>(null)
+
+      React.useEffect(() => {
+        let cancelled = false
+        void readSettings(props.repoId).then((result) => {
+          if (cancelled) return
+          setState(result.ok ? { kind: 'ready', payload: result.payload } : { kind: 'error', message: result.message })
+        })
+        return () => {
+          cancelled = true
+        }
+      }, [props.repoId])
+
+      React.useEffect(() => {
+        // The trigger the Board captured, falling back to whatever held focus. The fallback
+        // matters for the paths that do not come through the menu; the explicit value
+        // matters because the menu ITEM -- the real `document.activeElement` at this moment
+        // -- unmounts with the menu, so restoring to it would do nothing at all.
+        const opener = (props.restoreFocusTo ?? document.activeElement) as { focus?(): void } | null
+        dialog.current?.focus()
+        return () => {
+          if (opener && typeof opener.focus === 'function' && document.contains(opener as never)) opener.focus()
+        }
+      }, [])
+
+      React.useEffect(() => {
+        const onKey = (event: { key?: string }): void => {
+          if (event?.key === 'Escape') props.onClose()
         }
         window.addEventListener('keydown', onKey as never)
         return () => window.removeEventListener('keydown', onKey as never)
       }, [])
+
+      /**
+       * The trap: Tab on the last control wraps to the first, Shift+Tab on the first wraps
+       * to the last. The focusable list is read from the DOM at each keypress rather than
+       * cached, because the list changes as rows are added and an inline editor is opened.
+       */
+      const trapTab = (event: {
+        key?: string
+        shiftKey?: boolean
+        preventDefault?: () => void
+      }): void => {
+        if (event?.key !== 'Tab') return
+        const root = dialog.current
+        if (!root) return
+        const focusable = Array.from(
+          root.querySelectorAll(
+            'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+          ),
+        )
+        if (focusable.length === 0) return
+        const first = focusable[0]
+        const last = focusable[focusable.length - 1]
+        // `unknown`, because the DOM's `activeElement` is an `Element` and the two sides of
+        // this comparison are structural shapes: the compiler refuses the overlap it cannot
+        // see, and the comparison is exactly right at runtime.
+        const active: unknown = document.activeElement
+        if (event.shiftKey === true && (active === first || active === root)) {
+          event.preventDefault?.()
+          last?.focus()
+          return
+        }
+        if (event.shiftKey !== true && active === last) {
+          event.preventDefault?.()
+          first?.focus()
+        }
+      }
+
+      const save = (patch: Record<string, unknown>): void => {
+        const fields = Object.keys(patch)
+        setStatus({ kind: 'saving', fields })
+        void writeSettings(props.repoId, patch).then((result) => {
+          if (result.ok) {
+            setState({ kind: 'ready', payload: result.payload })
+            setStatus({ kind: 'saved', fields })
+            return
+          }
+          setStatus({ kind: 'error', message: result.message, fields })
+        })
+      }
+
+      // "Saved" is a receipt, not a state: it clears itself so the header goes quiet again
+      // instead of reporting the same thing for the rest of the dialog's life. A FAILURE
+      // does not clear -- it has to stay until the user does something about it.
+      const savedKind = status.kind
+      React.useEffect(() => {
+        if (savedKind !== 'saved') return
+        const timer = setTimeout(() => setStatus({ kind: 'idle' }), 2500)
+        return () => clearTimeout(timer)
+      }, [savedKind])
+
+      /**
+       * The failure for one row, or nothing.
+       *
+       * The host names the rejected key in the refusal's `code`, and the save call site
+       * sends exactly one key, so this puts the message where the user is looking. A
+       * failure that names no key (storage down, project gone) stays in the header only,
+       * because marking six rows would blame the wrong thing.
+       */
+      const fieldError = (field: string): string | undefined =>
+        status.kind === 'error' && status.fields?.includes(field) === true ? status.message : undefined
+
+      const statusNode =
+        status.kind === 'idle'
+          ? null
+          : h(
+              'span',
+              {
+                className: 'dsho-settings__status',
+                'data-status': status.kind === 'error' ? 'error' : 'info',
+                role: 'status',
+              },
+              status.kind === 'saving'
+                ? translate('orchestrator.settings.saving')
+                : status.kind === 'saved'
+                  ? translate('orchestrator.settings.saved')
+                  : translate('orchestrator.settings.saveFailed', { message: status.message ?? '' }),
+            )
+
+      // The project's LOCAL PATH sits under its name, because two checkouts of the same
+      // repository are indistinguishable by `owner/name` alone -- and the one thing a user
+      // must be sure of before editing is which one they are editing.
+      const head = h(
+        'div',
+        { className: 'dsho-settings__head' },
+        h(
+          'div',
+          { className: 'dsho-settings__titles' },
+          h('h2', { className: 'dsho-settings__title', id: 'dsho-settings-title' }, translate('orchestrator.settings.title')),
+          state.kind === 'ready' && state.payload.project
+            ? h('span', { className: 'dsho-settings__sub', title: state.payload.project.rootPath }, state.payload.project.repository)
+            : null,
+        ),
+        h('span', { className: 'dsho-settings__spacer' }),
+        statusNode,
+        h(
+          'button',
+          {
+            type: 'button',
+            className: 'dsho-settings__close',
+            'aria-label': translate('orchestrator.settings.close'),
+            title: translate('orchestrator.settings.close'),
+            onClick: props.onClose,
+          },
+          h(
+            'svg',
+            { width: 14, height: 14, viewBox: '0 0 16 16', 'aria-hidden': 'true' },
+            h('path', { d: 'M4 4l8 8M12 4l-8 8', fill: 'none', stroke: 'currentColor', strokeWidth: 1.5, strokeLinecap: 'round' }),
+          ),
+        ),
+      )
+
+      // Variadic on purpose: the dialog's body is a list of sections, and a single
+      // `children` parameter would silently drop all but the first once a section is added.
+      //
+      // The scrim closes on click, which is what the host's own dialogs do, and the check is
+      // `target === currentTarget`: a click that started on a row and ended on the scrim
+      // fires here too (a click targets the common ancestor), and without the check a
+      // slightly-too-long drag off a switch would dismiss the dialog and lose the edit.
+      const shell = (...children: unknown[]): unknown =>
+        h(
+          'div',
+          {
+            className: 'dsho-settings-scrim',
+            onMouseDown: (event: { target?: unknown; currentTarget?: unknown }) => {
+              if (event?.target === event?.currentTarget) props.onClose()
+            },
+          },
+          h(
+            'div',
+            {
+              className: 'dsho-settings',
+              role: 'dialog',
+              'aria-modal': 'true',
+              'aria-labelledby': 'dsho-settings-title',
+              tabIndex: -1,
+              ref: dialog,
+              onKeyDown: trapTab,
+            },
+            head,
+            h('div', { className: 'dsho-settings__body' }, ...children),
+          ),
+        )
+
+      if (state.kind === 'loading') return shell(h('p', { className: 'dsho-note' }, translate('orchestrator.settings.loading')))
+      if (state.kind === 'error') {
+        return shell(
+          h(
+            'p',
+            { className: 'dsho-note dsho-note--error', role: 'status' },
+            translate('orchestrator.settings.unavailable', { message: state.message }),
+          ),
+        )
+      }
+
+      const payload = state.payload
+      if (!payload.settings || !payload.project) {
+        return shell(h('p', { className: 'dsho-note' }, translate('orchestrator.settings.noProject')))
+      }
+
+      const settings = payload.settings
+      // The hint shows the branch shape the prefix actually produces, which is the one fact
+      // a user cannot guess from the word "prefix" -- and only while one is set, since a
+      // pattern with an empty segment in it explains nothing.
+      const prefixHint =
+        settings.sessionPrefix === ''
+          ? translate('orchestrator.settings.sessionPrefixHint')
+          : `dsho/${settings.sessionPrefix}/issue-<n>-<slug>`
+
+      return shell(
+        h(
+          SettingsSection,
+          { title: translate('orchestrator.settings.worktrees') },
+          [
+            h(
+              SettingsRow,
+              {
+                label: translate('orchestrator.settings.defaultBranch'),
+                hint: translate('orchestrator.settings.defaultBranchHint'),
+                error: fieldError('defaultBranch'),
+              },
+              h(InlineEdit, {
+                id: 'dsho-default-branch',
+                label: translate('orchestrator.settings.defaultBranch'),
+                value: settings.defaultBranch,
+                display: settings.defaultBranch === '' ? translate('orchestrator.settings.defaultBranchAuto') : settings.defaultBranch,
+                placeholder: translate('orchestrator.settings.defaultBranchAuto'),
+                onCommit: (next: string) => save({ defaultBranch: next }),
+              }),
+            ),
+            h(
+              SettingsRow,
+              {
+                label: translate('orchestrator.settings.sessionPrefix'),
+                hint: prefixHint,
+                error: fieldError('sessionPrefix'),
+              },
+              h(InlineEdit, {
+                id: 'dsho-session-prefix',
+                label: translate('orchestrator.settings.sessionPrefix'),
+                value: settings.sessionPrefix,
+                display: settings.sessionPrefix === '' ? translate('orchestrator.settings.defaultBranchAuto') : settings.sessionPrefix,
+                placeholder: translate('orchestrator.settings.defaultBranchAuto'),
+                onCommit: (next: string) => save({ sessionPrefix: next }),
+              }),
+            ),
+          ],
+        ),
+        h(
+          SettingsSection,
+          { title: translate('orchestrator.settings.issues') },
+          [
+            h(
+              SettingsRow,
+              {
+                label: translate('orchestrator.settings.intake'),
+                hint: translate('orchestrator.settings.intakeHint'),
+                error: fieldError('intakeEnabled'),
+              },
+              h(Switch, {
+                id: 'dsho-intake',
+                label: translate('orchestrator.settings.intake'),
+                checked: settings.intakeEnabled,
+                onChange: (next: boolean) => save({ intakeEnabled: next }),
+              }),
+            ),
+            h(
+              SettingsRow,
+              { label: translate('orchestrator.settings.repository') },
+              h('span', { className: 'dsho-row__value', title: payload.project.rootPath }, payload.project.repository),
+            ),
+            h(
+              SettingsRow,
+              {
+                label: translate('orchestrator.settings.assignee'),
+                hint: translate('orchestrator.settings.assigneeHint'),
+                error: fieldError('workerAgentPreset'),
+              },
+              h(InlineEdit, {
+                id: 'dsho-assignee',
+                label: translate('orchestrator.settings.assignee'),
+                value: settings.workerAgentPreset,
+                display:
+                  settings.workerAgentPreset === ''
+                    ? `${translate('orchestrator.settings.assigneeDefault')} (${payload.defaults.workerAgentPreset})`
+                    : settings.workerAgentPreset,
+                placeholder: payload.defaults.workerAgentPreset,
+                onCommit: (next: string) => save({ workerAgentPreset: next }),
+              }),
+            ),
+          ],
+        ),
+        h(
+          SettingsSection,
+          { title: translate('orchestrator.settings.reviewers') },
+          [
+            h(
+              SettingsRow,
+              {
+                label: translate('orchestrator.settings.defaultReviewer'),
+                hint: translate('orchestrator.settings.reviewerHint'),
+                error: fieldError('reviewerAgentPreset'),
+              },
+              h(InlineEdit, {
+                id: 'dsho-reviewer-preset',
+                label: translate('orchestrator.settings.defaultReviewer'),
+                value: settings.reviewerAgentPreset,
+                display:
+                  settings.reviewerAgentPreset === ''
+                    ? `${translate('orchestrator.settings.assigneeDefault')} (${payload.defaults.reviewerAgentPreset})`
+                    : settings.reviewerAgentPreset,
+                placeholder: payload.defaults.reviewerAgentPreset,
+                onCommit: (next: string) => save({ reviewerAgentPreset: next }),
+              }),
+            ),
+          ],
+        ),
+        h(
+          SettingsSection,
+          { title: translate('orchestrator.settings.pullRequests') },
+          [
+            h(
+              SettingsRow,
+              {
+                label: translate('orchestrator.settings.autoReview'),
+                hint: translate('orchestrator.settings.autoReviewHint'),
+                error: fieldError('autoReview'),
+              },
+              settings.autoReview === null
+                ? h(
+                    'span',
+                    { className: 'dsho-row__value' },
+                    translate('orchestrator.settings.autoReviewInherited', {
+                      value: payload.defaults.autoReview ? translate('orchestrator.settings.on') : translate('orchestrator.settings.off'),
+                    }),
+                  )
+                : h(
+                    'button',
+                    {
+                      type: 'button',
+                      className: 'dsho-inline__reset',
+                      onClick: () => save({ autoReview: null }),
+                    },
+                    translate('orchestrator.settings.autoReviewReset'),
+                  ),
+              h(Switch, {
+                id: 'dsho-auto-review',
+                label: translate('orchestrator.settings.autoReview'),
+                checked: settings.autoReview === null ? payload.defaults.autoReview : settings.autoReview,
+                onChange: (next: boolean) => save({ autoReview: next }),
+              }),
+            ),
+          ],
+        ),
+      )
+    }
+
+    /** The board panel. */
+    function Board() {
+      const [view, setView] = React.useState<View>({ kind: 'loading' })
+      const [openId, setOpenId] = React.useState<string | undefined>(undefined)
+      /** Whether the project settings dialog is open. */
+      const [settingsOpen, setSettingsOpen] = React.useState(false)
+      /** The "..." trigger that opened it, so closing can put focus back where it was. */
+      const settingsOpener = React.useRef<unknown>(null)
+      /**
+       * Which project the "..." menu acts on.
+       *
+       * `''` means "the one the host put first", which is the same project the settings
+       * route chooses on its own. An explicit pick from the topbar's selector overrides it.
+       */
+      const [projectId, setProjectId] = React.useState('')
+
+      // Escape closes the inspector. A detail view dismissible only by finding the close
+      // button is not keyboard reachable in practice.
+      //
+      // It must NOT also fire while the settings dialog is open: the dialog handles its own
+      // Escape, and both listeners are on the window, so without this guard one keypress
+      // would close the inspector behind a dialog the user was still reading. The state is
+      // in the dependency list for exactly that reason -- an empty list would capture the
+      // first render's `settingsOpen` forever.
+      React.useEffect(() => {
+        const onKey = (event: { key?: string }) => {
+          if (event?.key === 'Escape' && !settingsOpen) setOpenId(undefined)
+        }
+        window.addEventListener('keydown', onKey as never)
+        return () => window.removeEventListener('keydown', onKey as never)
+      }, [settingsOpen])
 
       React.useEffect(() => {
         let cancelled = false
@@ -954,6 +2006,19 @@ loader.load({
       }
 
       const style = h('style', null, CSS)
+      // A snapshot from a host that predates the settings page carries no projects, so the
+      // panel renders its plain title rather than a broken project row.
+      const projects = view.kind === 'ready' ? view.board.projects ?? [] : []
+      /**
+       * The project the "..." menu acts on.
+       *
+       * The FIRST project in the snapshot's list, which the host orders so that the
+       * install's configured `defaultRepo` comes first (see `orderProjects`) -- the same
+       * rule the settings route applies when it is asked to choose. The dialog is then
+       * opened with that project's id EXPLICITLY, so the name in the topbar and the
+       * settings being edited can never be different projects.
+       */
+      const activeProject = projects.find((project) => project.id === projectId) ?? projects[0]
       const header = h(
         'header',
         { className: 'dsho-topbar' },
@@ -964,6 +2029,39 @@ loader.load({
           h('path', { d: 'M6 1.5v13M10.5 1.5v13', fill: 'none', stroke: 'currentColor', strokeWidth: 1.4, opacity: 0.55 }),
         ),
         h('h2', { className: 'dsho-topbar__title' }, translate('orchestrator.title')),
+        projects.length === 0
+          ? null
+          : h(
+              'div',
+              { className: 'dsho-project' },
+              // The name is a SELECT once a second project exists. A plain label would leave
+              // the "..." menu ambiguous about which project it acts on, and a custom
+              // dropdown would be a second listbox implementation for no gain.
+              projects.length > 1
+                ? h(
+                    'select',
+                    {
+                      className: 'dsho-project__select',
+                      'aria-label': translate('orchestrator.settings.repository'),
+                      value: activeProject?.id ?? '',
+                      onChange: (event: { target?: { value?: string } }) => setProjectId(event?.target?.value ?? ''),
+                    },
+                    ...projects.map((project) => h('option', { key: project.id, value: project.id }, project.repository)),
+                  )
+                : h(
+                    'span',
+                    { className: 'dsho-project__name', title: activeProject?.rootPath ?? '' },
+                    h(ProjectIcon, null),
+                    h('span', null, activeProject?.repository ?? ''),
+                  ),
+              h(ProjectMenu, {
+                repository: activeProject?.repository ?? '',
+                onOpenSettings: (opener: unknown) => {
+                  settingsOpener.current = opener
+                  setSettingsOpen(true)
+                },
+              }),
+            ),
         h('span', { className: 'dsho-topbar__spacer' }),
         view.kind === 'ready'
           ? h(
@@ -1064,6 +2162,17 @@ loader.load({
                 ),
               ),
             )
+          : null,
+        // The dialog is the LAST child and absolutely positioned, so it covers the board
+        // rather than pushing it: a modal that reflows what is behind it is a layout, not a
+        // dialog. It is inside the panel's own tree, which is what keeps every style and
+        // token here scoped to this component.
+        settingsOpen
+          ? h(SettingsDialog, {
+              repoId: activeProject?.id ?? '',
+              restoreFocusTo: settingsOpener.current,
+              onClose: () => setSettingsOpen(false),
+            })
           : null,
       )
     }
