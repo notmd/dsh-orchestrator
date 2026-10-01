@@ -285,10 +285,11 @@ test('close releases the domain', async () => {
   assert.equal(fake.closed, 1)
 })
 
-test('the five tables are declared, one per record kind', () => {
+test('every record kind has a table', () => {
   assert.deepEqual(Object.keys(FACT_TABLES).sort(), [
     'issues',
     'prSnapshots',
+    'reports',
     'repos',
     'reviewRuns',
     'workers',

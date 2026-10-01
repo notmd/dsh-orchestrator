@@ -9,9 +9,9 @@ bloated status file costs the next agent more than it saves.
 |---|---|
 | **Goal** | Implement [PRD.md](PRD.md) |
 | **Plan source** | [PRD.md §16 Milestones](PRD.md#16-milestones), verified against [docs/dsh-plugin-contract.md](docs/dsh-plugin-contract.md) |
-| **Last updated** | 2026-10-01, chunk 6j (worker_start) |
+| **Last updated** | 2026-10-01, chunk 6k (the worker report protocol) |
 | **Verify** | `npm run verify` → `tsc` (src + test) + `node --test` + build · **all green** |
-| **Current state** | **551 tests, 0 type errors. Six orchestrator tools are live, and `orchestrator_worker_start` makes issue → worktree → session → branch real.** The board's read model, configuration, the host plane's low-level layers (spawn, worktree, exec, GitHub access), **persistence, and the repository preflight** are done and verified — worktrees against real git, activation in a real GUI. **The storage question is settled** (see decisions 20–21). Still missing: the PR observer, the routes, the client half, and the worker-phase protocol. The next step is 6k. |
+| **Current state** | **576 tests, 0 type errors. Seven tools are live, and the worker report protocol now exists: a spawned worker can tell the board what it is doing.** The board's read model, configuration, the host plane's low-level layers (spawn, worktree, exec, GitHub access), **persistence, and the repository preflight** are done and verified — worktrees against real git, activation in a real GUI. **The storage question is settled** (see decisions 20–21). Still missing: **wiring the outbox's delivery** (the policy is written and tested but nothing calls it yet, so reports accumulate undelivered), `orchestrator_worker_message`/`_stop`, the PR observer, the routes, the client half. The next step is 6l. |
 
 ---
 
@@ -42,6 +42,7 @@ everything else inherits.
 | 6d | **The worktree manager** — branch naming, `.dsho/worktrees`, add/remove/list, porcelain parsing, `check-ignore` preflight | 28 unit + **12 real-git subtests** |
 | 6e | **The command seam** — argv over `ctx.subprocess`, bounded in time and output, failure classification | 33 tests |
 | 6f | **GitHub credential chain** (`AO_GITHUB_TOKEN` → `GITHUB_TOKEN` → `gh auth token`) and every `gh`/`git` argv | 30 tests |
+| 6k | **The worker report protocol.** `orchestrator_report` (PRD §12.2) with the `Report` record, the outbox's delivery **policy** (§10.5) as a pure function, note truncation that is marked rather than silent, and PR binding on `pr_created` | 25 tests |
 | 6j | **`orchestrator_worker_start`** — the moment three separately-verified layers meet: `WorktreeManager` (real git) → `spawnWorker` (real host, spike 2) → `assignWorker`. Plus the **worker contract** (PRD §12.4), the `Worker` record and its phases (§7.3/§5.2), and per-repo issue **numbers** | 27 tests |
 | 6h/6i | **The issue record and its tools.** `createIssue`/`updateIssue`/`assignWorker` with two invariants the record enforces (at most one active worker per issue; an empty patch is not a change), plus `orchestrator_issue_create` / `_list` / `_update` over the verified store | 32 tests |
 | 6g | **Persistence and the repository preflight.** The fact store on `ctx.storage`'s KV layer, record ids, and `connectRepo`'s three checks (git work tree → worktree root ignored → `gh` installed and authenticated) with a refusal that names the fix | 33 tests |
@@ -132,6 +133,13 @@ canonicalization: **a fake cannot catch a wrong API, because it implements whate
 interface the author imagined.** The tests were green throughout — which is why the
 fix was verified against reality rather than against another fake.
 
+**A worker's identity is its session, never an argument.** `orchestrator_report`
+takes no worker id: the caller's session (`exec.agent.session.id`, read from the
+installed `ToolExecutionInput` rather than guessed) identifies the worker and the
+plugin resolves it. A worker that could supply its own id could report on another's
+behalf, and the board would show one worker's progress against another's card — the
+same reason server-side sessions exist at all.
+
 **A fake must model reality, or it hides the bug it was written to find.** Third
 instance of one lesson. The `worktreeGit` fake reported an empty `worktree list`
 always — so `remove` found nothing to remove, was a silent no-op, and the test
@@ -160,7 +168,8 @@ happened. Read the log after the session closes, or watch the GUI.
 | Chunk | Work | PRD | Why now |
 |---|---|---|---|
 | 6g\.2 | **Wire `orchestrator_repo_connect` as a tool.** The preflight and the store both exist and are tested; what is missing is the wiring. It needs `inject` to gain `subprocess` and `storage`, and **`apply()` to become async** (opening the store is async), which is why it is its own step rather than a footnote — that change also touches the activation tests. | §12.1 | Makes the second real tool live, and proves the store against a real backend rather than a fake. |
-| 6k | **The worker-phase protocol**: `orchestrator_report` on the worker side, the `Worker.phase` updates, and `orchestrator_worker_message` / `_stop`. Until this exists a spawned worker cannot tell the board anything. | §7.3, §10.5, §12.2 | A function is the immediate need: the board's whole truth is what the worker declares. |
+| 6l | **Wire the outbox's delivery**, then `orchestrator_worker_message` / `_stop`. Delivery needs the orchestrator session's handle and a durable `lastInterruptAt` per worker; `_message` needs the **live agent handle registry** that `spawnWorker` currently discards, with `ctx.sessionQuery` as the after-restart fallback. | §10.5, §12.1 | The policy is written and tested but nothing calls it, so reports accumulate. A worker that cannot be spoken to is half a control room. |
+| 6l2 | **Restrict `orchestrator_report` to worker sessions** via `ctx.tools.restrict()` on the worker agent's ctx (Appendix A3.5), so a non-worker never sees it. Today it is registered globally and *refuses* at runtime, which is functionally equivalent but not the same as not offering it. | §12.2, A3.5 | Cheap, and it is the difference between "cannot" and "must not". |
 | 6k | **`orchestrator_worker_message` / `_stop` / `_attach_pr`**, and the `Worker` record itself (PRD §7.3: phase, phaseHistory, pendingQuestion, lastSignalAt). | §7.3, §12.1 | Needs the worker record, which `worker_start` will have shown the shape of. |
 | 6l | **`GitHubGateway` + `PrObserver`** — poll `gh pr view --json`, diff against the stored snapshot. A failed observation keeps the prior snapshot and can never fabricate a closed/merged transition (R13). | §7.4, §10.2 | The board is only truthful if the facts are. |
 | 6i | **`GitHubGateway` + `PrObserver`** — poll `gh pr view --json`, diff against the stored snapshot, emit fact changes. Invariants: a failed observation keeps the prior snapshot and can never fabricate a closed/merged transition (R13). | §7.4, §10.2 | The board is only truthful if the facts are. |

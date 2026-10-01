@@ -67,6 +67,7 @@ export const FACT_TABLES = Object.freeze({
   workers: 'workers',
   prSnapshots: 'pr_snapshots',
   reviewRuns: 'review_runs',
+  reports: 'reports',
 })
 
 /** The domain name. Also the backend unit name. */
@@ -146,6 +147,7 @@ export interface FactStore {
   readonly workers: RecordStore<unknown>
   readonly prSnapshots: RecordStore<unknown>
   readonly reviewRuns: RecordStore<unknown>
+  readonly reports: RecordStore<unknown>
   /** Every record in one table, by storage name. */
   table(name: string): RecordStore<unknown>
   close(): Promise<void>
@@ -244,6 +246,7 @@ export async function openFactStore(options: {
     workers: table(FACT_TABLES.workers),
     prSnapshots: table(FACT_TABLES.prSnapshots),
     reviewRuns: table(FACT_TABLES.reviewRuns),
+    reports: table(FACT_TABLES.reports),
     table,
     close: () => domain.close(),
   }
@@ -369,6 +372,7 @@ export function createMemoryFactStore(): FactStore & { readonly writes: number }
     workers: table(FACT_TABLES.workers),
     prSnapshots: table(FACT_TABLES.prSnapshots),
     reviewRuns: table(FACT_TABLES.reviewRuns),
+    reports: table(FACT_TABLES.reports),
     table,
     async close() {},
     get writes() {

@@ -24,6 +24,7 @@
  * | `orchestrator_repo_connect` | **shipped** | — |
  * | `orchestrator_issue_create` / `_list` / `_update` | **shipped** | — |
  * | `orchestrator_worker_start` | **shipped** | — |
+ * | `orchestrator_report` (worker-side) | **shipped** | — |
  * | `orchestrator_worker_start` / `_message` / `_stop` / `_attach_pr` | next | wiring the spawner into a tool |
  * | `orchestrator_board` | next | the issue + worker stores |
  * | `orchestrator_pr_sync` | next | the PR observer |
@@ -39,6 +40,8 @@ import type { ToolDescriptor } from './tool.ts'
 import { connectRepo, describeRepoConnect } from './repo.ts'
 import { createIssueForTool, listIssuesForTool, updateIssueForTool } from './issues-service.ts'
 import { startWorkerForTool } from './workers-service.ts'
+import { reportForTool } from './reports-service.ts'
+import { OutputKind, ReportState } from '../domain/reports.ts'
 import type { SpawnDeps } from './spawn.ts'
 import { IssuePriority, IssueState } from '../domain/issues.ts'
 import type { Repo } from './repo.ts'
@@ -190,6 +193,50 @@ export function buildOrchestratorTools(options: {
       },
       outputType: 'string',
       execute: async (args) => startWorkerForTool({ run, store, spawn, config }, args as never),
+    }) as ToolDescriptor<never, unknown>,
+
+    defineTool({
+      name: 'orchestrator_report',
+      description:
+        'Report to the orchestrator. This is the only channel that reaches it, and the only source of ' +
+        'phase truth: nothing is inferred from your transcript. Use `needs_input` when you are waiting ' +
+        'on an answer, `stuck` when you cannot proceed without a decision, `done` when the task is ' +
+        'finished. Attach an artifact as soon as it exists, not at the end.',
+      parameters: {
+        state: {
+          type: 'string',
+          enum: Object.values(ReportState),
+          description: 'checkpoint | needs_input | stuck | done. Optional if you are only attaching an output.',
+        },
+        note: {
+          type: 'string',
+          description:
+            'What changed, or the question you need answered. Be brief: report transitions, decisions, ' +
+            'blockers, outputs and completion — not routine commands.',
+        },
+        outputs: {
+          type: 'array',
+          description: 'Things you produced.',
+          items: {
+            type: 'object',
+            properties: {
+              kind: {
+                type: 'string',
+                enum: Object.values(OutputKind),
+                required: true,
+                description: 'artifact | pr_created | pr_reviewed.',
+              },
+              ref: {
+                type: 'string',
+                required: true,
+                description: 'For artifact, a path; for pr_created, the pull-request number or URL.',
+              },
+            },
+          },
+        },
+      },
+      outputType: 'string',
+      execute: async (args, exec) => reportForTool({ store }, args as never, exec?.agent?.session?.id),
     }) as ToolDescriptor<never, unknown>,
   ]
   return tools

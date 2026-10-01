@@ -64,6 +64,18 @@ export interface ToolTextContent {
 export interface ToolExecution {
   /** Aborts when the caller cancels. Async bodies must observe it. */
   signal?: AbortSignal
+  /**
+   * The agent that called the tool.
+   *
+   * This is what makes a **worker-protocol** tool possible: `orchestrator_report`
+   * has no worker id in its arguments, because the worker should not have to supply
+   * one and could supply the wrong one. The caller's session identifies the worker,
+   * and the plugin resolves it — so a worker cannot report on another's behalf.
+   *
+   * Read from the installed `ToolExecutionInput` (`readonly agent?: Agent`), not
+   * guessed.
+   */
+  agent?: { readonly session?: { readonly id?: string } } | undefined
 }
 
 /** The compiled tool object the registry accepts. */
