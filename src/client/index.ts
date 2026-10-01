@@ -308,12 +308,7 @@ loader.load({
    fact a column actually has. Five percent keeps it a tint -- the cards on top must stay
    the brightest thing on screen, and anything stronger turns four lanes into four blocks
    of colour that fight the status lines. */
-.dsho-lane[data-tone='busy'] { background: color-mix(in srgb, var(--dsw-alias-state-business-primary, #7aaaff) 5%, var(--dsw-alias-bg-layer-1, #232324));
-  box-shadow: inset 3px 0 0 0 var(--dsw-alias-state-business-primary, #7aaaff); }
-.dsho-lane[data-tone='attention'] { background: color-mix(in srgb, var(--dsw-alias-state-warn-primary, #f59e0b) 5%, var(--dsw-alias-bg-layer-1, #232324));
-  box-shadow: inset 3px 0 0 0 var(--dsw-alias-state-warn-primary, #f59e0b); }
-.dsho-lane[data-tone='success'] { background: color-mix(in srgb, var(--dsw-alias-state-success-primary, #22c55e) 5%, var(--dsw-alias-bg-layer-1, #232324));
-  box-shadow: inset 3px 0 0 0 var(--dsw-alias-state-success-primary, #22c55e); }
+
 .dsho-lane__head { display: flex; align-items: center; gap: 8px; }
 /* The reference colours the lane's dot AND its label by the lane's tone, which is what
    makes a four-column board scannable without reading any of it. */
@@ -329,7 +324,7 @@ loader.load({
 .dsho-lane__head[data-tone='success'] { color: var(--dsw-alias-state-success-primary, #22c55e); }
 .dsho-lane__count { margin-left: auto; padding: 1px 8px; border-radius: 999px; font-size: 0.75rem;
   font-variant-numeric: tabular-nums;
-  color: inherit; background: color-mix(in srgb, currentColor 14%, transparent); }
+  color: inherit; background: color-mix(in srgb, currentColor 10%, transparent); }
 .dsho-lane__empty { margin: 0; font-size: 0.8125rem; color: var(--dsw-alias-label-primary-dimmed, inherit); opacity: 0.75; }
 .dsho-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px;
   flex: 1; min-height: 0; overflow-y: auto; }
@@ -361,8 +356,8 @@ loader.load({
    the tone, so the card still carries exactly one status colour. */
 .dsho-avatar { flex: none; display: inline-flex; align-items: center; justify-content: center;
   width: 26px; height: 26px; border-radius: 8px;
-  border: 1px solid color-mix(in srgb, currentColor 34%, transparent);
-  background: color-mix(in srgb, currentColor 16%, var(--dsw-alias-bg-layer-2, #2c2c2e)); }
+  border: 1px solid color-mix(in srgb, currentColor 26%, transparent);
+  background: color-mix(in srgb, currentColor 10%, var(--dsw-alias-bg-layer-2, #2c2c2e)); }
 .dsho-avatar[data-tone='busy'] { color: var(--dsw-alias-state-business-primary, #7aaaff); }
 .dsho-avatar[data-tone='attention'] { color: var(--dsw-alias-state-warn-primary, #f59e0b); }
 .dsho-avatar[data-tone='error'] { color: var(--dsw-alias-state-error-primary, #e5484d); }
@@ -403,8 +398,8 @@ loader.load({
 .dsho-face { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px;
   border-radius: 50%; font-size: 0.625rem; font-weight: 700; line-height: 1;
   color: var(--dsw-alias-label-primary-dimmed, inherit);
-  border: 1px solid color-mix(in srgb, currentColor 45%, transparent);
-  background: color-mix(in srgb, currentColor 18%, transparent); }
+  border: 1px solid color-mix(in srgb, currentColor 40%, transparent);
+  background: color-mix(in srgb, currentColor 13%, transparent); }
 .dsho-face[data-state='APPROVED'] { color: var(--dsw-alias-state-success-primary, #30a46c); }
 .dsho-face[data-state='CHANGES_REQUESTED'] { color: var(--dsw-alias-state-error-primary, #e5484d); }
 .dsho-face--more { width: auto; padding: 0 5px; border-radius: 999px; font-weight: 600; }
@@ -419,12 +414,7 @@ loader.load({
 
 .dsho-inspector { max-width: 52rem; margin-top: 16px; padding: 14px 16px; border-radius: 12px;
   border: 1px solid var(--dsw-alias-border-l1, rgba(127,127,127,0.2)); background: var(--dsw-alias-bg-layer-1, rgba(127,127,127,0.06)); }
-/* The detail view keeps the card's tone on its edge, so opening a card does not drop the
-   colour context the board just gave it. Inset shadow again: no layout shift. */
-.dsho-inspector[data-tone='busy'] { box-shadow: inset 3px 0 0 0 var(--dsw-alias-state-business-primary, #7aaaff); }
-.dsho-inspector[data-tone='attention'] { box-shadow: inset 3px 0 0 0 var(--dsw-alias-state-warn-primary, #f59e0b); }
-.dsho-inspector[data-tone='error'] { box-shadow: inset 3px 0 0 0 var(--dsw-alias-state-error-primary, #e5484d); }
-.dsho-inspector[data-tone='success'] { box-shadow: inset 3px 0 0 0 var(--dsw-alias-state-success-primary, #22c55e); }
+
 .dsho-inspector__head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
 .dsho-inspector__findings { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
 .dsho-finding { font-size: 0.8125rem; line-height: 1.35; }
