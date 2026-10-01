@@ -9,9 +9,9 @@ bloated status file costs the next agent more than it saves.
 |---|---|
 | **Goal** | Implement [PRD.md](PRD.md) |
 | **Plan source** | [PRD.md §16 Milestones](PRD.md#16-milestones), verified against [docs/dsh-plugin-contract.md](docs/dsh-plugin-contract.md) |
-| **Last updated** | 2026-10-01, chunk 6a (host entry activates) |
+| **Last updated** | 2026-10-01, chunk 6b (worker spawner) |
 | **Verify** | `npm run verify` → typecheck (src) + `node --test` + build · **all three green** |
-| **Current state** | **The plugin installs and activates in DSH.** 358 tests pass; `tsc` reports **0 errors across `src/` and `test/`**; `npm run build` emits `dist/`. M0 spike 1 is done (panel seat proven) and the host entry is live with one real tool. The services behind it (issue store, spawner, observer, routes) and the whole client half are still to come. |
+| **Current state** | **The plugin installs and activates in DSH, and the worker-spawn recipe is written and unit-tested.** 370 tests pass; `tsc` reports **0 errors across `src/` and `test/`**; `npm run build` emits `dist/`. M0 spike 1 is done (panel seat proven) and the host entry is live with one real tool. The services behind it (issue store, spawner, observer, routes) and the whole client half are still to come. |
 
 ---
 
@@ -94,15 +94,52 @@ Chunk numbers are this file's own; milestone letters are the PRD's.
 
 | Chunk | Work | PRD | Why now |
 |---|---|---|---|
-| 6b | **Host services** behind the entry: `WorkerSpawner` (`ctx.agents.create()` per Appendix A3.1), `WorktreeManager` (`git worktree` via `ctx.subprocess`), `OrchestratorService` + the issue/worker stores over `ctx.storageDomain`, `GitHubGateway` (`gh`), `PrObserver`, and the rest of the tool table. Each tool ships **with** its service. | §6, §12, M1 | The entry is proven; this is the substance. |
+| 6c | **Run M0 spike 2** (§16): call the real `ctx.agents.create()` from a non-`dsh-webhook` caller, with `attachSession` against a worktree whose repo root is a different workspace (Appendix A §A10 items 2–3). The recipe is written; only reality can confirm it. | M0 | It is the last unknown that can invalidate the spawner, and it invalidates the load-bearing part of M1. |
+| 6d | **`WorktreeManager`** (`git worktree add/remove` via `ctx.subprocess`), then `OrchestratorService` + the issue/worker stores over `ctx.storageDomain`, `GitHubGateway` (`gh`), `PrObserver`. Each tool ships **with** its service. | §6, §9, §12, M1 | The spawner needs a real worktree to point at before anything can be spawned for real. |
 | 7 | **Client half**: `src/client/**/*.ts` → `dist/client.js` in the `window.__ModuleLoader__` **classic-script** form, plus the `sidebar.panellist` row and the `main` keyed panel, lanes/cards/inspector, themes, locale, keyboard access. | §11, M2 | Needs the routes from chunk 6. |
 | 8 | **M0 spikes 2–4**: `ctx.agents.create()` outside `dsh-webhook`; `attachSession` against a worktree; a `/dsho/api/*` route + SSE from a slot component. | §16 | Spike 1 is done; these are the remaining unknowns. |
 | 9 | **Feedback classification** (actionability, bot detection by `__typename`/`User.Type` never a login substring, per-comment dedup, re-arm only on a definitive clear) and the **report outbox** (§10.5, A23). | §10.3, §10.5 | M4's logic, testable offline. Can be interleaved with 6. |
 
-**Recommended next step: chunk 6b**, starting with `WorkerSpawner` — it is the one
-host service whose uncertainty is still open (M0 spike 2: `ctx.agents.create()`
+**Recommended next step: chunk 6c — run spike 2.** The spawner exists and is
+tested against fakes, and fakes cannot answer the only question that matters about
+it: does the real `ctx.agents.create()` accept a non-`dsh-webhook` caller, and does
+`attachSession` tolerate a worktree whose repository root is a different workspace?
+Append a spawn to `fixtures/panel-spike`'s host half (or a sibling fixture), install
+it, boot, and look for the new titled session in the GUI sidebar. The install loop
+is cheap and documented in [docs/verification-harness.md](docs/verification-harness.md).
 outside `dsh-webhook`, and `attachSession` against a worktree). The install loop is
 now cheap and fully documented in [docs/verification-harness.md](docs/verification-harness.md).
+
+### ✅ Chunk 6b — the worker spawner is written and tested
+
+[`src/host/spawn.ts`](src/host/spawn.ts) is a transcription of the one **audited**
+implementation of this recipe: `@deepseek-ai/dsh-webhook`'s
+`packages/webhook/webhook/src/session.ts`. Every step and its order are theirs —
+validate before any `await`, lease the agent-preset scope, check the abort signal
+at each boundary, create the workspace, `agents.create()` with `meta.cwd` in that
+workspace, then publish (attach → permission → title) and only then `followup()`
+the prompt.
+
+**Why each ordering choice is load-bearing**, since it is easy to "tidy" one away:
+
+| Choice | Consequence of getting it wrong |
+|---|---|
+| `permissionPresets.resolve()` before any `await` | an unusable preset costs nothing instead of leaving a half-created session |
+| Publish before prompting | a worker that is visible but not yet acting beats one acting before it is visible |
+| `followup()`, not `inject()`/`steer()` | `inject` sits until other input arrives; `steer` needs a *running* turn to steer, which does not exist yet |
+| Rollback failure logged, not thrown | the original error is the one the user can act on; a second failure is noise |
+| The preset lease goes to the **caller** | the reference frees it when the triggering function returns, which cannot be right for a worker that must outlive the call — **flagged for confirmation in spike 2** |
+
+**TDD found a real resource leak.** A test asserting "an aborted request releases
+the lease it already took" failed: `signal.throwIfAborted()` thrown between
+`acquireScope()` and `agents.create()` escaped without releasing the scope. The
+reference can do that because its framework registers the lease as a disposable
+resource and unwinds it; we hand the lease to the caller, so the abort checks had
+to move *inside* one rollback boundary. That is exactly the class of bug fakes are
+for.
+
+`test/host/spawn.test.ts` — 12 tests: the exact call sequence, the abort paths, and
+three rollback scenarios (create fails, attach fails, and both rollback steps fail).
 
 ### ✅ Chunk 6a DONE — the plugin installs and activates
 
