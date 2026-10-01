@@ -352,23 +352,23 @@ happened. Read the log after the session closes, or watch the GUI.
 
 ## 4. Next — ordered, with the reason for the order
 
+**Six rows were pruned from this table last, and that is worth explaining**: they (the
+route, the board assembly, the reviewer pass, worktree cleanup, the report restriction)
+were listed as work to do long after §2 recorded them done. **A "next" table that
+contradicts the "done" table is worse than no table** — the reader believes the stale
+one and re-does finished work. Only genuinely-remaining items belong here.
+
 | Chunk | Work | PRD | Why now |
 |---|---|---|---|
-| 6g\.2 | **Wire `orchestrator_repo_connect` as a tool.** The preflight and the store both exist and are tested; what is missing is the wiring. It needs `inject` to gain `subprocess` and `storage`, and **`apply()` to become async** (opening the store is async), which is why it is its own step rather than a footnote — that change also touches the activation tests. | §12.1 | Makes the second real tool live, and proves the store against a real backend rather than a fake. |
-| 6r | **`/dsho/api/board`.** One snapshot endpoint, no per-card fan-out; handlers answer their own errors so a storage failure is a `500` rather than the web server's throw-to-400 — a 400 for a backend outage would be a lie the client cannot act on | 4 tests + **live** |
-| 6q | **The board's read surface**: `/dsho/api/board` on `ctx.webServer`, then `orchestrator_board`. The reducer, presentation, and stores all exist, so this is an assembly job. | §11.4, §12.1 | Nothing is visible in the GUI without it, and it is what the client half reads.
-| 6p | **A tick that schedules review passes** — call `startReviewPass` for workers whose head has no current pass, so the loop turns without a human. Then `orchestrator_run_review` for the forced path. | §7.5, M3 | The pass is complete and tested but nothing schedules it, so no card ever enters `Validating`'s review loop.
-| 6o | **The reviewer spawner** — the auto-review pass (M3): spawn a `read-only` reviewer at the PR's exact head, `orchestrator_review_verdict` → `ReviewRun` → route findings to the worker → re-review on the new head. The loop's bounds and the stale-head rule are already written and tested (`src/review/`). | §7.5, M3 | This is the feature the request calls out, and every piece under it — spawn, outbox, observer, reducer — now exists. |
-| 6p | **Worktree cleanup on archive**, and `orchestrator_board` / `orchestrator_pr_sync` / `orchestrator_run_review`. | §9.3, §12.1 | R4's disk bound is only real if cleanup runs; the board tool is what the client will read. |
-| 6l2 | **Restrict `orchestrator_report` to worker sessions** via `ctx.tools.restrict()` on the worker agent's ctx (Appendix A3.5), so a non-worker never sees it. Today it is registered globally and *refuses* at runtime, which is functionally equivalent but not the same as not offering it. | §12.2, A3.5 | Cheap, and it is the difference between "cannot" and "must not". |
+| A4 | **A real pull request.** Needs a repository the user chooses to let a worker push to — `gh pr create` writes to someone else's repo, so this is a DECISION, not a task. Everything up to the PR is proven end to end; nothing after it has run against a real provider. | A4, M1 | The one acceptance criterion no amount of work here can close alone. |
+| — | **§12.2's effect is UNVERIFIED**, and three instruments have each failed to be valid ones. Do not add a fourth without first proving it can measure the property; start from a real `ToolExecutionInput` captured from a live call. | §12.2 | Unproven, and **nothing is unsafe** — the protocol tools validate their caller and refuse. Unproven and unsafe are different. |
+| 24 | **M6 hardening (optional).** Webhook ingress, plan gate, notification badge, token+`fetch` fallback, dedicated agent presets, a reviewer panel. | M6 | Explicitly optional in the PRD. |
+| 25 | **A removal path for the spike workspaces** left in the profile's `workspace.json`. Not hand-edited: that file is a running service's own state, with the user's real workspaces in the same table. | housekeeping | Needs the registry, or the user. |
+| 26 | **Compress §3.** It is ~280 lines and the largest section in this file, which is the thing the handoff asks to keep small. The lessons are all load-bearing; several repeat the same shape and can be merged under one heading with the instances listed. | maintenance | Context cost, not correctness. |
 
-**Recommended next step: 6g\.2 — wire `orchestrator_repo_connect`.** It is small and
-it is the first time the store meets a real backend, which is worth doing before more
-is built on top of it. Two smaller items stay queued: confirm the admitted prompt
-actually produces a turn (the residual in spike 2), and settle whether the preset
-lease should be released by the caller or owned by the worker's context.
-
----
+**Recommended next step: A4, and it needs a decision rather than work.** Ask the user
+which repository a worker may push to; everything downstream of a real PR is unexercised
+and is the largest remaining unknown.
 
 ## 5. Decisions taken while implementing (deltas from the PRD)
 
