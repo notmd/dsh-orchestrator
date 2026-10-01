@@ -160,7 +160,51 @@ to decide whether a change is live.
 
 ---
 
-## 5. Boundaries — what this harness does **not** prove
+## 5. Running a host-side spike without shipping it
+
+A spike needs to run **inside the host process**, so its result is invisible from
+outside unless it writes one somewhere. The pattern that works (used by M0 spike 2,
+`src/spike/agent-spawn-spike.ts`):
+
+1. **Write the spike as a module under `src/spike/`.** It is excluded from
+   `tsconfig.build.json`, so it never reaches the shipped bundle; `npm run
+   build:spike` builds it separately to `dist/spike/`.
+2. **Insert it with a `--patch` overlay**, not by editing the profile:
+
+   ```yaml
+   # /tmp/dsho-spike-patch.yml
+   - insert:
+       - id: agent-spawn-spike
+         name: '/abs/path/to/dist/spike/agent-spawn-spike.js'
+   ```
+
+   An **absolute path works as the row's `name`** — verified. This keeps the spike
+   out of the profile's own `cordis.patch.yml`, so nothing has to be undone.
+3. **Record each step to a file** (`/tmp/dsho-spike-result.json` here), including
+   step names and the values returned. When a step fails, the file still says how
+   far it got, which is the part that is otherwise impossible to see.
+4. **Boot with the overlay** and read the file:
+
+   ```bash
+   dsh --profile web --patch /tmp/dsho-spike-patch.yml --port 0 --no-open --host 127.0.0.1
+   cat /tmp/dsho-spike-result.json
+   ```
+
+5. **Corroborate outside the process.** For a spawned session, three independent
+   signals exist: the session directory under `~/.dsh/sessions/<cwd-bucket>/<id>/`,
+   the decompressed `session.v4.jsonl.zstd` header (which records `id`, `cwd`,
+   `agentPreset`), and the GUI sidebar row.
+
+   ```bash
+   node -e "const fs=require('fs'),z=require('zlib');const p=process.env.HOME+'/.dsh/sessions/--private-tmp-dsho-spawn-spike--/spawn-spike-.../session.v4.jsonl.zstd';console.log(z.zstdDecompressSync(fs.readFileSync(p)).toString())"
+   ```
+
+**A caveat that cost real time:** a *live* session's log buffers. The file held only
+its header and did not grow while the session was open, so "no turn events on disk"
+does **not** mean no turn happened. Read the log after the session closes, or watch
+the GUI.
+
+## 6. Boundaries — what this harness does **not** prove
 
 Be precise about this, it is easy to overclaim:
 
@@ -178,7 +222,7 @@ Be precise about this, it is easy to overclaim:
 
 ---
 
-## 6. Quick reference
+## 7. Quick reference
 
 ```bash
 # 1. serve (background job)
