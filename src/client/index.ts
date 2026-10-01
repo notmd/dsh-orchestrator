@@ -357,6 +357,15 @@ loader.load({
   font-size: 0.8125rem; font-weight: 600; line-height: 1.25; }
 .dsho-card__branch { display: flex; align-items: center; gap: 6px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.6875rem; color: var(--dsw-alias-label-primary-dimmed, inherit); }
+/* The icon carries the colour; the text does not. Copying the reference exactly here --
+   a green glyph beside a muted label is legible and lively, whereas colouring both makes
+   the card fight its own status line for attention. */
+.dsho-card__branch > svg { color: var(--dsw-alias-state-success-primary, #22c55e); }
+/* DESCENDANT, not direct child: the icon sits inside a span beside its label, so a
+   direct-child selector matched nothing and the glyph stayed grey -- measured, not
+   assumed. (No backticks in this block: it is a template literal, and a backtick here
+   closes the stylesheet. That is exactly how this rule failed the first time.) */
+.dsho-card__evidence svg { color: var(--dsw-alias-state-success-primary, #22c55e); flex: none; }
 .dsho-card__branch > span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .dsho-card__evidence { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.6875rem;
   font-variant-numeric: tabular-nums; color: var(--dsw-alias-label-primary-dimmed, inherit); }
@@ -712,7 +721,22 @@ loader.load({
               ? h(
                   'div',
                   { className: 'dsho-card__evidence', style: { display: 'flex', alignItems: 'center', gap: '8px' } },
-                  evidence.length > 0 ? h('span', null, evidence.join(' · ')) : null,
+                  evidence.length > 0
+                    ? h(
+                        'span',
+                        { style: { display: 'inline-flex', alignItems: 'center', gap: '5px' } },
+                        // A pull-request glyph, coloured like the branch one: the two
+                        // affordances are the same kind of fact.
+                        h(
+                          'svg',
+                          { width: 11, height: 11, viewBox: '0 0 16 16', 'aria-hidden': 'true' },
+                          // A MERGE glyph, deliberately NOT the branch glyph: two
+                          // identical marks for two different facts is worse than no mark.
+                          h('path', { d: 'M4.5 6.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Zm0 6a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3ZM12.5 5.5a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0ZM4.5 6.5v6M6 9.5h3a2 2 0 0 0 2-2v-.5', fill: 'none', stroke: 'currentColor', strokeWidth: 1.4, strokeLinecap: 'round' }),
+                        ),
+                        evidence.join(' · '),
+                      )
+                    : null,
                   card.reviewers && card.reviewers.length > 0 ? h(Faces, { reviewers: card.reviewers }) : null,
                 )
               : null,
