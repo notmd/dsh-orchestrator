@@ -10,7 +10,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { buildBoard, buildCard, cardActivity, laneOf, renderBoard, reviewEvidence, toPrFacts } from '../../src/host/board-service.ts'
+import { buildBoard, buildCard, cardActivity, laneOf, renderBoard, reviewEvidence, reviewerEvidence, toPrFacts } from '../../src/host/board-service.ts'
 import { BOARD_ROUTE_PATH, createBoardRoute, handleBoardRequest } from '../../src/host/board-route.ts'
 import { presentCard } from '../../src/board/presentation.ts'
 import type { BoardDeps } from '../../src/host/board-service.ts'
@@ -614,4 +614,77 @@ test('the board applies that precedence when it builds cards, not just when aske
   // an internal fact and the view does not carry it.
   assert.notEqual(card.displayStatus, DisplayStatus.noSignal, 'not demoted, though the session is long quiet')
   assert.equal(card.needsAttention, true, 'and it is surfaced as needing a person')
+})
+
+
+// ---------------------------------------------------------------------------
+// Reviewer evidence (§11.2: the card must say who it is waiting on)
+// ---------------------------------------------------------------------------
+
+test('reviewers are the humans, one entry per person, latest verdict winning', () => {
+  // A person can review twice. An earlier CHANGES_REQUESTED followed by an APPROVED
+  // means they are satisfied; showing the stale state would make the card claim someone
+  // is blocking when they are not.
+  const evidence = reviewerEvidence(
+    snapshot({
+      reviews: [
+        { id: 'r1', state: 'CHANGES_REQUESTED', author: 'alice', isBot: false },
+        { id: 'r2', state: 'COMMENTED', author: 'bob', isBot: false },
+        { id: 'r3', state: 'APPROVED', author: 'alice', isBot: false },
+      ],
+    }),
+  )
+  assert.deepEqual(evidence, [
+    { name: 'alice', state: 'APPROVED' },
+    { name: 'bob', state: 'COMMENTED' },
+  ])
+})
+
+test('our own reviewer is NOT shown as a person', () => {
+  // The card answers "is this waiting on me?". Our reviewer's approval is already the
+  // status line, and an avatar for it would suggest a human had looked.
+  const evidence = reviewerEvidence(
+    snapshot({
+      reviews: [
+        { id: 'r1', state: 'APPROVED', author: 'dsho-reviewer', isBot: true },
+        { id: 'r2', state: 'APPROVED', author: 'alice', isBot: false },
+      ],
+    }),
+  )
+  assert.deepEqual(evidence.map((r) => r.name), ['alice'])
+})
+
+test('an anonymous review names nobody, and unknown authorship is not assumed human', () => {
+  const evidence = reviewerEvidence(
+    snapshot({
+      reviews: [
+        { id: 'r1', state: 'APPROVED', author: '', isBot: false },
+        { id: 'r2', state: 'APPROVED', author: '   ', isBot: false },
+        { id: 'r3', state: 'CHANGES_REQUESTED', author: 'carol', isBot: undefined },
+      ],
+    }),
+  )
+  assert.deepEqual(evidence, [{ name: 'carol', state: 'CHANGES_REQUESTED' }], 'an untyped author is kept')
+})
+
+test('R13: an unfetched observation names no reviewers', () => {
+  // An empty review list on a failed fetch must not read as "nobody has reviewed".
+  assert.deepEqual(reviewerEvidence(snapshot({ fetched: false, reviews: [{ id: 'r1', state: 'APPROVED', author: 'alice', isBot: false }] })), [])
+  assert.deepEqual(reviewerEvidence(undefined), [])
+})
+
+test('the presented card carries the reviewers through', () => {
+  const card = buildCard({
+    worker: worker(),
+    issueTitle: 'Fix it',
+    issueNumber: 1,
+    prs: [],
+    reviewers: [{ name: 'alice', state: 'APPROVED' }],
+    activity: 'idle',
+    config: CONFIG,
+    now: NOW,
+  })
+  assert.deepEqual(presentCard(card, { now: NOW, noSignalGraceMs: CONFIG.noSignalGraceMs }).reviewers, [
+    { name: 'alice', state: 'APPROVED' },
+  ])
 })

@@ -135,6 +135,19 @@ export const IN_PROGRESS_DISPLAY_STATUSES: readonly DisplayStatus[] = Object.fre
  * review can be inspected -- a review the user cannot inspect is one they cannot
  * trust.
  */
+/**
+ * A person who reviewed the pull request, and their latest verdict.
+ *
+ * Bots are excluded, because "the automated reviewer approved" is already said by the
+ * status line -- repeating it as an avatar would suggest a human had looked. The card is
+ * answering one question with these: **is this waiting on me?**
+ */
+export interface CardReviewer {
+  name: string
+  /** The provider's own word: APPROVED | CHANGES_REQUESTED | COMMENTED | DISMISSED | PENDING. */
+  state: string
+}
+
 export interface CardReview {
   round: number
   maxRounds: number
@@ -176,6 +189,8 @@ export interface BoardCard {
   review?: CardReview
   /** The worker's branch, shown only when it says something the title does not. */
   branch?: string
+  /** Humans who reviewed, so the card can say who it is waiting on. */
+  reviewers?: readonly CardReviewer[]
 }
 
 /**
@@ -310,6 +325,8 @@ export interface BoardCardView {
   review?: CardReview
   /** The worker's branch. */
   branch?: string
+  /** Humans who reviewed, never bots. */
+  reviewers?: readonly CardReviewer[]
   needsAttention: boolean
   showStatusLoader: boolean
   isFinished: boolean
@@ -347,6 +364,7 @@ export function presentCard(
   const view: BoardCardView = {
     ...(card.review ? { review: card.review } : {}),
     ...(card.branch ? { branch: card.branch } : {}),
+    ...(card.reviewers && card.reviewers.length > 0 ? { reviewers: card.reviewers } : {}),
     id: card.id,
     updatedAt: card.updatedAt,
     sessionId: card.sessionId,

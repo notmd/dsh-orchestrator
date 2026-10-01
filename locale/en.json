@@ -17,6 +17,7 @@
   "orchestrator.card.reviewRound": "auto review round {round}/{max}",
   "orchestrator.card.automationStopped": "automation stopped: {reason}",
   "orchestrator.card.openPr": "Open pull request #{number} in your browser",
+  "orchestrator.card.reviewedBy": "{name}: {state}",
   "orchestrator.inspector.noReview": "No automated review has run at this commit.",
   "orchestrator.inspector.noFindings": "No findings recorded for this commit.",
   "orchestrator.inspector.review": "review {id}",

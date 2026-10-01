@@ -103,7 +103,13 @@ async function run(ctx: HostContext): Promise<void> {
       ciState: 'passing',
       headSha: HEAD,
       headRefName: 'dsho/issue-7-flaky-auth-test',
-      reviews: [],
+      // Two humans and our own reviewer, so the card's badges are verifiable AND the bot
+      // exclusion is visible: the automated review must not appear as a person.
+      reviews: [
+        { id: 'R-human-1', state: 'CHANGES_REQUESTED', author: 'alice', isBot: false, body: 'rename this' },
+        { id: 'R-bot', state: 'APPROVED', author: 'dsho-reviewer', isBot: true },
+        { id: 'R-human-2', state: 'APPROVED', author: 'bob', isBot: false },
+      ],
       comments: [],
       lastCommentId: '',
       updatedAt: new Date(now).toISOString(),

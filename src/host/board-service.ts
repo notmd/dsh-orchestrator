@@ -19,6 +19,7 @@
  * @module dsho/host/board-service
  */
 
+import type { CardReviewer } from '../board/presentation.ts'
 import {
   KANBAN_LANES,
   KanbanColumn,
@@ -63,6 +64,31 @@ export interface BoardSnapshot {
     archive: BoardCardView[]
   }
   counts: { total: number; needsAttention: number; byLane: Record<string, number> }
+}
+
+/**
+ * The humans who reviewed, and their latest verdict -- one entry per person.
+ *
+ * A person can review more than once, so the LAST entry for an author wins: an earlier
+ * `CHANGES_REQUESTED` followed by an `APPROVED` means they are satisfied, and showing
+ * the stale state would make the card claim a person is blocking when they are not.
+ *
+ * Bots are dropped deliberately. The card is answering "is this waiting on me?", and our
+ * own reviewer's approval is already the status line -- repeating it as an avatar would
+ * suggest a human had looked.
+ */
+export function reviewerEvidence(snapshot: PrSnapshot | undefined): CardReviewer[] {
+  if (!snapshot || snapshot.fetched !== true) return []
+  const latest = new Map<string, CardReviewer>()
+  for (const review of snapshot.reviews ?? []) {
+    if (review.isBot === true) continue
+    const name = (review.author ?? '').trim()
+    // A review with no author names no one, and an unnamed badge is worse than none.
+    if (name === '') continue
+    // Later entries overwrite earlier ones, which is why this walks forward.
+    latest.set(name, { name, state: review.state ?? '' })
+  }
+  return [...latest.values()]
 }
 
 /**
@@ -136,6 +162,7 @@ export function buildCard(options: {
   issueNumber: number
   prs: KanbanPRFactsInput[]
   branch?: string
+  reviewers?: readonly CardReviewer[]
   review?: BoardCard['review']
   activity: string
   config: PluginConfig
@@ -175,6 +202,7 @@ export function buildCard(options: {
     requireHumanApprovalBeforeReady: config.requireHumanApprovalBeforeReady,
     prs: options.prs,
     ...(options.branch ? { branch: options.branch } : {}),
+    ...(options.reviewers ? { reviewers: options.reviewers } : {}),
     ...(options.review ? { review: options.review } : {}),
   }
 }
@@ -275,6 +303,9 @@ export async function buildBoard(deps: BoardDeps): Promise<BoardSnapshot> {
       issueNumber: issue?.number ?? 0,
       prs: toPrFacts(snapshotByWorker.get(worker.id), workerRuns, bounds),
       ...(worker.branch ? { branch: worker.branch } : {}),
+      ...(reviewerEvidence(snapshotByWorker.get(worker.id)).length > 0
+        ? { reviewers: reviewerEvidence(snapshotByWorker.get(worker.id)) }
+        : {}),
       ...(review ? { review } : {}),
       activity: cardActivity(worker, deps.activityOf),
       config: deps.config,

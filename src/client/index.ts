@@ -60,6 +60,8 @@ interface CardView {
   escalationReason?: string
   /** The worker's branch. Mirrors `BoardCardView.branch`. */
   branch?: string
+  /** Humans who reviewed, never bots. Mirrors `BoardCardView.reviewers`. */
+  reviewers?: ReadonlyArray<{ name: string; state: string }>
   /** Mirrors `BoardCardView.prs` (the slice the card face uses). */
   prs?: ReadonlyArray<{ url: string; number?: number }>
   /** Mirrors `CardReview`. Present only when a pass has run at this head. */
@@ -118,6 +120,7 @@ const FALLBACK: Record<string, string> = {
   'orchestrator.card.reviewRound': 'auto review round {round}/{max}',
   'orchestrator.card.automationStopped': 'automation stopped: {reason}',
   'orchestrator.card.openPr': 'Open pull request #{number} in your browser',
+  'orchestrator.card.reviewedBy': '{name}: {state}',
   'orchestrator.inspector.noReview': 'No automated review has run at this commit.',
   'orchestrator.inspector.noFindings': 'No findings recorded for this commit.',
   'orchestrator.inspector.review': 'review {id}',
@@ -289,6 +292,17 @@ loader.load({
 .dsho-card__status[data-tone='success'] { color: var(--dsw-alias-state-success-primary, #30a46c); }
 .dsho-card__status[data-tone='busy'] { color: var(--dsw-alias-state-business-primary, #4c8dff); }
 .dsho-card__meta { font-size: 0.6875rem; font-variant-numeric: tabular-nums; color: var(--dsw-alias-label-primary-dimmed, inherit); opacity: 0.8; }
+/* Reviewer badges. The card is answering one question -- is this waiting on me? -- so a
+   person who asked for changes is coloured, and our own reviewer is never here. */
+.dsho-faces { display: flex; align-items: center; gap: 4px; }
+.dsho-face { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px;
+  border-radius: 50%; font-size: 0.625rem; font-weight: 700; line-height: 1;
+  border: 1px solid var(--dsw-alias-border-l2, rgba(127,127,127,0.24));
+  background: var(--dsw-alias-button-ghost-active-fill, rgba(127,127,127,0.16));
+  color: var(--dsw-alias-label-primary-dimmed, inherit); }
+.dsho-face[data-state='APPROVED'] { color: var(--dsw-alias-state-success-primary, #30a46c); }
+.dsho-face[data-state='CHANGES_REQUESTED'] { color: var(--dsw-alias-state-error-primary, #e5484d); }
+.dsho-face--more { width: auto; padding: 0 5px; border-radius: 999px; font-weight: 600; }
 .dsho-card__actions { position: absolute; top: 6px; right: 6px; display: flex; gap: 4px; opacity: 0;
   transition: opacity 120ms ease-out; }
 .dsho-card:hover .dsho-card__actions, .dsho-card:focus-within .dsho-card__actions { opacity: 1; }
@@ -462,6 +476,41 @@ loader.load({
       )
     }
 
+    /** The provider's own word, made readable: `CHANGES_REQUESTED` -> `changes requested`. */
+    function prettyState(state: string): string {
+      return state === '' ? 'reviewed' : state.toLowerCase().replace(/_/g, ' ')
+    }
+
+    /**
+     * The reviewer badges: one letter per person, coloured by their latest verdict.
+     *
+     * Capped at four with a `+N`, because a card is not a place to enumerate a crowd.
+     * The letter rather than an avatar URL: the provider's avatar host is not something
+     * this plugin should be reaching for, and an initial reads fine at this size.
+     */
+    function Faces(props: { reviewers: ReadonlyArray<{ name: string; state: string }> }) {
+      const shown = props.reviewers.slice(0, 4)
+      const rest = props.reviewers.length - shown.length
+      return h(
+        'div',
+        { className: 'dsho-faces' },
+        ...shown.map((reviewer) =>
+          h(
+            'span',
+            {
+              key: reviewer.name,
+              className: 'dsho-face',
+              'data-state': reviewer.state,
+              title: translate('orchestrator.card.reviewedBy', { name: reviewer.name, state: prettyState(reviewer.state) }),
+              'aria-label': translate('orchestrator.card.reviewedBy', { name: reviewer.name, state: prettyState(reviewer.state) }),
+            },
+            (reviewer.name[0] ?? '?').toUpperCase(),
+          ),
+        ),
+        rest > 0 ? h('span', { className: 'dsho-face dsho-face--more' }, `+${rest}`) : null,
+      )
+    }
+
     /** A compact age, because a board is read at a glance. */
     function formatAge(updatedAt: number, now: number): string {
       const seconds = Math.max(0, Math.round((now - updatedAt) / 1000))
@@ -540,7 +589,14 @@ loader.load({
             showBranch
               ? h('div', { className: 'dsho-card__branch' }, h(BranchIcon, null), h('span', { title: card.branch }, card.branch))
               : null,
-            evidence.length > 0 ? h('div', { className: 'dsho-card__evidence' }, evidence.join(' · ')) : null,
+            evidence.length > 0 || (card.reviewers && card.reviewers.length > 0)
+              ? h(
+                  'div',
+                  { className: 'dsho-card__evidence', style: { display: 'flex', alignItems: 'center', gap: '8px' } },
+                  evidence.length > 0 ? h('span', null, evidence.join(' · ')) : null,
+                  card.reviewers && card.reviewers.length > 0 ? h(Faces, { reviewers: card.reviewers }) : null,
+                )
+              : null,
             h('div', { className: 'dsho-card__status', 'data-tone': tone }, card.displayStatus),
             card.escalationReason
               ? h('div', { className: 'dsho-card__meta' }, translate('orchestrator.card.automationStopped', { reason: card.escalationReason }))
