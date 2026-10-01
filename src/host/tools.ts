@@ -246,7 +246,7 @@ export function buildOrchestratorTools(options: {
         },
       },
       outputType: 'string',
-      execute: async (args, exec) => reportForTool({ store }, args as never, exec?.agent?.session?.id),
+      execute: async (args, exec) => reportForTool({ store, run }, args as never, exec?.agent?.session?.id),
     }) as ToolDescriptor<never, unknown>,
 
     defineTool({

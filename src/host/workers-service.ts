@@ -27,6 +27,7 @@ import type { Issue } from '../domain/issues.ts'
 import { WorkerPhase, isTerminalPhase, normalizeWorker, workerSessionTitle } from '../domain/workers.ts'
 import type { Worker } from '../domain/workers.ts'
 import { createIssueForTool } from './issues-service.ts'
+import { dirtyPaths } from './root-cleanliness.ts'
 import type { IssueToolDeps } from './issues-service.ts'
 import { spawnWorker } from './spawn.ts'
 import type { SpawnDeps } from './spawn.ts'
@@ -184,6 +185,11 @@ export async function startWorkerForTool(
     return `Could not create a worktree for ${issue.id}: ${error instanceof Error ? error.message : String(error)}`
   }
 
+  // R7's baseline, taken BEFORE the worker can touch anything. Captured here rather
+  // than at connect time, because the human's own edits between connecting and starting
+  // are legitimate and must not be blamed on the worker.
+  const rootDirtyAtStart = await dirtyPaths(deps.run, repoRoot)
+
   // 3. Spawn the session.
   const workerId = newId('wrk', now())
   const sessionId = `dsho-${workerId}`
@@ -225,6 +231,7 @@ export async function startWorkerForTool(
     branch: created.branch,
     worktreePath: created.path,
     workspaceId: deps.workspaceIdFor ? deps.workspaceIdFor(created.path) : '',
+    rootDirtyAtStart,
     phase: WorkerPhase.queued,
     phaseHistory: [{ phase: WorkerPhase.queued, at, summary: 'worker spawned' }],
     lastSignalAt: at,

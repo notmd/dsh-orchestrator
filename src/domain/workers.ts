@@ -129,6 +129,15 @@ export interface Worker {
     /** The commit the count belongs to; a new head resets it. */
     headSha: string
   }
+  /**
+   * The repo root's dirty paths when this worker started (R7).
+   *
+   * The plugin SHARES the user's checkout, so the root is often dirty for legitimate
+   * reasons -- their work in progress, a scratch file, a build artefact. Only paths that
+   * become dirty AFTER this baseline are evidence that a worker edited outside its
+   * worktree, which is why the guard compares rather than judging.
+   */
+  rootDirtyAtStart?: readonly string[]
   createdAt: number
   updatedAt: number
   endedAt?: number
@@ -170,6 +179,9 @@ export function normalizeWorker(raw: unknown): Worker {
     // exactly how the feedback dedup failed: the routing wrote it, and the read that
     // followed lost it, so every poll re-nudged the worker.
     ...(isFeedback(record.feedback) ? { feedback: record.feedback } : {}),
+    ...(Array.isArray(record.rootDirtyAtStart)
+      ? { rootDirtyAtStart: record.rootDirtyAtStart.filter((p): p is string => typeof p === 'string') }
+      : {}),
     lastSignalAt: typeof record.lastSignalAt === 'number' ? record.lastSignalAt : 0,
     createdAt: typeof record.createdAt === 'number' ? record.createdAt : 0,
     updatedAt: typeof record.updatedAt === 'number' ? record.updatedAt : 0,

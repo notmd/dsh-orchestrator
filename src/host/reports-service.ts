@@ -39,11 +39,44 @@ import type { Report } from '../domain/reports.ts'
 import { WorkerPhase, normalizeWorker, setPhase } from '../domain/workers.ts'
 import type { Worker } from '../domain/workers.ts'
 import type { LazyFactStore } from './store.ts'
+import { dirtyPaths, newlyDirty } from './root-cleanliness.ts'
+import type { RunCommand } from './worktree.ts'
 
 /** What the report tool needs. */
 export interface ReportToolDeps {
   store: LazyFactStore
   now?: () => number
+  /**
+   * The command seam, for R7's check at shipping time.
+   *
+   * Optional: reporting without a shell is still reporting, and a host that cannot shell
+   * out should record the report rather than refuse it.
+   */
+  run?: RunCommand
+}
+
+/**
+ * Paths at the repository root that changed since the worker started (R7).
+ *
+ * A DELTA, not a verdict on the tree: the plugin shares the user's checkout, so the root
+ * is often dirty for legitimate reasons and a guard that refused on any dirt would be
+ * disabled the first time it cried wolf. `.dsho/` is ignored because it is the plugin's
+ * own scratch space and changes whenever a worker does anything.
+ */
+async function escapedEdits(
+  deps: ReportToolDeps,
+  store: Awaited<ReturnType<LazyFactStore['get']>>,
+  worker: Worker,
+): Promise<string[]> {
+  if (!deps.run) return []
+  const issue = await store.issues.get(worker.issueId)
+  const repoId = typeof issue === 'object' && issue !== null ? (issue as { repoId?: unknown }).repoId : undefined
+  const repo = (await store.repos.list()).find(
+    (candidate) => typeof candidate === 'object' && candidate !== null && (candidate as { id?: unknown }).id === repoId,
+  ) as { rootPath?: unknown } | undefined
+  const rootPath = typeof repo?.rootPath === 'string' ? repo.rootPath : ''
+  if (rootPath === '') return []
+  return newlyDirty(await dirtyPaths(deps.run, rootPath), worker.rootDirtyAtStart ?? [])
 }
 
 /** The phase a report state implies, if any. */
@@ -110,6 +143,26 @@ export async function reportForTool(
   } catch (error) {
     return error instanceof ReportError ? `Could not record the report — ${error.message}` : String(error)
   }
+  // R7 AT SHIPPING TIME, and BEFORE anything is written. "Before shipping" gates the
+  // ship, so a refusal must leave no report either: a stored `done` with no bound pull
+  // request would tell the orchestrator the work had shipped when it had not. A refusal
+  // rather than a warning, for the same reason.
+  const prOutput = outputs.find((output) => output.kind === 'pr_created')
+  if (prOutput && deps.run) {
+    const escaped = await escapedEdits(deps, store, worker)
+    if (escaped.length > 0) {
+      return [
+        'The pull request was NOT recorded: this worker looks like it edited the shared checkout.',
+        '',
+        'Paths changed at the repository root since the worker started:',
+        ...escaped.slice(0, 10).map((path) => `  ${path}`),
+        '',
+        'Work and commit inside your worktree. If a path here is yours, revert it; if it is the',
+        "user's own work, the issue needs a fresh baseline.",
+      ].join('\n')
+    }
+  }
+
   if (state === undefined && outputs.length === 0) {
     return 'A report needs a `state`, an `outputs` entry, or both — otherwise there is nothing to record.'
   }
@@ -129,9 +182,10 @@ export async function reportForTool(
   }
   await store.reports.put(report.id, report)
 
-  // Bind the pull request, which is what the observer and the review loop key on.
+  // Bind the pull request, which is what the observer and the review loop key on. The
+  // output was already validated and R7-checked above, before anything was written.
+  const pr = prOutput
   let bound: Worker = worker
-  const pr = outputs.find((output) => output.kind === 'pr_created')
   if (pr) {
     const number = Number.parseInt(pr.ref.replace(/[^0-9]/g, ''), 10)
     bound = {
