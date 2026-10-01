@@ -304,7 +304,13 @@ loader.load({
   padding: 12px; border-radius: 12px; background: var(--dsw-alias-bg-layer-1, rgba(127,127,127,0.06));
   border: 1px solid var(--dsw-alias-border-l1, rgba(127,127,127,0.18)); }
 .dsho-lane__head { display: flex; align-items: center; gap: 8px; }
-.dsho-lane__title { font-size: 0.8125rem; font-weight: 600; margin: 0; }
+/* The reference colours the lane's dot AND its label by the lane's tone, which is what
+   makes a four-column board scannable without reading any of it. */
+.dsho-lane__dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+.dsho-lane__title { font-size: 0.8125rem; font-weight: 600; margin: 0; color: inherit; }
+.dsho-lane__head[data-tone='busy'] .dsho-lane__dot, .dsho-lane__head[data-tone='busy'] .dsho-lane__title { color: var(--dsw-alias-state-business-primary, #7aaaff); }
+.dsho-lane__head[data-tone='attention'] .dsho-lane__dot, .dsho-lane__head[data-tone='attention'] .dsho-lane__title { color: var(--dsw-alias-state-warn-primary, #f59e0b); }
+.dsho-lane__head[data-tone='success'] .dsho-lane__dot, .dsho-lane__head[data-tone='success'] .dsho-lane__title { color: var(--dsw-alias-state-success-primary, #22c55e); }
 .dsho-lane__count { margin-left: auto; padding: 1px 8px; border-radius: 999px; font-size: 0.75rem;
   font-variant-numeric: tabular-nums; color: var(--dsw-alias-label-primary-dimmed, inherit);
   background: var(--dsw-alias-border-l1, rgba(127,127,127,0.14)); }
@@ -334,7 +340,19 @@ loader.load({
 .dsho-card__hit:focus-visible { box-shadow: 0 0 0 2px var(--dsw-alias-state-business-primary, #4c8dff); }
 .dsho-card__body { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; }
 .dsho-card__top { display: flex; align-items: flex-start; gap: 8px; }
-.dsho-glyph { flex: none; margin-top: 2px; }
+/* The reference opens a card with a substantial avatar -- a rounded square around 26px --
+   not a 12px dot, and the size is what makes the title line read as a heading. Tinted by
+   the tone, so the card still carries exactly one status colour. */
+.dsho-avatar { flex: none; display: inline-flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px; border-radius: 8px;
+  border: 1px solid var(--dsw-alias-border-l2, rgba(127,127,127,0.24));
+  background: var(--dsw-alias-bg-layer-3, rgba(127,127,127,0.12)); }
+.dsho-avatar[data-tone='busy'] { color: var(--dsw-alias-state-business-primary, #7aaaff); }
+.dsho-avatar[data-tone='attention'] { color: var(--dsw-alias-state-warn-primary, #f59e0b); }
+.dsho-avatar[data-tone='error'] { color: var(--dsw-alias-state-error-primary, #e5484d); }
+.dsho-avatar[data-tone='success'] { color: var(--dsw-alias-state-success-primary, #22c55e); }
+.dsho-avatar[data-tone='neutral'] { color: var(--dsw-alias-label-primary-dimmed, inherit); }
+.dsho-glyph { flex: none; }
 .dsho-card__title { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
   font-size: 0.8125rem; font-weight: 600; line-height: 1.25; }
 .dsho-card__branch { display: flex; align-items: center; gap: 6px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -347,7 +365,11 @@ loader.load({
 .dsho-card__status[data-tone='error'] { color: var(--dsw-alias-state-error-primary, #e5484d); }
 .dsho-card__status[data-tone='success'] { color: var(--dsw-alias-state-success-primary, #30a46c); }
 .dsho-card__status[data-tone='busy'] { color: var(--dsw-alias-state-business-primary, #4c8dff); }
+/* Status and age on ONE row, the age pushed right -- the reference's footer. Stacking
+   them costs a line per card and makes the board taller for no extra information. */
+.dsho-card__footer { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
 .dsho-card__meta { font-size: 0.6875rem; font-variant-numeric: tabular-nums; color: var(--dsw-alias-label-primary-dimmed, inherit); opacity: 0.8; }
+.dsho-card__footer .dsho-card__meta { flex: none; }
 /* Reviewer badges. The card is answering one question -- is this waiting on me? -- so a
    person who asked for changes is coloured, and our own reviewer is never here. */
 .dsho-faces { display: flex; align-items: center; gap: 4px; }
@@ -555,7 +577,7 @@ loader.load({
       if (props.spinning) {
         return h(
           'svg',
-          { className: 'dsho-glyph', width: 12, height: 12, viewBox: '0 0 12 12', 'aria-hidden': 'true' },
+          { className: 'dsho-glyph', width: 14, height: 14, viewBox: '0 0 12 12', 'aria-hidden': 'true' },
           h('circle', { cx: 6, cy: 6, r: 4.5, fill: 'none', stroke: 'currentColor', strokeWidth: 1.5, opacity: 0.3 }),
           h(
             'path',
@@ -680,7 +702,7 @@ loader.load({
             h(
               'div',
               { className: 'dsho-card__top' },
-              h(Glyph, { tone, spinning: card.showStatusLoader === true }),
+              h('span', { className: 'dsho-avatar', 'data-tone': tone }, h(Glyph, { tone, spinning: card.showStatusLoader === true })),
               h('span', { className: 'dsho-card__title', title: card.title }, card.title),
             ),
             showBranch
@@ -694,11 +716,15 @@ loader.load({
                   card.reviewers && card.reviewers.length > 0 ? h(Faces, { reviewers: card.reviewers }) : null,
                 )
               : null,
-            h('div', { className: 'dsho-card__status', 'data-tone': tone }, card.displayStatus),
+            h(
+              'div',
+              { className: 'dsho-card__footer' },
+              h('span', { className: 'dsho-card__status', 'data-tone': tone }, card.displayStatus),
+              h('span', { className: 'dsho-card__meta' }, formatAge(card.updatedAt, Date.now())),
+            ),
             card.escalationReason
               ? h('div', { className: 'dsho-card__meta' }, translate('orchestrator.card.automationStopped', { reason: card.escalationReason }))
               : null,
-            h('div', { className: 'dsho-card__meta' }, formatAge(card.updatedAt, Date.now())),
           ),
           h(
             'div',
@@ -816,7 +842,8 @@ loader.load({
         { className: 'dsho-lane', 'data-lane': props.lane.key, 'aria-label': translate(props.lane.labelKey) },
         h(
           'div',
-          { className: 'dsho-lane__head' },
+          { className: 'dsho-lane__head', 'data-tone': LANE_TONE[props.lane.key] ?? 'neutral' },
+          h('span', { className: 'dsho-lane__dot', 'aria-hidden': 'true' }),
           h('h3', { className: 'dsho-lane__title' }, translate(props.lane.labelKey)),
           h('span', { className: 'dsho-lane__count' }, String(props.cards.length)),
         ),
