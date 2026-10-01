@@ -157,6 +157,21 @@ async function run(ctx: ProbeContext): Promise<void> {
         }
       }
 
+      // NUDGE A TURN. Tool availability is announced when the system prompt is
+      // assembled, and a session that runs no turn never assembles one -- which is
+      // why the earlier log held only permission/sandbox/approval records. A turn
+      // that fails still assembles the prompt, so this does not depend on a model
+      // answering.
+      for (const entry of held) {
+        const agent = entry.agent as { followup?: (m: unknown) => void }
+        try {
+          agent?.followup?.({ content: [{ type: 'text', text: 'reply with the single word: ok' }], source: { kind: 'user' } })
+          record(`nudged:${entry.kind}`, { ok: true })
+        } catch (error) {
+          record(`nudged:${entry.kind}:failed`, { message: error instanceof Error ? error.message : String(error) })
+        }
+      }
+
       const probed: Seen[] = held.map((entry) => ({
         sessionId: entry.sessionId,
         kind: entry.kind,
@@ -167,7 +182,7 @@ async function run(ctx: ProbeContext): Promise<void> {
       }))
       record('probes', probed)
       finish()
-    }, 4_000)
+    }, 22_000)
   } catch (error) {
     record('failed', { message: error instanceof Error ? error.message : String(error) })
     finish(false)
