@@ -25,7 +25,7 @@ import type { HostContext } from '../host/context.ts'
 
 export const name = 'seed-spike'
 
-export const inject = ['storageDomain']
+export const inject = ['storageDomain', 'agents', 'agentPresets', 'permissionPresets', 'workspaceRegistry', 'sessionTitle']
 
 const RESULT = '/tmp/dsho-seed-result.json'
 const REPO = '/tmp/dsho-seed-repo'
@@ -52,6 +52,23 @@ async function run(ctx: HostContext): Promise<void> {
   try {
     mkdirSync(REPO, { recursive: true })
     const now = Date.now()
+
+    // A REAL session for the card to open. Until now the seeded worker's `sessionId` was a
+    // storage row the harness had never heard of, so `uiWorkspace.openSession` had nothing
+    // to land on and the navigation could not be verified. Created here so the card's body
+    // click has somewhere real to go.
+    const realSessionId = `dsho-wrk-${now}`
+    const workspace = await ctx.workspaceRegistry.create(REPO, 'seed-spike')
+    const preset = await ctx.agentPresets.resolve('standard')
+    await ctx.agentPresets.acquireScope(preset.id)
+    await ctx.agents.create({
+      sessionId: realSessionId,
+      meta: { cwd: workspace.path, agentPreset: preset.id },
+      setup: async (agentCtx: unknown) => {
+        await ctx.agentPresets.mount(agentCtx, preset.id)
+      },
+    })
+    record('real-session-created', { sessionId: realSessionId })
     // The plugin's OWN domain, opened deliberately and closed again below.
     store = await openFactStore({ facility: ctx.storageDomain, schemas: FACT_SCHEMAS })
 
@@ -76,7 +93,7 @@ async function run(ctx: HostContext): Promise<void> {
     await store.workers.put('wrk-seed-1', {
       id: 'wrk-seed-1',
       issueId: 'iss-seed-1',
-      sessionId: 'dsho-wrk-seed-1',
+      sessionId: realSessionId,
       branch: 'dsho/issue-7-flaky-auth-test',
       worktreePath: `${REPO}/.dsho/worktrees/issue-7`,
       workspaceId: 'w',
