@@ -32,6 +32,7 @@ import { own } from './host/context.ts'
 import { buildOrchestratorTools } from './host/tools.ts'
 import { createRunCommand } from './host/exec.ts'
 import { lazyFactStore, openFactStore } from './host/store.ts'
+import { FACT_SCHEMAS } from './host/schemas.ts'
 
 /** The plugin row name. Must match `cordis.patch.yml` and `package.json`. */
 export const name = 'dsh-orchestrator'
@@ -39,7 +40,7 @@ export const name = 'dsh-orchestrator'
 /**
  * Services this plugin requires before it may activate.
  *
- * `subprocess` and `storage` are declared because the plugin cannot function
+ * `subprocess` and `storageDomain` are declared because the plugin cannot function
  * without them: every GitHub fact comes from `gh`, and every board record lives in
  * storage. Declaring them means a profile that lacks either keeps the plugin
  * **inactive** rather than activating it and failing at the first tool call — the
@@ -50,7 +51,7 @@ export const name = 'dsh-orchestrator'
  * worker spawner and the board routes. Declaring them now would keep the plugin
  * inactive in a profile that has no use for the board yet.
  */
-export const inject = ['tools', 'subprocess', 'storage']
+export const inject = ['tools', 'subprocess', 'storageDomain']
 
 /**
  * Activates the plugin.
@@ -72,7 +73,7 @@ export function apply(ctx: HostContext, config?: PluginConfigInput): PluginConfi
   // synchronous and a storage problem surfaces at a tool call, where the user can
   // act on it, rather than at load time where it would disable the plugin.
   const run = createRunCommand({ subprocess: ctx.subprocess, cwd: resolved.defaultRepo || process.cwd() })
-  const store = lazyFactStore(() => openFactStore({ storage: ctx.storage }))
+  const store = lazyFactStore(() => openFactStore({ facility: ctx.storageDomain, schemas: FACT_SCHEMAS }))
 
   own(
     ctx,

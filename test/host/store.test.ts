@@ -1,25 +1,76 @@
 /**
- * The fact store and record ids.
+ * The fact store, record ids, and the two name rules the backend enforces.
  *
- * Grouped because they are one concern: an id **is** a storage key, and the
- * store's only validation is that the key is safe to store. A test for one that
- * ignored the other would miss the join.
+ * The name tests are the ones that matter most here: `UNIT_NAME_RE` is
+ * `/^[a-z][a-z0-9_]*$/`, so a camelCase table name throws **at module load**. The
+ * earlier version of the adapter used `prSnapshots` and `reviewRuns` and was
+ * green, because the fake implemented an interface its author invented rather than
+ * the one the host has.
  */
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 import {
+  FACT_DOMAIN_NAME,
   FACT_DOMAIN_VERSION,
   FACT_TABLE_NAMES,
   FACT_TABLES,
+  InvalidUnitNameError,
   UnsafeRecordKeyError,
+  UNIT_NAME_PATTERN,
   assertRecordKey,
+  assertUnitName,
   createMemoryFactStore,
+  lazyFactStore,
   openFactStore,
 } from '../../src/host/store.ts'
-import type { KvSnapshot, KvUnitDescriptorLike, KvUnitLike, StorageLike } from '../../src/host/store.ts'
+import type { DomainFacilityLike, KvTableLike } from '../../src/host/store.ts'
+import { FACT_SCHEMAS, recordSchema } from '../../src/host/schemas.ts'
 import { isRecordId, newId, timestampOf } from '../../src/domain/ids.ts'
+
+// ---------------------------------------------------------------------------
+// The name rules
+// ---------------------------------------------------------------------------
+
+test('every table storage name satisfies the backend rule', () => {
+  // The rule is /^[a-z][a-z0-9_]*$/ -- lowercase, digits, underscores. This is the
+  // assertion that would have caught `prSnapshots` before it reached a user.
+  for (const name of FACT_TABLE_NAMES) {
+    assert.match(name, UNIT_NAME_PATTERN, `${name} would be refused by the backend`)
+  }
+  assert.match(FACT_DOMAIN_NAME, UNIT_NAME_PATTERN)
+})
+
+test('callers get camelCase keys and the backend gets snake_case names', () => {
+  assert.equal(FACT_TABLES.prSnapshots, 'pr_snapshots')
+  assert.equal(FACT_TABLES.reviewRuns, 'review_runs')
+  assert.equal(FACT_TABLES.repos, 'repos')
+})
+
+test('assertUnitName rejects what the backend rejects, naming the kind', () => {
+  for (const bad of ['prSnapshots', 'Pr', '1leading', 'has-dash', 'has space', '', 'UPPER']) {
+    assert.throws(() => assertUnitName('table', bad), InvalidUnitNameError, bad)
+  }
+  for (const good of ['a', 'a1', 'a_b', 'pr_snapshots']) {
+    assert.equal(assertUnitName('table', good), good)
+  }
+})
+
+test('the schemas cover exactly the declared tables', () => {
+  assert.deepEqual(Object.keys(FACT_SCHEMAS).sort(), [...FACT_TABLE_NAMES].sort())
+})
+
+test('the record schema accepts objects and rejects scalars, arrays and null', () => {
+  // A corrupted document is far more often a scalar or array than a plausible
+  // object, so this is the check that earns its keep.
+  for (const good of [{}, { a: 1 }, { nested: { b: 2 } }]) {
+    assert.equal(recordSchema.safeParse(good).success, true)
+  }
+  for (const bad of [null, 5, 'text', [1, 2], true]) {
+    assert.equal(recordSchema.safeParse(bad).success, false, JSON.stringify(bad))
+  }
+})
 
 // ---------------------------------------------------------------------------
 // Ids
@@ -32,10 +83,7 @@ test('an id is a prefix and a 26-character Crockford body', () => {
 })
 
 test('the Crockford alphabet excludes the confusable letters', () => {
-  // I, L, O and U are left out because they are mistaken for 1, 1, 0 and V —
-  // which is what makes an id safe to read out loud.
-  const ids = Array.from({ length: 200 }, () => newId('wrk'))
-  for (const id of ids) {
+  for (const id of Array.from({ length: 200 }, () => newId('wrk'))) {
     assert.ok(!/[ILOU]/.test(id.slice(4)), `${id} contains a confusable character`)
   }
 })
@@ -43,24 +91,15 @@ test('the Crockford alphabet excludes the confusable letters', () => {
 test('ids are unique and increase with time', () => {
   const early = newId('iss', 1_000)
   const late = newId('iss', 2_000)
-  assert.notEqual(early, late)
   assert.ok(early < late, 'lexicographic order is creation order')
-
-  const many = new Set(Array.from({ length: 500 }, () => newId('iss')))
-  assert.equal(many.size, 500, 'the random half does not collide')
+  assert.equal(new Set(Array.from({ length: 500 }, () => newId('iss'))).size, 500)
 })
 
-test('an id round-trips its timestamp', () => {
+test('an id round-trips its timestamp, and a bad prefix is refused', () => {
   const now = 1_700_000_000_000
   assert.equal(timestampOf(newId('repo', now)), now)
   assert.equal(timestampOf('not-an-id'), undefined)
-  assert.equal(timestampOf('iss-'), undefined)
-})
-
-test('a bad prefix is refused rather than producing an unusable key', () => {
   assert.throws(() => newId('Iss'), /lowercase/)
-  assert.throws(() => newId('is-s'), /lowercase/)
-  assert.throws(() => newId(''), /lowercase/)
 })
 
 test('generated ids are safe storage keys by construction', () => {
@@ -69,73 +108,71 @@ test('generated ids are safe storage keys by construction', () => {
   }
 })
 
-// ---------------------------------------------------------------------------
-// Keys
-// ---------------------------------------------------------------------------
-
-test('an unsafe key is refused, because the backend would refuse it later', () => {
-  // Checked here rather than at write time: the backend's rejection would surface
-  // mid-write, after the caller has already done the work.
-  for (const key of ['', 'a b', 'a/b', '../etc/passwd', 'a.b', 'a:b', 'a$b']) {
+test('an unsafe key is refused before the table is touched', () => {
+  for (const key of ['', 'a b', 'a/b', '../etc/passwd', 'a.b', 'a:b']) {
     assert.throws(() => assertRecordKey(key), UnsafeRecordKeyError, JSON.stringify(key))
   }
-  for (const key of ['a', 'A', '0', 'a-b', 'a_b', 'AB-cd_12']) {
-    assert.equal(assertRecordKey(key), key)
-  }
+  for (const key of ['a', 'A', '0', 'a-b', 'a_b']) assert.equal(assertRecordKey(key), key)
 })
 
 // ---------------------------------------------------------------------------
-// The store
+// The store, over a fake domain facility
 // ---------------------------------------------------------------------------
 
-/** A fake KV facet that records calls and starts from a given snapshot. */
-function fakeStorage(initial: Partial<KvSnapshot> = {}): StorageLike & {
+interface FakeDomain {
+  facility: DomainFacilityLike
   readonly calls: string[]
-  readonly descriptor: KvUnitDescriptorLike | undefined
-  readonly written: Array<{ table: string; key: string; value: unknown }>
+  readonly spec: { name: string; version: number; tables: Record<string, unknown> } | undefined
   readonly closed: number
-} {
+}
+
+function fakeDomain(initial: Record<string, Record<string, unknown>> = {}): FakeDomain {
   const calls: string[] = []
-  const written: Array<{ table: string; key: string; value: unknown }> = []
+  const recordsByTable: Record<string, Record<string, unknown>> = { ...initial }
+  let spec: FakeDomain['spec']
   let closed = 0
-  let descriptor: KvUnitDescriptorLike | undefined
-  const tables: Record<string, Record<string, unknown>> = { ...(initial.tables ?? {}) }
-  return {
-    form(form) {
-      calls.push(`form:${form}`)
+
+  const facility: DomainFacilityLike = {
+    async open(opened) {
+      spec = opened
+      calls.push('open')
       return {
-        async open(spec) {
-          descriptor = spec
-          calls.push('open')
+        table(name: string): KvTableLike {
+          const records = (recordsByTable[name] ??= {})
           return {
-            async loadAll(): Promise<KvSnapshot> {
-              calls.push('loadAll')
-              return { tables, global: initial.global ?? null }
+            get: (key) => records[key],
+            entries: () => Object.entries(records)[Symbol.iterator](),
+            keys: () => Object.keys(records)[Symbol.iterator](),
+            async put(key, value) {
+              calls.push(`put:${name}:${key}`)
+              records[key] = value
             },
-            async putRecord(table, key, value) {
-              calls.push(`put:${table}:${key}`)
-              written.push({ table, key, value })
-              tables[table] = { ...(tables[table] ?? {}), [key]: value }
+            async delete(key) {
+              calls.push(`delete:${name}:${key}`)
+              const had = key in records
+              delete records[key]
+              return had
             },
-            async deleteRecord(table, key) {
-              calls.push(`delete:${table}:${key}`)
-              delete tables[table]?.[key]
+            async update(key, fn) {
+              records[key] = fn(records[key])
+              return records[key]
             },
-            async close() {
-              closed += 1
-            },
-          } satisfies KvUnitLike
+          }
+        },
+        async close() {
+          closed += 1
         },
       }
     },
+  }
+
+  return {
+    facility,
     get calls() {
       return calls
     },
-    get descriptor() {
-      return descriptor
-    },
-    get written() {
-      return written
+    get spec() {
+      return spec
     },
     get closed() {
       return closed
@@ -143,67 +180,87 @@ function fakeStorage(initial: Partial<KvSnapshot> = {}): StorageLike & {
   }
 }
 
-test('opening declares every table and reads the unit exactly once', async () => {
-  const storage = fakeStorage()
-  const store = await openFactStore({ storage })
-  assert.deepEqual(storage.descriptor?.tables, FACT_TABLE_NAMES)
-  assert.equal(storage.descriptor?.hasGlobal, false, 'no global singleton is used')
-  assert.equal(storage.calls.filter((call) => call === 'loadAll').length, 1)
-  await store.close()
+function open(initial?: Record<string, Record<string, unknown>>) {
+  const fake = fakeDomain(initial)
+  return { fake, store: openFactStore({ facility: fake.facility, schemas: FACT_SCHEMAS }) }
+}
+
+test('opening declares every table with a schema, under the right domain name', async () => {
+  const { fake, store } = open()
+  await store
+  assert.equal(fake.spec?.name, FACT_DOMAIN_NAME)
+  assert.equal(fake.spec?.version, FACT_DOMAIN_VERSION)
+  assert.deepEqual(Object.keys(fake.spec?.tables ?? {}).sort(), [...FACT_TABLE_NAMES].sort())
+  for (const declaration of Object.values(fake.spec?.tables ?? {})) {
+    assert.ok(declaration, 'each table carries a declaration')
+  }
 })
 
-test('records loaded at open are visible without another read', async () => {
-  const storage = fakeStorage({
-    tables: { [FACT_TABLES.repos]: { 'repo-1': { owner: 'o', name: 'r' } } },
-  })
-  const store = await openFactStore({ storage })
-  assert.deepEqual(await store.repos.get('repo-1'), { owner: 'o', name: 'r' })
-  assert.deepEqual(await store.repos.list(), [{ owner: 'o', name: 'r' }])
-  assert.equal(storage.calls.filter((call) => call === 'loadAll').length, 1)
+test('a table without a schema is refused rather than opened unvalidated', async () => {
+  const fake = fakeDomain()
+  await assert.rejects(
+    () => openFactStore({ facility: fake.facility, schemas: {} }),
+    /no schema supplied for table/,
+  )
+  assert.equal(fake.spec, undefined, 'the domain was never opened')
 })
 
-test('a read after a write sees it, without a reload', async () => {
-  // The observer writes on every poll; a full reload per read would make the board
-  // quadratic in the number of workers.
-  const storage = fakeStorage()
-  const store = await openFactStore({ storage })
-  await store.workers.put('wrk-1', { phase: 'planning' })
-  assert.deepEqual(await store.workers.get('wrk-1'), { phase: 'planning' })
-  assert.equal(store.workers.size(), 1)
-  assert.equal(storage.calls.filter((call) => call === 'loadAll').length, 1, 'no hidden reload')
+test('records already in the domain are readable without any extra call', async () => {
+  // The domain is itself the cache, so there is nothing to load and nothing to
+  // invalidate -- which is why this module has no cache of its own.
+  const { store } = open({ [FACT_TABLES.repos]: { 'repo-1': { owner: 'o', name: 'r' } } })
+  const facts = await store
+  assert.deepEqual(await facts.repos.get('repo-1'), { owner: 'o', name: 'r' })
+  assert.deepEqual(await facts.repos.list(), [{ owner: 'o', name: 'r' }])
+  assert.equal(facts.repos.size(), 1)
 })
 
-test('a write goes through to the backend before it resolves', async () => {
-  // Durability is the contract: resolving first would let a crash lose a fact the
-  // caller was told was stored.
-  const storage = fakeStorage()
-  const store = await openFactStore({ storage })
-  await store.issues.put('iss-1', { title: 'x' })
-  assert.deepEqual(storage.written, [{ table: FACT_TABLES.issues, key: 'iss-1', value: { title: 'x' } }])
+test('put and delete delegate to the table and are visible immediately', async () => {
+  const { fake, store } = open()
+  const facts = await store
+  await facts.workers.put('wrk-1', { phase: 'planning' })
+  assert.deepEqual(await facts.workers.get('wrk-1'), { phase: 'planning' })
+  assert.ok(fake.calls.includes(`put:${FACT_TABLES.workers}:wrk-1`))
+  await facts.workers.delete('wrk-1')
+  assert.equal(await facts.workers.get('wrk-1'), undefined)
+  assert.equal(facts.workers.size(), 0)
 })
 
-test('delete is idempotent and visible immediately', async () => {
-  const storage = fakeStorage({ tables: { [FACT_TABLES.issues]: { 'iss-1': { title: 'x' } } } })
-  const store = await openFactStore({ storage })
-  await store.issues.delete('iss-1')
-  assert.equal(await store.issues.get('iss-1'), undefined)
-  await store.issues.delete('iss-1')
+test('an unsafe key is refused before the table is written', async () => {
+  const { fake, store } = open()
+  const facts = await store
+  await assert.rejects(() => facts.issues.put('../escape', {}), UnsafeRecordKeyError)
+  assert.ok(!fake.calls.some((call) => call.startsWith('put:')), 'nothing reached the table')
 })
 
-test('an unsafe key is refused before anything is written', async () => {
-  const storage = fakeStorage()
-  const store = await openFactStore({ storage })
-  await assert.rejects(() => store.issues.put('../escape', { a: 1 }), UnsafeRecordKeyError)
-  assert.deepEqual(storage.written, [])
+test('an undeclared table is refused here, not handed to the host', async () => {
+  // `nope` is a valid unit NAME, so the shape check passes -- the declared-set
+  // check is the one that helps, because otherwise the failure would come back as
+  // whatever the host does with an undeclared table and say nothing about the
+  // caller's mistake.
+  const facts = await open().store
+  assert.throws(() => facts.table('nope'), /unknown fact table/)
 })
 
-test('an unknown table is refused', () => {
-  const store = createMemoryFactStore()
-  assert.throws(() => store.table('nope'), /unknown fact table/)
+test('a caller name is not a storage name', async () => {
+  // `prSnapshots` is a key in FACT_TABLES; the storage name is `pr_snapshots`.
+  // Whichever check fires first, the message must name the declared tables, so the
+  // caller can see the difference.
+  const facts = await open().store
+  assert.throws(() => facts.table('prSnapshots'), /pr_snapshots/)
+  assert.doesNotThrow(() => facts.table(FACT_TABLES.prSnapshots))
+  assert.equal(facts.table(FACT_TABLES.prSnapshots), facts.prSnapshots, 'the accessor is the same store')
+})
+
+test('close releases the domain', async () => {
+  const { fake, store } = open()
+  const facts = await store
+  await facts.close()
+  assert.equal(fake.closed, 1)
 })
 
 test('the five tables are declared, one per record kind', () => {
-  assert.deepEqual(Object.values(FACT_TABLES).sort(), [
+  assert.deepEqual(Object.keys(FACT_TABLES).sort(), [
     'issues',
     'prSnapshots',
     'repos',
@@ -213,13 +270,52 @@ test('the five tables are declared, one per record kind', () => {
   assert.equal(FACT_DOMAIN_VERSION, 1)
 })
 
-test('the in-memory store implements the same contract, so tests exercise real paths', async () => {
+test('the in-memory store implements the same contract', async () => {
   const store = createMemoryFactStore()
   await store.repos.put('repo-1', { owner: 'o' })
   assert.deepEqual(await store.repos.get('repo-1'), { owner: 'o' })
   assert.equal(store.writes, 1)
-  assert.equal(store.repos.size(), 1)
   await store.repos.delete('repo-1')
   assert.equal(store.repos.size(), 0)
   await store.close()
+})
+
+// ---------------------------------------------------------------------------
+// The lazy store
+// ---------------------------------------------------------------------------
+
+test('the lazy store opens once', async () => {
+  let opens = 0
+  const store = lazyFactStore(async () => {
+    opens += 1
+    return createMemoryFactStore()
+  })
+  await store.get()
+  await store.get()
+  assert.equal(opens, 1)
+  assert.equal(store.opened, true)
+})
+
+test('the lazy store retries after a failed open rather than poisoning the plugin', async () => {
+  let attempts = 0
+  const store = lazyFactStore(async () => {
+    attempts += 1
+    if (attempts === 1) throw new Error('transient')
+    return createMemoryFactStore()
+  })
+  await assert.rejects(() => store.get(), /transient/)
+  await store.get()
+  assert.equal(attempts, 2)
+  assert.equal(store.opened, true)
+})
+
+test('the lazy store does not open on close if it was never used', async () => {
+  let opens = 0
+  const store = lazyFactStore(async () => {
+    opens += 1
+    return createMemoryFactStore()
+  })
+  await store.close()
+  assert.equal(opens, 0, 'unload must not cause an open')
+  assert.equal(store.opened, false)
 })

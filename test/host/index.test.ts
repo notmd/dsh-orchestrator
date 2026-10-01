@@ -45,9 +45,9 @@ function fakeContext(): HostContext & {
         throw new Error('the activation tests do not shell out')
       },
     },
-    storage: {
-      form() {
-        throw new Error('the activation tests do not open KV directly')
+    storageDomain: {
+      async open() {
+        throw new Error('the activation tests do not open the domain')
       },
     },
     tools: {
@@ -81,9 +81,11 @@ function fakeContext(): HostContext & {
 
 test('the plugin declares the services it cannot function without', () => {
   assert.equal(name, 'dsh-orchestrator')
-  // `subprocess` and `storage` are declared because without them the plugin should
-  // stay INACTIVE rather than activate and fail at the first tool call.
-  assert.deepEqual([...inject], ['tools', 'subprocess', 'storage'])
+  // Declared because without them the plugin should stay INACTIVE rather than
+  // activate and fail at the first tool call. `storageDomain` is the facility
+  // itself, which is the direct ctx key -- `ctx.storage.domain` is the same object
+  // reached through the form hub.
+  assert.deepEqual([...inject], ['tools', 'subprocess', 'storageDomain'])
 })
 
 test('apply registers the orchestrator tools and returns the resolved config', () => {

@@ -9,9 +9,9 @@ bloated status file costs the next agent more than it saves.
 |---|---|
 | **Goal** | Implement [PRD.md](PRD.md) |
 | **Plan source** | [PRD.md §16 Milestones](PRD.md#16-milestones), verified against [docs/dsh-plugin-contract.md](docs/dsh-plugin-contract.md) |
-| **Last updated** | 2026-10-01, chunk 6g.2 |
+| **Last updated** | 2026-10-01, chunk 6h (storage fixed and verified) |
 | **Verify** | `npm run verify` → `tsc` (src + test) + `node --test` + build · **all green** |
-| **Current state** | **516 tests, 0 type errors — but see the ⚠ below.** The board's read model, configuration, the host plane's low-level layers (spawn, worktree, exec, GitHub access), **persistence, and the repository preflight** are done and verified — worktrees against real git, activation in a real GUI. **The storage question is settled** (see decisions 20–21). Still missing: the observer, the routes, the client half. **⚠ `orchestrator_repo_connect` is wired and its preflight is tested, but its persistence step calls a storage API that does not exist** (§3, "The storage API was misread") and would fail at the first call. Fix that before building on it. |
+| **Current state** | **524 tests, 0 type errors. The storage layer is fixed and verified against the real backend.** The board's read model, configuration, the host plane's low-level layers (spawn, worktree, exec, GitHub access), **persistence, and the repository preflight** are done and verified — worktrees against real git, activation in a real GUI. **The storage question is settled** (see decisions 20–21). Still missing: the issue/worker stores' accessors, the observer, the routes, the client half. The next step is 6h. |
 
 ---
 
@@ -95,24 +95,40 @@ DevTools MCP `new_page`. Install with `npm run build && dsh plugin --profile web
 are inserted with a `--patch` overlay, because a host result is otherwise invisible
 from outside the process.
 
-**⚠ The storage API was misread, and the fakes could not catch it.** `openFactStore`
-was written against `ctx.storage.form('kv')`. Neither half is real: `ctx.storage` is
-a **form hub** reached as `ctx.storage.<form>` (not `.form(name)`), and there is **no
-`kv` form anywhere** — the only form is `domain`, i.e. `ctx.storage.domain.open()`.
-`KvFacet`/`KvUnit` are *backend* interfaces that a plugin does not call.
+**The storage API was misread once, and the fakes could not catch it — now FIXED
+and verified against the real backend.** `openFactStore` was written against
+`ctx.storage.form('kv')`. Neither half was real: `ctx.storage` is a **form hub**
+reached as `ctx.storage.<form>`, there is **no `kv` form anywhere**, and
+`KvFacet`/`KvUnit` are *backend* interfaces a plugin does not call.
 
-The real path therefore **does** need zod, because
-`DomainSpec.tables[name].valueSchema` is a `ZodType`. The earlier reasoning that
-avoided zod was wrong. The fix is known and small: `zod` is a normal public package
-(present in the profile, installable from the registry — the symlink problem that
-ruled out other DSH imports does not apply to it), so add it, **pin it to the
-profile's version** so the schemas are the same `ZodType` the host validates with,
-and rewrite the adapter over `ctx.storage.domain.open(...)`. `FactStore` and
-`LazyFactStore` are unaffected.
+Three facts the correction turned up, all of which would have bitten later:
+
+  - `ctx.storageDomain` **is** the facility; `ctx.storage.domain` is the same object
+    through the hub. The direct ctx key is the simpler target.
+  - **Domain and table names must match `/^[a-z][a-z0-9_]*$/`.** `prSnapshots` and
+    `reviewRuns` would have thrown *at module load*. Storage names are snake_case;
+    the ergonomic camelCase keys are ours.
+  - The native path **does** need zod (`DomainTableSpec.valueSchema` is a `ZodType`).
+    zod is a normal public package, so the symlink problem that rules out other DSH
+    imports does not apply to it — it is pinned to the profile's version so the
+    schemas are the same `ZodType` the host validates with.
+  - `Domain.table()`'s `get`/`entries`/`keys` are **synchronous**: the domain is
+    itself the cache. The hand-rolled cache this module used to carry was solving a
+    problem that does not exist, and could have diverged from the backend.
+
+**Verified against the real backend** by `src/spike/storage-spike.ts` (M0 storage
+spike): the domain opened, all five tables accepted their names, a record survived a
+put/get round trip, overwrite replaced rather than appended, delete emptied the
+table, and close released it. It also persisted —
+`~/.dsh/storages/dsho.json`, holding `unit: { name: "dsho", version: 1 }` and the
+records under `repos`, `issues`, `workers`, `pr_snapshots`, `review_runs`. **That
+file is the proof the snake_case names were required**, and the test residue was
+removed afterwards.
 
 This is the **second** bug of exactly this shape, after the worktree
 canonicalization: **a fake cannot catch a wrong API, because it implements whatever
-interface the author imagined.** The tests were green throughout.
+interface the author imagined.** The tests were green throughout — which is why the
+fix was verified against reality rather than against another fake.
 
 **A live session's log buffers.** "No turn events on disk" does **not** mean no turn
 happened. Read the log after the session closes, or watch the GUI.
@@ -124,7 +140,7 @@ happened. Read the log after the session closes, or watch the GUI.
 | Chunk | Work | PRD | Why now |
 |---|---|---|---|
 | 6g\.2 | **Wire `orchestrator_repo_connect` as a tool.** The preflight and the store both exist and are tested; what is missing is the wiring. It needs `inject` to gain `subprocess` and `storage`, and **`apply()` to become async** (opening the store is async), which is why it is its own step rather than a footnote — that change also touches the activation tests. | §12.1 | Makes the second real tool live, and proves the store against a real backend rather than a fake. |
-| 6h | **The issue and worker stores** on the settled fact store, then `orchestrator_issue_create` / `_list` / `_update`. | §7.1, §7.3, §12.1 | Now unblocked: the storage question is settled in 6g. |
+| 6h | **The issue and worker records**, then `orchestrator_issue_create` / `_list` / `_update` on the verified store. | §7.1, §7.3, §12.1 | The storage layer is verified against reality, so nothing is being built on an assumption. |
 | 6i | **`GitHubGateway` + `PrObserver`** — poll `gh pr view --json`, diff against the stored snapshot, emit fact changes. Invariants: a failed observation keeps the prior snapshot and can never fabricate a closed/merged transition (R13). | §7.4, §10.2 | The board is only truthful if the facts are. |
 | 7 | **Client half** — `src/client/**/*.ts` → `dist/client.js` in the `window.__ModuleLoader__` classic-script form, the `sidebar.panellist` row and the `main` keyed panel, lanes/cards/inspector, themes, locale, keyboard access. | §11, M2 | The seat is proven (§3) and there is a shipped exemplar to copy. |
 | 8 | `/dsho/api/*` + `/dsho/events` on `ctx.webServer` (SSE is unverified — the fallback is polling the board endpoint). | §11.4, A10 item 5 | Needs the stores; the client needs the routes. |
@@ -201,15 +217,24 @@ Treat these as current intent. Overrule them deliberately, but not by accident.
 18. **`gh pr view --json`, not GraphQL.** AO reads PRs through `gh api graphql`; the
     PRD prescribes this. The field list is exactly what §7.4 names and the reducer
     reads.
-20. **Persistence is `ctx.storage`'s KV layer, not `ctx.storageDomain`.** The PRD
-    allows either. `storageDomain` validates records with **zod schemas**, which
-    would mean importing a schema library the plugin cannot resolve (the symlink
-    problem, decision 14) and pinning a version the host may differ on. The KV layer
-    takes `unknown` records and needs no schema library — and the **ported
-    normalizers are already the validators**: `prFacts()`, `sessionFacts()` and
-    `reviewRunFacts()` fill Go's zero values on every read, which is exactly how a
-    record predating a field is supposed to behave. Everything is behind `FactStore`,
-    so switching later is a change to one file.
+20. **Persistence is `ctx.storageDomain.open()` with zod schemas**, pinned to the
+    profile's zod version so the schemas are the same `ZodType` the host validates
+    with. (An earlier version of this decision claimed the KV layer avoided zod
+    entirely; that was wrong — see §3.) The record schemas assert only that a record
+    is a **JSON object**, because **the ported normalizers are the real validators**:
+    `prFacts()`, `sessionFacts()` and `reviewRunFacts()` fill Go's zero values on
+    every read, which is exactly how a record predating a field behaves — and a
+    strict schema would *reject* an old record the reducer can read perfectly well,
+    and make every future field addition a migration. The object check still earns
+    its keep: a corrupted document is a scalar or array far more often than a
+    plausible object.
+23. **Storage names are snake_case; caller keys are camelCase.** `UNIT_NAME_RE` is
+    `/^[a-z][a-z0-9_]*$/`, so `FACT_TABLES` maps `prSnapshots → pr_snapshots`. A test
+    asserts every declared name against the pattern, because that is the check that
+    would have caught the mistake before a user did.
+24. **`FactStore` adds no caching, validation, or retry of its own.** The domain is
+    already the cache; the normalizers already validate. A second cache here could
+    only diverge from the backend.
 21. **Record ids are ULIDs, and the id is the storage key.** Lexicographic order is
     creation order, so a board sorted by id is also sorted by age; and the Crockford
     alphabet excludes `I`/`L`/`O`/`U`, so an id survives being read out loud. The
@@ -276,6 +301,6 @@ record what it did.
 | **`ctx.agents.create()` outside `dsh-webhook`** | **Closed** (spike 2), with one residual: the admitted prompt's turn is unobserved. |
 | **`attachSession` against a worktree** | **Closed** (spike 2). |
 | **SSE through `ctx.webServer.register`** | Open. Plain HTTP is documented; streaming is not. Fallback is polling `/dsho/api/board`. |
-| **`ctx.storageDomain` shape** | Open, and now the blocking question (chunk 6h). |
+| **`ctx.storageDomain` shape** | **Closed.** Verified against the real backend by the storage spike; domain opens, all five tables work, records persist. |
 | **The preset lease's lifetime** | Open. The reference frees it when the triggering function returns, which cannot be right for a worker that outlives the call; we hand it to the caller. |
 | **`gh` not installed / not authenticated** | Handled at the message layer (`describeFailure` names the exact prerequisite); the preflight itself lands in 6g. |

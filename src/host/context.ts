@@ -16,7 +16,7 @@
 
 import type { ToolDescriptor } from './tool.ts'
 import type { SubprocessLike } from './exec.ts'
-import type { StorageLike } from './store.ts'
+import type { DomainFacilityLike } from './store.ts'
 
 /** The tool registry, as far as this plugin is concerned. */
 export interface ToolRegistryLike {
@@ -48,8 +48,14 @@ export interface HostContext {
    * and fail at the first tool call.
    */
   subprocess: SubprocessLike
-  /** Host-side structured storage, for the board's records. Same reasoning. */
-  storage: StorageLike
+  /**
+   * Host-side structured storage, for the board's records. Same reasoning.
+   *
+   * `ctx.storageDomain` is the `DomainFacility` itself; `ctx.storage.domain` is the
+   * same object reached through the form hub. The facility is preferred because it
+   * is the direct key, so nothing has to know the hub's shape.
+   */
+  storageDomain: DomainFacilityLike
   effect(callback: () => (() => void) | void, label?: string): () => void
   logger?: { info(message: string): void; warn(message: string): void; error(message: string): void }
 }
