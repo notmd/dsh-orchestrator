@@ -186,7 +186,7 @@ export function buildOrchestratorTools(options: {
         state: { type: 'string', enum: Object.values(IssueState), description: 'New issue state.' },
       },
       outputType: 'string',
-      execute: async (args) => updateIssueForTool({ store }, args as never),
+      execute: async (args) => updateIssueForTool({ store, run }, args as never),
     }) as ToolDescriptor<never, unknown>,
 
     defineTool({

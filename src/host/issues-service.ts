@@ -16,6 +16,9 @@
  * @module dsho/host/issues-service
  */
 
+import { cleanupWorkerWorktree } from './worktree-cleanup.ts'
+import { normalizeWorker } from '../domain/workers.ts'
+import type { RunCommand } from './worktree.ts'
 import {
   IssueError,
   IssueState,
@@ -35,6 +38,13 @@ export interface IssueToolDeps {
   store: LazyFactStore
   /** Injected so tests pin timestamps. */
   now?: () => number
+  /**
+   * The command seam, for worktree cleanup when an issue is released.
+   *
+   * Optional: an issue can be listed and edited without one, and a host that cannot
+   * shell out should still record the state change rather than refuse it.
+   */
+  run?: RunCommand
 }
 
 /** A failed store access, phrased for the model. */
@@ -231,7 +241,31 @@ export async function updateIssueForTool(
     return `No change to ${issue.id}.`
   }
   await store.issues.put(next.id, next)
-  return `Updated ${next.id}\n\n${describeIssue(next, true)}`
+
+  // Releasing an issue releases its worktree. Done here rather than on a sweep so the
+  // cleanup cannot lag behind the state the user just set, and quietly: a git failure
+  // must not undo the archive they asked for.
+  let cleanupNote = ''
+  if ((next.state === IssueState.done || next.state === IssueState.cancelled) && next.workerId && deps.run) {
+    const workerStored = await store.workers.get(next.workerId)
+    if (workerStored !== undefined) {
+      const repo = (await store.repos.list()).find(
+        (candidate) =>
+          typeof candidate === 'object' && candidate !== null && (candidate as { id?: unknown }).id === next.repoId,
+      ) as { rootPath?: unknown } | undefined
+      const outcome = await cleanupWorkerWorktree(
+        { store: deps.store, run: deps.run },
+        normalizeWorker(workerStored),
+        typeof repo?.rootPath === 'string' ? repo.rootPath : '',
+      )
+      cleanupNote = outcome.removed
+        ? `\nRemoved the worktree at ${outcome.worktreePath}.`
+        : outcome.error
+          ? `\nThe worktree at ${outcome.worktreePath} was left in place: ${outcome.error}`
+          : '\nNo worktree needed removing.'
+    }
+  }
+  return `Updated ${next.id}${cleanupNote}\n\n${describeIssue(next, true)}`
 }
 
 /** `orchestrator_issue_assign` shares `assignWorker`'s invariant. */

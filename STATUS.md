@@ -9,9 +9,9 @@ bloated status file costs the next agent more than it saves.
 |---|---|
 | **Goal** | Implement [PRD.md](PRD.md) |
 | **Plan source** | [PRD.md §16 Milestones](PRD.md#16-milestones), verified against [docs/dsh-plugin-contract.md](docs/dsh-plugin-contract.md) |
-| **Last updated** | 2026-10-01, chunk 6w (the forced pass) |
+| **Last updated** | 2026-10-01, chunk 6x (worktree cleanup, R4 closed) |
 | **Verify** | `npm run verify` → `tsc` (src + test) + `node --test` + build · **all green** |
-| **Current state** | **656 tests, 0 type errors. Twelve tools, and the requested flow runs end to end on its own ticks:** issue → worker → worktree → PR → observer → review pass → findings back to the worker → verdict → `Needs human review`. The board assembles into lanes and `orchestrator_board` reads it. **The host surface now exists**: `/dsho/api/board` answers a real request in a live host (verified: 200, `application/json`, `no-store`, four lanes). **Fourteen tools, and the requested flow's ordering is proven end to end in a real host**: a PR snapshot moves the card `building → validating / Review scheduled → Reviewing`, an approved verdict lands in **`needs_review / Needs human review` — never `Ready`** (A17), a new head schedules a fresh pass, and a failed pass lands in `Review failed` with its retry budget accounted. Along the way the lane spike found a real integration bug (fixed). Still open: no *real* PR has been opened (the spike writes the observer's output directly — `gh pr create` needs write access to someone else's repository), and the worker has never run a turn. Also open: no PR has been opened by a worker yet, the protocol tools are not restricted to their session kinds, and worktree cleanup on archive does not exist. |
+| **Current state** | **656 tests, 0 type errors. Twelve tools, and the requested flow runs end to end on its own ticks:** issue → worker → worktree → PR → observer → review pass → findings back to the worker → verdict → `Needs human review`. The board assembles into lanes and `orchestrator_board` reads it. **The host surface now exists**: `/dsho/api/board` answers a real request in a live host (verified: 200, `application/json`, `no-store`, four lanes). **666 tests. Fourteen tools, and the requested flow's ordering is proven end to end in a real host**: a PR snapshot moves the card `building → validating / Review scheduled → Reviewing`, an approved verdict lands in **`needs_review / Needs human review` — never `Ready`** (A17), a new head schedules a fresh pass, and a failed pass lands in `Review failed` with its retry budget accounted. Along the way the lane spike found a real integration bug (fixed). Still open: no *real* PR has been opened (the spike writes the observer's output directly — `gh pr create` needs write access to someone else's repository), and the worker has never run a turn. Also open: no PR has been opened by a worker yet, the protocol tools are not restricted to their session kinds, and worktree cleanup on archive does not exist. |
 
 ---
 
@@ -46,7 +46,8 @@ everything else inherits.
 | 6u | **The whole path, end to end.** A host spike drove `connectRepo → createIssue → startWorker → buildBoard` against the real services: a real worktree, a real session, and a card in `building` reading `Awaiting PR` | **live**; found a real argv bug |
 | 6v | **A card moving through lanes** — the worker opens a PR (`gh pr create`), the observer sees it, the review sweep schedules a pass, and the card visibly moves `building → validating → …`. The PR half has never executed. | A4, A13, M1/M3 | Everything up to the PR is proven; nothing after it has run. |
 | 6x | **Restrict the protocol tools to their session kinds** via `ctx.tools.restrict()` on the worker/reviewer agent ctx (Appendix A3.5), so `orchestrator_report` is not offered to a user's session and `orchestrator_review_verdict` is not offered to a worker. Today they are registered globally and refuse at runtime — functionally equivalent, but "cannot" beats "must not". | §12.2, A3.5 | Cheap, and it is the last gap in the agent-facing surface.
-| 6y | **Worktree cleanup on archive**, and clearing the spike residue from the web profile's `~/.dsh/storages/`. | R4, §9.3 | R4's disk bound is only real if cleanup runs.
+| 6y | **Clear the spike residue** from the web profile's `~/.dsh/storages/` (`dsho.json` and `dsho_lane_spike.json` hold repositories, issues and workers from the spikes). Harmless, but it is test data in a real profile. | housekeeping | Cheap, and it stops a later reader mistaking spike rows for real ones.
+| 6z | **`orchestrator_worker_stop` does not release the issue**, and nothing archives a worker whose PR merged. A7 (merge → Ready → Archive) needs the session-terminated path. | A7, §7.6 | Cleanup now exists, but nothing yet calls it for the merge path.
 | 6v\\.3 | DONE — the lane sequence is proven live (see §3). Superseded by: (`building → validating (Review scheduled) → validating (Reviewing) → needs_review (Needs human review)`) and the failed-pass path. Note the durable store now holds spike repositories and issues in the **web profile's** `~/.dsh/storages/dsho.json` — harmless, but it is test residue. | §7.5, §7.6, A13, A17 | The half after `worker_start` has never executed live, and it is where the review ordering lives. |
 | 6t | **The panel renders in a real GUI.** Module loaded, nav row present, selection works, and the panel shows its heading, count and empty state | **live** |
 | 6s | **The client half.** `src/client/index.ts` registers the `sidebar.panellist` row and the `main` keyed panel, polls `/dsho/api/board`, and renders four lanes with loading/empty/error states. Its own `tsconfig.client.json` emits a **classic script** (`module: none`), since that is what `window.__ModuleLoader__` requires | builds |
@@ -145,6 +146,14 @@ This is the **second** bug of exactly this shape, after the worktree
 canonicalization: **a fake cannot catch a wrong API, because it implements whatever
 interface the author imagined.** The tests were green throughout — which is why the
 fix was verified against reality rather than against another fake.
+
+**A fake that does not model reality hides the behaviour under test — seventh time.**
+The failing-removal test passed for the wrong reason on the first run: the fake returned
+an empty `worktree list`, so `remove` found nothing, was a no-op, and the "left in place"
+branch was never reached. It is also the **second** time the worktree-list fake has
+caused this. Delegating to the stateful fake for everything except `remove` fixed it.
+That a single fake can produce two instances of the same bug, six rounds apart, is the
+argument for making fakes stateful by default rather than by request.
 
 **Two green halves that disagreed with each other.** The observer writes a PR snapshot
 under `snapshotKey(workerId)`; the board read them by matching the snapshot's url to

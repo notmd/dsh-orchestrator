@@ -855,3 +855,108 @@ test('worker_start: verify commands reach the worker', async () => {
   await startWorkerForTool(deps, { issueId })
   assert.match(spawn.prompt(), /pnpm test/)
 })
+
+
+// ---------------------------------------------------------------------------
+// Worktree cleanup on release (R4)
+// ---------------------------------------------------------------------------
+
+import { cleanupReleasedWorktrees } from '../../src/host/worktree-cleanup.ts'
+
+/** A store with a worker whose worktree the (stateful) fake git knows about. */
+async function releaseable() {
+  const store = createMemoryFactStore()
+  const git = worktreeGit()
+  const path = '/repos/r1/.dsho/worktrees/issue-1-x'
+  // Teach the fake, the way `worktree add` would.
+  await git.run(['git', 'worktree', 'add', '-b', 'dsho/issue-1-x', path])
+  await store.repos.put('repo-1', { id: 'repo-1', rootPath: '/repos/r1' })
+  await store.issues.put('iss-1', {
+    id: 'iss-1', number: 1, repoId: 'repo-1', title: 'Task', state: 'in_progress',
+    workerId: 'wrk-1', createdAt: 1, updatedAt: 1,
+  })
+  await store.workers.put('wrk-1', {
+    id: 'wrk-1', issueId: 'iss-1', sessionId: 'dsho-wrk-1', branch: 'dsho/issue-1-x',
+    worktreePath: path, workspaceId: 'w', phase: 'merge_ready', phaseHistory: [],
+    lastSignalAt: 1, createdAt: 1, updatedAt: 1,
+  })
+  return { store, git, path, deps: { store: lazyFactStore(async () => store), run: git.run } }
+}
+
+test('R4: marking an issue done removes its worktree, and says so', async () => {
+  const { deps, git, path } = await releaseable()
+  const text = await updateIssueForTool(deps, { id: 'iss-1', state: 'done' })
+
+  assert.match(text, /Updated iss-1/)
+  assert.match(text, /Removed the worktree at/)
+  assert.ok(
+    git.calls.some((argv) => argv.includes('remove') && argv.includes(path)),
+    'the worktree was actually removed',
+  )
+})
+
+test('R4: cancelling an issue removes its worktree too', async () => {
+  const { deps, git } = await releaseable()
+  await updateIssueForTool(deps, { id: 'iss-1', state: 'cancelled' })
+  assert.ok(git.calls.some((argv) => argv.includes('remove')))
+})
+
+test('a still-open issue keeps its worktree', async () => {
+  const { deps, git } = await releaseable()
+  await updateIssueForTool(deps, { id: 'iss-1', priority: 'high' })
+  assert.ok(!git.calls.some((argv) => argv.includes('remove')), 'nothing was removed')
+})
+
+test('a FAILED removal leaves the archive standing and reports why', async () => {
+  // The archive is what the user asked for; a git failure while cleaning up must not
+  // undo it -- nor hide it, which is why the reason comes back in the reply.
+  const { store, path, deps, git } = await releaseable()
+  // Delegates to the stateful fake for everything except `remove`, so the worktree
+  // still APPEARS in `worktree list` and the removal is genuinely attempted. A fake
+  // that reported an empty list would make the removal a no-op and the test would
+  // pass for the wrong reason -- which is exactly what happened on the first try.
+  const failing = {
+    ...deps,
+    run: (async (argv: readonly string[], options?: { cwd?: string; timeoutMs?: number }) => {
+      if (argv.includes('remove')) return { exitCode: 128, stdout: '', stderr: 'fatal: not a working tree' }
+      return git.run(argv, options)
+    }) as RunCommand,
+  }
+  const text = await updateIssueForTool(failing, { id: 'iss-1', state: 'done' })
+
+  assert.match(text, /Updated iss-1/)
+  assert.match(text, /left in place/)
+  assert.match(text, /not a working tree/)
+  assert.equal(((await store.issues.get('iss-1')) as { state: string }).state, 'done', 'the archive stands')
+  assert.ok(path.length > 0)
+})
+
+test('a released issue with no worktree says so rather than pretending', async () => {
+  const { store, deps } = await releaseable()
+  const worker = (await store.workers.get('wrk-1')) as Record<string, unknown>
+  delete worker.worktreePath
+  await store.workers.put('wrk-1', worker)
+  const text = await updateIssueForTool(deps, { id: 'iss-1', state: 'done' })
+  assert.match(text, /No worktree needed removing|left in place/)
+})
+
+test('cleanupReleasedWorktrees only touches released issues, and is idempotent', async () => {
+  const { deps, git, store } = await releaseable()
+  assert.deepEqual(await cleanupReleasedWorktrees(deps), [], 'an in-progress issue keeps its tree')
+
+  await updateIssueForTool(deps, { id: 'iss-1', state: 'done' })
+  const second = await cleanupReleasedWorktrees(deps)
+  assert.equal(second.length, 1, 'the sweep now considers it')
+  assert.equal(second[0]!.removed, false, 'and finds nothing left to remove')
+  assert.ok(store !== undefined && git.calls.length > 0)
+})
+
+test('cleanup contains a storage failure instead of throwing', async () => {
+  const outcomes = await cleanupReleasedWorktrees({
+    store: lazyFactStore(async () => {
+      throw new Error('backend offline')
+    }),
+    run: (async () => ({ exitCode: 0, stdout: '', stderr: '' })) as RunCommand,
+  })
+  assert.deepEqual(outcomes, [])
+})
