@@ -24,7 +24,7 @@
 import { newId } from '../domain/ids.ts'
 import { IssueState, assignWorker, normalizeIssue, releaseWorker } from '../domain/issues.ts'
 import type { Issue } from '../domain/issues.ts'
-import { WorkerPhase, normalizeWorker, workerSessionTitle } from '../domain/workers.ts'
+import { WorkerPhase, isTerminalPhase, normalizeWorker, workerSessionTitle } from '../domain/workers.ts'
 import type { Worker } from '../domain/workers.ts'
 import { createIssueForTool } from './issues-service.ts'
 import type { IssueToolDeps } from './issues-service.ts'
@@ -94,6 +94,28 @@ export async function startWorkerForTool(
     store = await deps.store.get()
   } catch (error) {
     return storageFailure(error)
+  }
+
+  // THE CONCURRENCY CAP. `maxConcurrentWorkers` was validated, displayed by
+  // `orchestrator_config`, and NEVER ENFORCED -- so the plugin would happily start
+  // unbounded workers, each with its own worktree (a full checkout), session, and
+  // model spend. A cap that is advertised and not applied is worse than no cap,
+  // because the operator has configured a bound they believe holds.
+  //
+  // Counted from the store rather than a live registry: a worker whose session died
+  // still occupies a worktree until it is released, and the bound is about resources.
+  const active = (await store.workers.list())
+    .map(normalizeWorker)
+    .filter((candidate) => !isTerminalPhase(candidate.phase))
+  if (active.length >= deps.config.maxConcurrentWorkers) {
+    return [
+      `At capacity: ${active.length} of ${deps.config.maxConcurrentWorkers} workers are active, so nothing was started.`,
+      '',
+      ...active.slice(0, 8).map((candidate) => `  ${candidate.id}  ${candidate.phase}`),
+      '',
+      `Finish or stop a worker first (\`orchestrator_worker_stop\` releases its issue), or raise`,
+      '`maxConcurrentWorkers`.',
+    ].join('\n')
   }
 
   let issue: Issue

@@ -12,7 +12,9 @@ import assert from 'node:assert/strict'
 
 import { createLiveWorkers } from '../../src/host/handle-registry.ts'
 import type { LiveWorker } from '../../src/host/handle-registry.ts'
-import { messageWorkerForTool, stopWorkerForTool } from '../../src/host/workers-service.ts'
+import { messageWorkerForTool, startWorkerForTool, stopWorkerForTool } from '../../src/host/workers-service.ts'
+import type { RunCommand } from '../../src/host/worktree.ts'
+import { normalizePluginConfig } from '../../src/config/validate.ts'
 import { createMemoryFactStore, lazyFactStore } from '../../src/host/store.ts'
 import { WorkerPhase } from '../../src/domain/workers.ts'
 import type { AgentLike, AgentHandle, Disposable } from '../../src/host/spawn.ts'
@@ -231,3 +233,64 @@ test('a stop whose release fails still reports the stop', async () => {
   assert.match(text, /backend offline/)
   assert.deepEqual(handle.cancels, [{ kind: 'user' }], 'the turn was still cancelled')
 })
+
+
+// ---------------------------------------------------------------------------
+// The concurrency cap (M5)
+// ---------------------------------------------------------------------------
+
+test('the concurrency cap is ENFORCED, and says what is holding the slots', async () => {
+  // `maxConcurrentWorkers` was validated, displayed by orchestrator_config, and never
+  // applied -- so the plugin started unbounded workers, each with its own worktree (a
+  // full checkout), session, and model spend. A cap that is advertised and not applied
+  // is worse than none: the operator has configured a bound they believe holds.
+  const store = createMemoryFactStore()
+  for (const index of [1, 2]) {
+    await store.workers.put(`wrk-${index}`, {
+      id: `wrk-${index}`, issueId: `iss-${index}`, sessionId: `dsho-wrk-${index}`, branch: `b${index}`,
+      worktreePath: `/p/${index}`, workspaceId: 'w', phase: WorkerPhase.implementing, phaseHistory: [],
+      lastSignalAt: 1, createdAt: 1, updatedAt: 1,
+    })
+  }
+  const text = await startWorkerForTool(depsFor(store, 2), { title: 'One more' })
+
+  assert.match(text, /At capacity: 2 of 2 workers are active/)
+  assert.match(text, /wrk-1/, 'the reply names what is holding the slots')
+  assert.match(text, /orchestrator_worker_stop/, 'and how to free one')
+  assert.equal((await store.workers.list()).length, 2, 'nothing was started')
+})
+
+test('a TERMINAL worker does not occupy a slot', async () => {
+  // The bound is about resources, and a finished worker's worktree has been released.
+  const store = createMemoryFactStore()
+  await store.workers.put('wrk-done', {
+    id: 'wrk-done', issueId: 'iss-0', sessionId: 'dsho-wrk-done', branch: 'b', worktreePath: '/p/0',
+    workspaceId: 'w', phase: WorkerPhase.merged, phaseHistory: [], lastSignalAt: 1, createdAt: 1, updatedAt: 1,
+  })
+  await store.workers.put('wrk-live', {
+    id: 'wrk-live', issueId: 'iss-1', sessionId: 'dsho-wrk-live', branch: 'b', worktreePath: '/p/1',
+    workspaceId: 'w', phase: WorkerPhase.implementing, phaseHistory: [], lastSignalAt: 1, createdAt: 1, updatedAt: 1,
+  })
+  const text = await startWorkerForTool(depsFor(store, 2), { title: 'One more' })
+  assert.ok(!/At capacity/.test(text), `a released worker frees its slot, got: ${text}`)
+})
+
+test('the cap is read from config, not hard-coded', async () => {
+  const store = createMemoryFactStore()
+  await store.workers.put('wrk-1', {
+    id: 'wrk-1', issueId: 'iss-1', sessionId: 's', branch: 'b', worktreePath: '/p', workspaceId: 'w',
+    phase: WorkerPhase.implementing, phaseHistory: [], lastSignalAt: 1, createdAt: 1, updatedAt: 1,
+  })
+  assert.match(await startWorkerForTool(depsFor(store, 1), { title: 'x' }), /At capacity: 1 of 1/)
+  assert.ok(!/At capacity/.test(await startWorkerForTool(depsFor(store, 2), { title: 'x' })))
+})
+
+/** The minimum the cap check needs; it runs before anything is spawned. */
+function depsFor(store: ReturnType<typeof createMemoryFactStore>, maxConcurrentWorkers: number) {
+  return {
+    store: lazyFactStore(async () => store),
+    config: normalizePluginConfig({ maxConcurrentWorkers }),
+    spawn: {} as never,
+    run: (async () => ({ exitCode: 0, stdout: '', stderr: '' })) as RunCommand,
+  } as never
+}
