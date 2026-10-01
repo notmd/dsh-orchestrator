@@ -172,6 +172,41 @@ async function run(ctx: ProbeContext): Promise<void> {
         }
       }
 
+      // THE DECISIVE PROBE. `get()` cannot see scope, but `execute()` may enforce
+      // visibility at dispatch -- the docs say a denial surfaces as `UNKNOWN_TOOL`
+      // before the policy pipeline -- and `ToolExecutionInput` carries the `agent` on
+      // whose behalf the call runs. So: restrict one session, then attempt the
+      // restricted tool ON ITS BEHALF and see whether it is refused.
+      void (async () => {
+        const outcomes: Array<Record<string, unknown>> = []
+        for (const entry of held) {
+          const tools = (ctx as unknown as { tools?: { execute?: (input: unknown) => Promise<unknown> } }).tools
+          if (typeof tools?.execute !== 'function') {
+            outcomes.push({ kind: entry.kind, result: 'no execute()' })
+            continue
+          }
+          try {
+            const result = (await tools.execute({
+              callId: `probe-${entry.kind}`,
+              name: 'orchestrator_board',
+              arguments: {},
+              agent: entry.agent,
+            })) as { kind?: string; error?: unknown; status?: string }
+            outcomes.push({
+              kind: entry.kind,
+              result: typeof result === 'object' ? JSON.stringify(result).slice(0, 300) : String(result),
+            })
+          } catch (error) {
+            outcomes.push({
+              kind: entry.kind,
+              threw: error instanceof Error ? error.message : String(error),
+            })
+          }
+        }
+        record('execute-probe', outcomes)
+        finish()
+      })()
+
       const probed: Seen[] = held.map((entry) => ({
         sessionId: entry.sessionId,
         kind: entry.kind,
@@ -181,7 +216,6 @@ async function run(ctx: ProbeContext): Promise<void> {
         board: probe(entry.agent as never, 'orchestrator_board'),
       }))
       record('probes', probed)
-      finish()
     }, 22_000)
   } catch (error) {
     record('failed', { message: error instanceof Error ? error.message : String(error) })
