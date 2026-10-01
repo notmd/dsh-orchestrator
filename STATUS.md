@@ -9,7 +9,7 @@ bloated status file costs the next agent more than it saves.
 |---|---|
 | **Goal** | Implement [PRD.md](PRD.md) |
 | **Plan source** | [PRD.md §16 Milestones](PRD.md#16-milestones), verified against [docs/dsh-plugin-contract.md](docs/dsh-plugin-contract.md) |
-| **Last updated** | 2026-10-01, chunk 10 (the restriction does NOT apply) |
+| **Last updated** | 2026-10-01, chunk 11 (the probe was wrong) |
 | **Verify** | `npm run verify` → `tsc` (src + test) + `node --test` + build · **all green** |
 | **Current state** | **656 tests, 0 type errors. Twelve tools, and the requested flow runs end to end on its own ticks:** issue → worker → worktree → PR → observer → review pass → findings back to the worker → verdict → `Needs human review`. The board assembles into lanes and `orchestrator_board` reads it. **The host surface now exists**: `/dsho/api/board` answers a real request in a live host (verified: 200, `application/json`, `no-store`, four lanes). **684 tests. Fourteen tools, the requested flow runs to completion** is proven end to end in a real host**: a PR snapshot moves the card `building → validating / Review scheduled → Reviewing`, an approved verdict lands in **`needs_review / Needs human review` — never `Ready`** (A17), a new head schedules a fresh pass, and a failed pass lands in `Review failed` with its retry budget accounted. Along the way the lane spike found a real integration bug (fixed). The flow now **runs to its end**: a merged or closed PR finishes the worker, releases the issue, and collects the worktree. Still open: no *real* PR has been opened (the spike writes the observer's output directly — `gh pr create` needs write access to someone else's repository), and the worker has never run a turn. Also open: no PR has been opened by a worker yet, the protocol tools are not restricted to their session kinds, and worktree cleanup on archive does not exist. |
 
@@ -45,9 +45,8 @@ everything else inherits.
 | 6q | **The board assembly.** `buildBoard` joins the stores, the reducer and the presentation layer — the only place that does, so the agent's view and the GUI's cannot disagree. Plus `orchestrator_board` | 1 test file |
 | 6u | **The whole path, end to end.** A host spike drove `connectRepo → createIssue → startWorker → buildBoard` against the real services: a real worktree, a real session, and a card in `building` reading `Awaiting PR` | **live**; found a real argv bug |
 | 6v | **A card moving through lanes** — the worker opens a PR (`gh pr create`), the observer sees it, the review sweep schedules a pass, and the card visibly moves `building → validating → …`. The PR half has never executed. | A4, A13, M1/M3 | Everything up to the PR is proven; nothing after it has run. |
-| 6x | **Restrict the protocol tools to their session kinds** via `ctx.tools.restrict()` on the worker/reviewer agent ctx (Appendix A3.5), so `orchestrator_report` is not offered to a user's session and `orchestrator_review_verdict` is not offered to a worker. Today they are registered globally and refuse at runtime — functionally equivalent, but "cannot" beats "must not". | §12.2, A3.5 | Cheap, and it is the last gap in the agent-facing surface.
+| 11 | **Re-verify the restriction through a channel that can actually see it.** `agent.ctx.tools.get(name)` resolves GLOBALLY and cannot detect a restriction, so it is deprecated as evidence (the spike records the disproof). Use the session log's `tool-registry` availability changes instead. Established on the way: `agent.ctx.tools.restrict({deny})` exists, is callable, and returns a disposer, so the mechanism the listener uses is real. | §12.2, A3.5 | §12.2's effect is **unknown** — neither known-good nor known-bad. The runtime mitigation stands (the tools refuse and validate the caller), but "cannot" was the requirement. |
 | 6y | **Clear the spike residue** from the web profile's `~/.dsh/storages/` (`dsho.json` and `dsho_lane_spike.json` hold repositories, issues and workers from the spikes). Harmless, but it is test data in a real profile. | housekeeping | Cheap, and it stops a later reader mistaking spike rows for real ones.
-| 7 | **Restrict the protocol tools to their session kinds** (`ctx.tools.restrict`, Appendix A3.5). Two traps to respect, both read from the installed types and recorded in §3: it must be called through the **agent's scoped ctx** (on a plain context it is global, and would strip tools from the user's session), and the lists must be **deny-lists** (`allow` means *keep only*, so an allow-list would strip read/bash/edit from a worker). | §12.2, A3.5 | "Cannot" beats "must not" — and this is the last §12.2 requirement.
 | 7b | **A removal path for the spike workspaces** left in the web profile\'s `workspace.json`. Not hand-edited: it is a running service\'s own state, with the user\'s real workspaces in the same table. | housekeeping | Needs the registry, or the user.
 | 6v\\.3 | DONE — the lane sequence is proven live (see §3). Superseded by: (`building → validating (Review scheduled) → validating (Reviewing) → needs_review (Needs human review)`) and the failed-pass path. Note the durable store now holds spike repositories and issues in the **web profile's** `~/.dsh/storages/dsho.json` — harmless, but it is test residue. | §7.5, §7.6, A13, A17 | The half after `worker_start` has never executed live, and it is where the review ordering lives. |
 | 6t | **The panel renders in a real GUI.** Module loaded, nav row present, selection works, and the panel shows its heading, count and empty state | **live** |
@@ -148,14 +147,16 @@ canonicalization: **a fake cannot catch a wrong API, because it implements whate
 interface the author imagined.** The tests were green throughout — which is why the
 fix was verified against reality rather than against another fake.
 
-**A negative result is worth more than silence, and "the doc says so" is not the
-runtime.** The corrected probe reports every protocol tool **visible** to a worker
-session: the restriction is not applying. Two causes are live and I did not guess
-between them — the wiring may still not apply it, **or the probe may be wrong**,
-since `get(name)` may resolve globally rather than per scope. The types *say* it
-resolves per scope; the types are not the runtime, which is the ninth instance of this
-session's one lesson. **The status is "not working", not "unverified", and no claim is
-made that it works.**
+**PROVE A PROBE CAN DETECT WHAT IT LOOKS FOR BEFORE TRUSTING IT.** I asserted "the
+restriction is not working" from `agent.ctx.tools.get(name)`. Having the spike apply a
+restriction *itself* — which succeeded, returning a real disposer — left the probed
+view unchanged, so `get()` resolves globally and **cannot see scope restrictions at
+all**. The instrument was a mirror: it agreed with every hypothesis. This is the tenth
+instance of one lesson and the first where the flawed instrument was mine. The
+restriction's status reverts to **unknown**, because the stronger claim was not
+supported by the measurement. What the same run *did* establish is that
+`agent.ctx.tools.restrict({deny})` exists, is callable and returns a disposer — so the
+mechanism is real; whether the listener reaches it remains open.
 
 **Reading the wrong object does not throw — it silently does nothing.** The
 `agent/created` payload is `{ agent, source, signal }`; the listener read it *as* the

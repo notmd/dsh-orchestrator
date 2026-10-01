@@ -134,6 +134,29 @@ async function run(ctx: ProbeContext): Promise<void> {
     // Prove the probe is being applied, not guessed: re-probe after a delay, when the
     // plugin's own listener has certainly run.
     setTimeout(() => {
+      // THE DISCRIMINATOR. Apply a restriction here, from the spike, to ONE session --
+      // then probe. If `orchestrator_board` then reads as invisible for that session,
+      // the probe works and the plugin's wiring is the problem. If it still reads
+      // visible, the PROBE is wrong (get() resolving globally rather than per scope),
+      // and the plugin's wiring may have been fine all along.
+      const subject = held.find((entry) => entry.kind === 'other')
+      if (subject) {
+        const scoped = (subject.agent as { ctx?: { tools?: { restrict?: (f: { deny: string[] }) => unknown } } })?.ctx
+        const restrict = scoped?.tools?.restrict
+        if (typeof restrict === 'function') {
+          try {
+            const disposer = restrict.call(scoped?.tools, { deny: ['orchestrator_board'] })
+            record('spike-applied-restriction', { returned: typeof disposer })
+          } catch (error) {
+            record('spike-applied-restriction:threw', {
+              message: error instanceof Error ? error.message : String(error),
+            })
+          }
+        } else {
+          record('spike-applied-restriction:unavailable', { hasCtx: !!scoped, hasTools: !!scoped?.tools })
+        }
+      }
+
       const probed: Seen[] = held.map((entry) => ({
         sessionId: entry.sessionId,
         kind: entry.kind,
