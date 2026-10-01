@@ -1,0 +1,46 @@
+dsh-orchestrator
+Copyright 2026 dsh-orchestrator contributors
+
+This product includes software developed as part of
+Agent Orchestrator (https://github.com/Untrivial-ai/agent-orchestrator),
+Copyright the Agent Orchestrator authors, licensed under the Apache License 2.0.
+
+--------------------------------------------------------------------------
+PORTED FILES AND STATEMENT OF MODIFICATIONS
+--------------------------------------------------------------------------
+
+The following files are **ports of Go source from Agent Orchestrator**, read at
+commit `53ba1e8` ("fix(models): show agent default instead of \"Model not
+reported\" (#6063)"). Each ported file carries a header naming its source file.
+
+  Ported file                              Source file
+  ---------------------------------------  ------------------------------------
+  src/contract/status.js                   backend/pkg/contract/status.go
+  src/contract/activity.js                 backend/internal/domain/activity.go
+  src/contract/kanban.js                   backend/pkg/contract/kanban.go
+  src/review/planner.js                    backend/internal/review/planner.go
+  src/review/gate.js                       backend/internal/autoreview/coordinator.go
+
+Modifications applied to every ported file:
+
+  1. **Language.** Go is translated to JavaScript (ESM, zero dependencies).
+     Struct fields become object properties; Go's PascalCase becomes camelCase.
+     `time.Time` becomes an epoch-milliseconds number. Go's "zero value"
+     defaults (empty string / false / zero number) are reproduced by the
+     `blank*` normalizers so that a missing property behaves exactly like a Go
+     zero value.
+
+  2. **Error-returning paths.** Functions that return `(T, bool)` map to a value
+     or `undefined`. Panics do not exist in the ported surface.
+
+  3. **Deliberate divergences are labelled `DIVERGENCE` in the code.** They are
+     listed in `STATUS.md` under "Documented divergences". As of this writing
+     there is exactly one behavioural divergence in the ported reducer:
+     `requireHumanApprovalBeforeReady` (PRD §7.6 rows 5b and 6), which adds a
+     guaranteed human gate that Agent Orchestrator does not have.
+
+  4. **Ported code is behaviour-preserving except where a divergence is
+     labelled.** The ported reducer's truth table is covered by a JavaScript
+     translation of Agent Orchestrator's own test cases
+     (test/contract/kanban.test.js, ported from backend/pkg/contract/kanban_test.go)
+     so that a porting bug cannot hide behind a rewrite.

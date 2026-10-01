@@ -1,0 +1,4 @@
+- insert:
+    - id: orchestrator
+      name: '@local/dsh-orchestrator'
+      config: {}

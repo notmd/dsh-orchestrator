@@ -1,0 +1,30 @@
+{
+  "name": "@local/dsh-orchestrator",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Issues, workers, and a derived PR board inside DeepSeek Harness.",
+  "type": "module",
+  "license": "Apache-2.0",
+  "exports": {
+    ".": "./index.js",
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "src",
+    "locale/*.json",
+    "icon.svg",
+    "cordis.patch.yml"
+  ],
+  "scripts": {
+    "test": "node --test",
+    "test:watch": "node --test --watch"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}
