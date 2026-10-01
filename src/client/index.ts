@@ -301,19 +301,32 @@ loader.load({
   height: 100%; min-width: 60rem; align-items: stretch; }
 @media (min-width: 1200px) { .dsho-lanes { min-width: 0; } }
 .dsho-lane { min-width: 0; min-height: 0; height: 100%; display: flex; flex-direction: column; gap: 10px;
-  padding: 12px; border-radius: 12px; background: var(--dsw-alias-bg-layer-1, rgba(127,127,127,0.06));
-  border: 1px solid var(--dsw-alias-border-l1, rgba(127,127,127,0.18)); }
+  padding: 12px; border-radius: 12px; border: 1px solid var(--dsw-alias-border-l1, rgba(127,127,127,0.18));
+  background: var(--dsw-alias-bg-layer-1, rgba(127,127,127,0.06)); }
+/* A WASH OF THE LANE TONE, 5%. The reference leaves its columns neutral; this is a
+   deliberate step past it, because the goal is more colour and a lane's tone is the one
+   fact a column actually has. Five percent keeps it a tint -- the cards on top must stay
+   the brightest thing on screen, and anything stronger turns four lanes into four blocks
+   of colour that fight the status lines. */
+.dsho-lane[data-tone='busy'] { background: color-mix(in srgb, var(--dsw-alias-state-business-primary, #7aaaff) 5%, var(--dsw-alias-bg-layer-1, #232324)); }
+.dsho-lane[data-tone='attention'] { background: color-mix(in srgb, var(--dsw-alias-state-warn-primary, #f59e0b) 5%, var(--dsw-alias-bg-layer-1, #232324)); }
+.dsho-lane[data-tone='success'] { background: color-mix(in srgb, var(--dsw-alias-state-success-primary, #22c55e) 5%, var(--dsw-alias-bg-layer-1, #232324)); }
 .dsho-lane__head { display: flex; align-items: center; gap: 8px; }
 /* The reference colours the lane's dot AND its label by the lane's tone, which is what
    makes a four-column board scannable without reading any of it. */
 .dsho-lane__dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
 .dsho-lane__title { font-size: 0.8125rem; font-weight: 600; margin: 0; color: inherit; }
-.dsho-lane__head[data-tone='busy'] .dsho-lane__dot, .dsho-lane__head[data-tone='busy'] .dsho-lane__title { color: var(--dsw-alias-state-business-primary, #7aaaff); }
-.dsho-lane__head[data-tone='attention'] .dsho-lane__dot, .dsho-lane__head[data-tone='attention'] .dsho-lane__title { color: var(--dsw-alias-state-warn-primary, #f59e0b); }
-.dsho-lane__head[data-tone='success'] .dsho-lane__dot, .dsho-lane__head[data-tone='success'] .dsho-lane__title { color: var(--dsw-alias-state-success-primary, #22c55e); }
+/* The tone goes on the HEAD, not on each child. The dot, the label and the count pill
+   then all inherit it -- and the pill's own background mixes from currentColor, so the
+   whole header row is one coloured unit. Colouring the children individually left the
+   pill inheriting the default white. (No backticks in this block -- that mistake has now
+   cost three builds, so the check below runs BEFORE the compile.) */
+.dsho-lane__head[data-tone='busy'] { color: var(--dsw-alias-state-business-primary, #7aaaff); }
+.dsho-lane__head[data-tone='attention'] { color: var(--dsw-alias-state-warn-primary, #f59e0b); }
+.dsho-lane__head[data-tone='success'] { color: var(--dsw-alias-state-success-primary, #22c55e); }
 .dsho-lane__count { margin-left: auto; padding: 1px 8px; border-radius: 999px; font-size: 0.75rem;
-  font-variant-numeric: tabular-nums; color: var(--dsw-alias-label-primary-dimmed, inherit);
-  background: var(--dsw-alias-border-l1, rgba(127,127,127,0.14)); }
+  font-variant-numeric: tabular-nums;
+  color: inherit; background: color-mix(in srgb, currentColor 14%, transparent); }
 .dsho-lane__empty { margin: 0; font-size: 0.8125rem; color: var(--dsw-alias-label-primary-dimmed, inherit); opacity: 0.75; }
 .dsho-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px;
   flex: 1; min-height: 0; overflow-y: auto; }
@@ -863,7 +876,12 @@ loader.load({
     }) {
       return h(
         'section',
-        { className: 'dsho-lane', 'data-lane': props.lane.key, 'aria-label': translate(props.lane.labelKey) },
+        {
+          className: 'dsho-lane',
+          'data-lane': props.lane.key,
+          'data-tone': LANE_TONE[props.lane.key] ?? 'neutral',
+          'aria-label': translate(props.lane.labelKey),
+        },
         h(
           'div',
           { className: 'dsho-lane__head', 'data-tone': LANE_TONE[props.lane.key] ?? 'neutral' },
