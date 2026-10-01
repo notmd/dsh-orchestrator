@@ -172,7 +172,7 @@ export interface BoardCard {
  * here. It is kept so that a future port that does start setting it inherits the
  * reference's behaviour instead of silently losing it.
  */
-export function needsAttention(card: BoardCard, displayStatus?: DisplayStatus): boolean {
+export function needsAttention(card: OrderableCard, displayStatus?: DisplayStatus): boolean {
   if (normalizeStatusReadiness(card.statusReadiness) !== StatusReadiness.ready) return false
   if (card.statusPresentation) return false
   const status = displayStatus ?? card.displayStatus
@@ -212,7 +212,7 @@ export function isFinished(card: BoardCard): boolean {
  *     keying the spinner off `status` spun a settled `Mergeable` card forever
  *     whenever a sibling PR was still review-pending (the reference's #5081).
  */
-export function showStatusLoader(card: BoardCard, displayStatus?: DisplayStatus): boolean {
+export function showStatusLoader(card: OrderableCard, displayStatus?: DisplayStatus): boolean {
   const readiness = normalizeStatusReadiness(card.statusReadiness)
   if (readiness === StatusReadiness.checking) return true
   if (readiness === StatusReadiness.unavailable) return false
@@ -239,11 +239,11 @@ export function showStatusLoader(card: BoardCard, displayStatus?: DisplayStatus)
  *
  * Returns a new array; the input is not mutated.
  */
-export function orderCards(
-  cards: readonly BoardCard[],
-  displayStatusOf?: (card: BoardCard) => DisplayStatus | undefined,
-): BoardCard[] {
-  const statusOf = displayStatusOf ?? ((card: BoardCard) => card.displayStatus)
+export function orderCards<T extends OrderableCard>(
+  cards: readonly T[],
+  displayStatusOf?: (card: T) => DisplayStatus | undefined,
+): T[] {
+  const statusOf = displayStatusOf ?? ((card: T) => card.displayStatus)
   return [...cards].sort((left, right) => {
     const attention =
       Number(needsAttention(right, statusOf(right))) - Number(needsAttention(left, statusOf(left)))
@@ -253,9 +253,29 @@ export function orderCards(
   })
 }
 
+/**
+ * The minimum a card needs to be ordered.
+ *
+ * Structural rather than `BoardCard`, because a **presented** card must be
+ * orderable too — and a view is a different type. Typing this as `BoardCard` would
+ * have forced every caller to re-derive a card it already had.
+ */
+export interface OrderableCard {
+  id: string
+  /** Epoch ms. The second sort key, after attention. */
+  updatedAt: number
+  statusReadiness?: string
+  status?: string
+  activity?: string
+  statusPresentation?: unknown
+  displayStatus?: DisplayStatus
+}
+
 /** One card's full derived presentation. */
 export interface BoardCardView {
   id: string
+  /** Epoch ms, carried so a view can be ordered without its source card. */
+  updatedAt: number
   sessionId: string
   title: string
   column: KanbanColumn
@@ -298,6 +318,7 @@ export function presentCard(
 
   const view: BoardCardView = {
     id: card.id,
+    updatedAt: card.updatedAt,
     sessionId: card.sessionId,
     title: card.title,
     column: derived.column,

@@ -27,6 +27,7 @@
  * | `orchestrator_report` (worker-side) | **shipped** | — |
  * | `orchestrator_worker_message` / `_stop` | **shipped** | — |
  * | `orchestrator_review_verdict` / `_review_failed` (reviewer-side) | **shipped** | — |
+ * | `orchestrator_board` | **shipped** | — |
  * | `orchestrator_worker_start` / `_message` / `_stop` / `_attach_pr` | next | wiring the spawner into a tool |
  * | `orchestrator_board` | next | the issue + worker stores |
  * | `orchestrator_pr_sync` | next | the PR observer |
@@ -45,6 +46,7 @@ import { messageWorkerForTool, startWorkerForTool, stopWorkerForTool } from './w
 import type { LiveWorkers } from './handle-registry.ts'
 import { reportForTool } from './reports-service.ts'
 import { reportReviewFailure, submitVerdict } from './reviewer-service.ts'
+import { buildBoard, renderBoard } from './board-service.ts'
 import { OutputKind, ReportState } from '../domain/reports.ts'
 import type { SpawnDeps } from './spawn.ts'
 import { IssuePriority, IssueState } from '../domain/issues.ts'
@@ -319,6 +321,39 @@ export function buildOrchestratorTools(options: {
       outputType: 'string',
       execute: async (args, exec) =>
         reportReviewFailure({ store, spawn, config, ...(live ? { live } : {}) }, args as never, exec?.agent?.session?.id),
+    }) as ToolDescriptor<never, unknown>,
+
+    defineTool({
+      name: 'orchestrator_board',
+      description:
+        'Read the derived board: every worker, the lane it is in, what its card says, and whether it ' +
+        'needs a person. This is the same reading the GUI shows — the board is derived from durable ' +
+        'facts, never dragged, so there is nothing to keep in sync.',
+      parameters: {
+        format: {
+          type: 'string',
+          enum: ['summary', 'json'],
+          description: 'summary (default) is readable; json is the whole snapshot.',
+        },
+      },
+      outputType: 'string',
+      execute: async (args) => {
+        const snapshot = await buildBoard({
+          store,
+          config,
+          ...(live
+            ? {
+                activityOf: (workerId: string) => {
+                  const status = live.byWorker(workerId)?.handle.agent.status
+                  return status === 'running' ? 'active' : status === 'idle' ? 'idle' : 'unknown'
+                },
+              }
+            : {}),
+        })
+        return (args as { format?: string }).format === 'json'
+          ? JSON.stringify(snapshot, null, 2)
+          : renderBoard(snapshot)
+      },
     }) as ToolDescriptor<never, unknown>,
   ]
   return tools

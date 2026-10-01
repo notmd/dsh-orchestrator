@@ -1,0 +1,254 @@
+/**
+ * Assembling the board: stored facts → lanes of presented cards.
+ *
+ * The reducer, the presentation layer, and the stores all already existed; this is
+ * the assembly that joins them, and it is deliberately the **only** place that does.
+ * Both readers — `orchestrator_board` for the agent and `/dsho/api/board` for the
+ * client — build from here, so a card can never say one thing to the model and
+ * another to the GUI.
+ *
+ * ## The display status is the *session* status, and it is not the lane
+ *
+ * A card carries both, and they are different readings on purpose: the lane's
+ * `displayStatus` describes the PR the column was chosen from (the **best**
+ * landing), while the card's `status` aggregates the session's **worst** open PR.
+ * A30's finished gate reads the session status, and the spinner must read the
+ * lane's — the reference's #5081 bug was exactly this confusion, which spun a
+ * settled `Mergeable` card forever whenever a sibling PR was still pending.
+ *
+ * @module dsho/host/board-service
+ */
+
+import {
+  KANBAN_LANES,
+  KanbanColumn,
+  prFacts,
+} from '../contract/kanban.ts'
+import type { KanbanPRFactsInput } from '../contract/kanban.ts'
+import { deriveStatus, prStatusFacts, sessionFacts } from '../contract/status.ts'
+import { archiveSheet, groupIntoLanes, orderCards, presentCard } from '../board/presentation.ts'
+import type { BoardCard, BoardCardView } from '../board/presentation.ts'
+import { normalizeIssue } from '../domain/issues.ts'
+import { normalizeWorker, workerSessionTitle } from '../domain/workers.ts'
+import { summarizeReviewRuns } from '../review/runs.ts'
+import type { ReviewRun } from '../review/runs.ts'
+import { isBotAuthor } from '../domain/pr-snapshot.ts'
+import type { PrSnapshot } from '../domain/pr-snapshot.ts'
+import type { PluginConfig } from '../config/validate.ts'
+import type { LazyFactStore } from './store.ts'
+
+/** What the board needs. */
+export interface BoardDeps {
+  store: LazyFactStore
+  config: PluginConfig
+  now?: () => number
+  /**
+   * The live activity of a worker, when it can be determined.
+   *
+   * Injected rather than read from the registry directly, so the board can be built
+   * without one — and because `unknown` is a real answer that must be reachable:
+   * after a restart, before a handle exists, that is the honest reading, and the
+   * board must not claim `idle`.
+   */
+  activityOf?: (workerId: string) => 'active' | 'idle' | 'blocked' | 'waiting_input' | 'exited' | 'unknown'
+}
+
+/** The whole board, as both readers see it. */
+export interface BoardSnapshot {
+  generatedAt: number
+  lenses: {
+    lanes: Record<string, BoardCardView[]>
+    archive: BoardCardView[]
+  }
+  counts: { total: number; needsAttention: number; byLane: Record<string, number> }
+}
+
+/** Maps a stored PR snapshot onto the reducer's facts. */
+export function toPrFacts(
+  snapshot: PrSnapshot | undefined,
+  runs: readonly ReviewRun[],
+  bounds: { maxReviewRounds: number; autoReviewFailedRetryLimit: number },
+): KanbanPRFactsInput[] {
+  if (!snapshot || typeof snapshot !== 'object') return []
+  const headSha = snapshot.headSha ?? ''
+  // Our own provider reviews are excluded by id, because the aggregate
+  // `reviewDecision` mixes ours with a person's and cannot tell whose turn it is.
+  const ourReviewIds = new Set(runs.map((run) => run.githubReviewId).filter((id): id is string => !!id))
+  const external = (snapshot.reviews ?? []).filter((review) => !ourReviewIds.has(review.id))
+
+  return [
+    {
+      url: snapshot.url || `#${snapshot.number}`,
+      ...(snapshot.number ? { number: snapshot.number } : {}),
+      draft: snapshot.isDraft === true,
+      merged: snapshot.state === 'MERGED',
+      closed: snapshot.state === 'CLOSED',
+      ci: snapshot.ciState === 'unknown' ? '' : snapshot.ciState,
+      review: (snapshot.reviewDecision ?? '').toLowerCase(),
+      mergeability: (snapshot.mergeable ?? '').toLowerCase(),
+      updatedAt: Date.parse(snapshot.updatedAt ?? '') || snapshot.observedAt || 0,
+      reviewRun: summarizeReviewRuns({ runs, headSha, bounds }),
+      externalReview: {
+        approved: external.some((review) => review.state === 'APPROVED'),
+        changesRequested: external.some((review) => review.state === 'CHANGES_REQUESTED'),
+        comments: external.length > 0 && external.every((review) => review.state === 'COMMENTED'),
+      },
+    },
+  ]
+}
+
+/**
+ * Builds one card from a worker and everything attached to it.
+ *
+ * Exported because it is the unit worth testing: the lane rules are already covered
+ * in `../contract/kanban.ts`, so what is unverified is the *joins*.
+ */
+export function buildCard(options: {
+  worker: ReturnType<typeof normalizeWorker>
+  issueTitle: string
+  issueNumber: number
+  prs: KanbanPRFactsInput[]
+  activity: string
+  config: PluginConfig
+  now: number
+}): BoardCard {
+  const { worker, config } = options
+  const session = sessionFacts({
+    activity: options.activity,
+    lastActivityAt: worker.lastSignalAt,
+    hasSignal: worker.lastSignalAt > 0,
+    signalExpected: true,
+    isTerminated: false,
+    autoReview: config.autoReview,
+    autoInjectReview: config.autoInjectReview,
+    autoInjectCI: config.autoInjectCI,
+    requireHumanApprovalBeforeReady: config.requireHumanApprovalBeforeReady,
+  })
+  const status = deriveStatus(session, options.prs.map(prStatusFacts), options.now, config.noSignalGraceMs)
+
+  return {
+    id: worker.id,
+    sessionId: worker.sessionId,
+    title: workerSessionTitle(options.issueNumber, options.issueTitle),
+    updatedAt: worker.updatedAt,
+    status,
+    // `statusReadiness` is deliberately absent: the plugin always knows whether a
+    // worker exists, and inventing a `checking` phase here would suppress attention
+    // for every card.
+    activity: options.activity,
+    isTerminated: false,
+    lastActivityAt: worker.lastSignalAt,
+    hasSignal: worker.lastSignalAt > 0,
+    signalExpected: true,
+    autoReview: config.autoReview,
+    autoInjectReview: config.autoInjectReview,
+    autoInjectCI: config.autoInjectCI,
+    requireHumanApprovalBeforeReady: config.requireHumanApprovalBeforeReady,
+    prs: options.prs,
+  }
+}
+
+/**
+ * Assembles the whole board.
+ *
+ * **One snapshot, no per-card fan-out** (the performance NFR): every store is read
+ * once, and the lanes are computed from that in memory.
+ */
+export async function buildBoard(deps: BoardDeps): Promise<BoardSnapshot> {
+  const now = (deps.now ?? Date.now)()
+  const store = await deps.store.get()
+
+  const [workers, issues, snapshots, runs] = await Promise.all([
+    store.workers.list(),
+    store.issues.list(),
+    store.prSnapshots.list(),
+    store.reviewRuns.list(),
+  ])
+
+  const normalizedIssues = issues.map(normalizeIssue)
+  const normalizedRuns = runs.filter(
+    (candidate): candidate is ReviewRun => typeof candidate === 'object' && candidate !== null,
+  )
+  const snapshotByWorker = new Map<string, PrSnapshot>()
+  for (const worker of workers.map(normalizeWorker)) {
+    const snapshot = snapshots.find(
+      (candidate) =>
+        typeof candidate === 'object' && candidate !== null && (candidate as PrSnapshot).url === worker.pr?.url,
+    )
+    if (snapshot) snapshotByWorker.set(worker.id, snapshot as PrSnapshot)
+  }
+
+  const bounds = {
+    maxReviewRounds: deps.config.maxReviewRounds,
+    autoReviewFailedRetryLimit: deps.config.autoReviewFailedRetryLimit,
+  }
+
+  const cards = workers.map(normalizeWorker).map((worker) => {
+    const issue = normalizedIssues.find((candidate) => candidate.id === worker.issueId)
+    const workerRuns = normalizedRuns.filter((run) => run.workerId === worker.id)
+    return buildCard({
+      worker,
+      issueTitle: issue?.title ?? '(unknown issue)',
+      issueNumber: issue?.number ?? 0,
+      prs: toPrFacts(snapshotByWorker.get(worker.id), workerRuns, bounds),
+      activity: deps.activityOf?.(worker.id) ?? 'unknown',
+      config: deps.config,
+      now,
+    })
+  })
+
+  const views = cards.map((card) => presentCard(card, { now, noSignalGraceMs: deps.config.noSignalGraceMs }))
+  const lanes = groupIntoLanes(views)
+  // Ordered inside each lane, so a worker waiting on a person floats above a
+  // freshly-updated idle one.
+  for (const lane of KANBAN_LANES) lanes[lane] = orderCards(lanes[lane], (card) => card.displayStatus)
+
+  const byLane: Record<string, number> = {}
+  for (const lane of KANBAN_LANES) byLane[lane] = lanes[lane].length
+
+  return {
+    generatedAt: now,
+    lenses: { lanes, archive: archiveSheet(views) },
+    counts: {
+      total: views.length,
+      needsAttention: views.filter((view) => view.needsAttention).length,
+      byLane,
+    },
+  }
+}
+
+/** Renders the board for the model. */
+export function renderBoard(snapshot: BoardSnapshot): string {
+  const lines = [
+    `Board — ${snapshot.counts.total} worker(s), ${snapshot.counts.needsAttention} needing attention`,
+    '',
+  ]
+  for (const lane of KANBAN_LANES) {
+    const cards = snapshot.lenses.lanes[lane] ?? []
+    lines.push(`${lane} (${cards.length})`)
+    if (cards.length === 0) {
+      lines.push('  (empty)')
+    } else {
+      for (const card of cards) {
+        const mark = card.needsAttention ? '!' : ' '
+        const reason = card.escalationReason ? ` [${card.escalationReason}]` : ''
+        lines.push(`${mark} ${card.id}  ${card.displayStatus}${reason}  ${card.title}`)
+      }
+    }
+    lines.push('')
+  }
+  if (snapshot.lenses.archive.length > 0) {
+    lines.push(`archive (${snapshot.lenses.archive.length}) — terminated sessions, not a lane`)
+    for (const card of snapshot.lenses.archive) lines.push(`  ${card.id}  ${card.title}`)
+  }
+  return lines.join('\n')
+}
+
+/** The lane a card is in, for a caller that has only a card. */
+export function laneOf(snapshot: BoardSnapshot, workerId: string): KanbanColumn | undefined {
+  for (const lane of KANBAN_LANES) {
+    if ((snapshot.lenses.lanes[lane] ?? []).some((card) => card.id === workerId)) return lane as KanbanColumn
+  }
+  if (snapshot.lenses.archive.some((card) => card.id === workerId)) return KanbanColumn.archive
+  return undefined
+}
