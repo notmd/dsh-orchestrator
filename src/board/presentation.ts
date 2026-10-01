@@ -123,6 +123,26 @@ export const IN_PROGRESS_DISPLAY_STATUSES: readonly DisplayStatus[] = Object.fre
 ])
 
 /** One card's inputs. */
+/**
+ * The auto-review loop's position and findings, as the inspector needs them.
+ *
+ * One named shape shared by the card and the view: two structurally identical
+ * declarations would drift, and the drift would show up as a field the inspector
+ * silently renders as absent.
+ *
+ * `round/maxRounds` is shown while the loop runs so the BOUND is visible rather than
+ * arriving as a surprise when it trips, and the findings are carried so a machine
+ * review can be inspected -- a review the user cannot inspect is one they cannot
+ * trust.
+ */
+export interface CardReview {
+  round: number
+  maxRounds: number
+  verdict?: string
+  findings: ReadonlyArray<{ severity: string; path?: string; line?: number; summary: string; detail: string }>
+  githubReviewId?: string
+}
+
 export interface BoardCard {
   /** Stable identity, for keys and tie-breaks. */
   id: string
@@ -152,6 +172,8 @@ export interface BoardCard {
   autoInjectCI?: boolean
   requireHumanApprovalBeforeReady?: boolean
   prs?: readonly KanbanPRFactsInput[]
+  /** The auto-review evidence the inspector shows. */
+  review?: CardReview
 }
 
 /**
@@ -282,6 +304,8 @@ export interface BoardCardView {
   displayStatus: DisplayStatus
   status: string
   statusReadiness: StatusReadiness
+  /** The auto-review loop's position and findings, for the inspector. */
+  review?: CardReview
   needsAttention: boolean
   showStatusLoader: boolean
   isFinished: boolean
@@ -317,6 +341,7 @@ export function presentCard(
   const status = card.status ?? ''
 
   const view: BoardCardView = {
+    ...(card.review ? { review: card.review } : {}),
     id: card.id,
     updatedAt: card.updatedAt,
     sessionId: card.sessionId,

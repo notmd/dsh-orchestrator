@@ -31,7 +31,7 @@ import type { BoardCard, BoardCardView } from '../board/presentation.ts'
 import { normalizeIssue } from '../domain/issues.ts'
 import { normalizeWorker, workerSessionTitle } from '../domain/workers.ts'
 import { snapshotKey } from './observer-service.ts'
-import { summarizeReviewRuns } from '../review/runs.ts'
+import { changesRequestedCycles, summarizeReviewRuns } from '../review/runs.ts'
 import type { ReviewRun } from '../review/runs.ts'
 import { isBotAuthor } from '../domain/pr-snapshot.ts'
 import type { PrSnapshot } from '../domain/pr-snapshot.ts'
@@ -112,6 +112,7 @@ export function buildCard(options: {
   issueTitle: string
   issueNumber: number
   prs: KanbanPRFactsInput[]
+  review?: BoardCard['review']
   activity: string
   config: PluginConfig
   now: number
@@ -149,6 +150,38 @@ export function buildCard(options: {
     autoInjectCI: config.autoInjectCI,
     requireHumanApprovalBeforeReady: config.requireHumanApprovalBeforeReady,
     prs: options.prs,
+    ...(options.review ? { review: options.review } : {}),
+  }
+}
+
+/**
+ * The review evidence the inspector shows, from the runs at the CURRENT head.
+ *
+ * Head-scoped like everything else about reviews: an earlier head's findings are
+ * history, and presenting them as if they applied to the commit under review is the
+ * confusion head-scoping exists to prevent.
+ */
+export function reviewEvidence(
+  runs: readonly ReviewRun[],
+  headSha: string,
+  maxRounds: number,
+): BoardCard['review'] | undefined {
+  if (headSha === '') return undefined
+  const atHead = runs.filter((run) => run.headSha === headSha)
+  if (atHead.length === 0) return undefined
+  const latest = atHead[atHead.length - 1]!
+  return {
+    round: changesRequestedCycles(runs) + 1,
+    maxRounds,
+    ...(latest.verdict ? { verdict: latest.verdict } : {}),
+    ...(latest.githubReviewId ? { githubReviewId: latest.githubReviewId } : {}),
+    findings: (latest.findings ?? []).map((finding) => ({
+      severity: finding.severity,
+      ...(finding.path ? { path: finding.path } : {}),
+      ...(finding.line !== undefined ? { line: finding.line } : {}),
+      summary: finding.summary,
+      detail: finding.detail,
+    })),
   }
 }
 
@@ -201,11 +234,15 @@ export async function buildBoard(deps: BoardDeps): Promise<BoardSnapshot> {
   const cards = workers.map(normalizeWorker).map((worker) => {
     const issue = normalizedIssues.find((candidate) => candidate.id === worker.issueId)
     const workerRuns = normalizedRuns.filter((run) => run.workerId === worker.id)
+    // Computed before the literal: the review evidence is a lookup, and repeating it
+    // inside a spread conditional reads as though the two calls could differ.
+    const review = reviewEvidence(workerRuns, worker.pr?.headSha ?? '', bounds.maxReviewRounds)
     return buildCard({
       worker,
       issueTitle: issue?.title ?? '(unknown issue)',
       issueNumber: issue?.number ?? 0,
       prs: toPrFacts(snapshotByWorker.get(worker.id), workerRuns, bounds),
+      ...(review ? { review } : {}),
       activity: deps.activityOf?.(worker.id) ?? 'unknown',
       config: deps.config,
       now,

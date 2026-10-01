@@ -10,7 +10,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { buildBoard, buildCard, laneOf, renderBoard, toPrFacts } from '../../src/host/board-service.ts'
+import { buildBoard, buildCard, laneOf, renderBoard, reviewEvidence, toPrFacts } from '../../src/host/board-service.ts'
 import { BOARD_ROUTE_PATH, createBoardRoute, handleBoardRequest } from '../../src/host/board-route.ts'
 import { presentCard } from '../../src/board/presentation.ts'
 import type { BoardDeps } from '../../src/host/board-service.ts'
@@ -454,4 +454,83 @@ test('the board reads the snapshot the way the OBSERVER writes it', () => {
     assert.equal(board.counts.byLane[KanbanColumn.validating], 1)
     assert.equal(board.lenses.lanes[KanbanColumn.validating]![0]!.displayStatus, DisplayStatus.reviewScheduled)
   })()
+})
+
+
+// ---------------------------------------------------------------------------
+// Review evidence for the inspector (§11.2)
+// ---------------------------------------------------------------------------
+
+test('review evidence is head-scoped, like everything else about reviews', () => {
+  // An earlier head's findings are history. Showing them as if they applied to the
+  // commit under review is the confusion head-scoping exists to prevent.
+  const runs: ReviewRun[] = [
+    { id: 'r1', workerId: 'wrk-1', headSha: 'sha-old', round: 1, status: 'complete', verdict: 'changes_requested',
+      findings: [{ severity: 'high', summary: 'old finding', detail: 'stale' }] },
+    { id: 'r2', workerId: 'wrk-1', headSha: 'sha-new', round: 2, status: 'complete', verdict: 'approved' },
+  ]
+  const evidence = reviewEvidence(runs, 'sha-new', 3)!
+  assert.deepEqual(evidence.findings, [], 'the old head\'s findings are not carried forward')
+
+  const older = reviewEvidence(runs, 'sha-old', 3)!
+  assert.equal(older.findings[0]!.summary, 'old finding', 'and they are still visible at the head they belong to')
+})
+
+test('no pass at this head means no review evidence at all', () => {
+  assert.equal(reviewEvidence([], 'sha-1', 3), undefined)
+  assert.equal(reviewEvidence([{ id: 'r', workerId: 'w', headSha: 'sha-other', status: 'complete' }], 'sha-1', 3), undefined)
+  assert.equal(reviewEvidence([{ id: 'r', workerId: 'w', headSha: 'sha-1', status: 'running' }], '', 3), undefined,
+    'a worker with no head has nothing to show')
+})
+
+test('the round and the bound both travel, so the limit is visible before it trips', () => {
+  // The PRD asks for `round/maxReviewRounds` on the card so the bound is visible
+  // rather than surprising when it trips.
+  const runs: ReviewRun[] = [
+    { id: 'r1', workerId: 'w', headSha: 'a', status: 'complete', verdict: 'changes_requested' },
+    { id: 'r2', workerId: 'w', headSha: 'b', status: 'complete', verdict: 'changes_requested' },
+    { id: 'r3', workerId: 'w', headSha: 'sha-now', status: 'running' },
+  ]
+  const evidence = reviewEvidence(runs, 'sha-now', 3)!
+  assert.equal(evidence.round, 3, 'two changes-requested cycles came before this one')
+  assert.equal(evidence.maxRounds, 3)
+})
+
+test('findings carry severity, file and line, which is what makes them inspectable', () => {
+  const runs: ReviewRun[] = [
+    { id: 'r1', workerId: 'w', headSha: 'sha-1', status: 'complete', verdict: 'changes_requested',
+      githubReviewId: 'PRR_9',
+      findings: [{ severity: 'medium', path: 'src/a.ts', line: 12, summary: 'off by one', detail: 'the loop runs once too far' }] },
+  ]
+  const evidence = reviewEvidence(runs, 'sha-1', 3)!
+  assert.equal(evidence.verdict, 'changes_requested')
+  assert.equal(evidence.githubReviewId, 'PRR_9', 'the review id is how the user finds it on the provider')
+  assert.deepEqual(evidence.findings, [
+    { severity: 'medium', path: 'src/a.ts', line: 12, summary: 'off by one', detail: 'the loop runs once too far' },
+  ])
+})
+
+test('the presented view carries the review evidence through', () => {
+  const card = buildCard({
+    worker: worker(),
+    issueTitle: 'Fix it',
+    issueNumber: 1,
+    prs: [{ url: 'pr/1', reviewRun: { present: true, changesRequested: true, outcome: true, roundBudgetExhausted: false } }],
+    review: { round: 2, maxRounds: 3, verdict: 'changes_requested', findings: [{ severity: 'low', summary: 's', detail: 'd' }] },
+    activity: 'idle',
+    config: CONFIG,
+    now: NOW,
+  })
+  const view = presentCard(card, { now: NOW, noSignalGraceMs: CONFIG.noSignalGraceMs })
+  assert.equal(view.review?.round, 2)
+  assert.equal(view.review?.maxRounds, 3)
+  assert.equal(view.review?.findings.length, 1)
+})
+
+test('a card with no review omits the field rather than inventing one', () => {
+  const card = buildCard({
+    worker: worker(), issueTitle: 'Fix it', issueNumber: 1, prs: [], activity: 'idle', config: CONFIG, now: NOW,
+  })
+  const view = presentCard(card, { now: NOW, noSignalGraceMs: CONFIG.noSignalGraceMs })
+  assert.equal(view.review, undefined)
 })
