@@ -13,7 +13,7 @@ bloated status file costs the next agent more than it saves.
 | **Plan source** | [PRD.md §16 Milestones](PRD.md#16-milestones), verified against [docs/dsh-plugin-contract.md](docs/dsh-plugin-contract.md) |
 | **Last updated** | 2026-10-02, handoff cleanup (no code change): stale counts corrected, a malformed row repaired, a doubled finding merged — then four review passes, which corrected `verify:all`'s claim, PR #5's state, row 5's qualifier, two counts and row 6v, and closed the spike-residue item (reconciling §3's workspace paragraph with it and restoring a heading the dedupe had dropped) |
 | **Verify** | `npm run verify` (src typecheck + suite + host/client build) exits **0**. `npm run verify:all` (adds `test/**` and `src/spike/**` to the typecheck) does **not** — its `typecheck:all` half reports **18 pre-existing errors in six test files** (`test/client/plugin-config.test.ts`, `test/domain/pr-snapshot.test.ts`, `test/host/exec.test.ts`, `test/host/feedback.test.ts`, `test/host/observer-scheduling.test.ts`, `test/host/review-threads.test.ts`). That is fixture drift at the type level, not broken behaviour: `npm test` passes because Node strips types. |
-| **Current state** | **1011 tests (`npm test`), `src/` typechecked clean; `npm run verify` exits 0** (the `verify:all` failure above is pre-existing test-file type drift, not a regression). `verify:all` exists because `verify` typechecks only `tsconfig.src.json`, which excludes `test/**` and `src/spike/**`, so the suite's types and the spikes' types were never checked by it. The client bundle carries **0 module statements**, so it stays the classic script the loader needs. **The PRD's scope is implemented, audited and demonstrated** — the whole requested flow runs in `test/integration/flow.test.ts` against a mock provider with real git, the settings page's four writes are proven to reach the work in `test/integration/settings-flow.test.ts`, all 26 config keys are read by acting code, and the board and the settings dialog were measured in a live GUI rather than eyeballed. **Open:** M6 (which the PRD marks optional), §12.2's platform half (an assumption, not a task), A4's follow-through (waiting on a person), and G5 and G1 (blocked upstream) — see §4. |
+| **Current state** | **1011 tests (`npm test`), `src/` typechecked clean; `npm run verify` exits 0** (the `verify:all` failure above is pre-existing test-file type drift, not a regression). `verify:all` exists because `verify` typechecks only `tsconfig.src.json`, which excludes `test/**` and `src/spike/**`, so the suite's types and the spikes' types were never checked by it. The client bundle carries **0 module statements**, so it stays the classic script the loader needs. **The PRD's scope is implemented, audited and demonstrated** — the whole requested flow runs in `test/integration/flow.test.ts` against a mock provider with real git, the settings page's four writes are proven to reach the work in `test/integration/settings-flow.test.ts`, all but two of the 26 config keys are read by acting code — `planGate` and the `webhook` block are validated and reported but not wired to any behaviour yet, as row 42 records — and the board and the settings dialog were measured in a live GUI rather than eyeballed. **Open:** M6 (which the PRD marks optional), §12.2's platform half (an assumption, not a task), A4's follow-through (waiting on a person), and G5 and G1 (blocked upstream) — see §4. |
 
 ---
 
@@ -703,10 +703,13 @@ shapes are not reconciled upstream; it is one function to change.
 
 ### The settings page, and where its rows come from
 
-The page's LAYOUT is the reference's project settings exactly — Worktrees / Issues /
-Pull requests, section headings over one bordered group of rows, the label left and
-the control right, an inline pencil for a text value and a switch for a flag. Two
-things are ours, and both are deliberate:
+The page's LAYOUT follows the reference's project settings — Worktrees / Issues /
+Pull requests, section headings, the label left and the control right, an inline
+pencil for a text value and a switch for a flag — but not its row SURFACE: the rows
+are **hairline-divided**, matching the host's own Settings, where the reference used
+a bordered card group (row 36; an earlier version of this page used the card, and the
+stylesheet's own comment records why it went). Two things are ours, and both are
+deliberate:
 
 | Reference row | Ours | Why |
 |---|---|---|
