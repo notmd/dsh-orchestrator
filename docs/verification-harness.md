@@ -158,6 +158,58 @@ to load a fresh module generation. Read the install result's `application` and
 `warnings` fields — not server logs, terminal output, or the page's boot payload —
 to decide whether a change is live.
 
+**A change to the CLIENT half needs a fresh server AND a fresh page.** Measured
+2026-10-02: the browser is served the client bundle by *name* (`plugins/??@local/
+dsh-orchestrator/client.js&rev=<hash>`, visible in `__DSH_BOOT__.entries`), the hash
+is minted when the server boots, and an old tab keeps the generation it loaded. So
+kill the job, rebuild, boot again, and open the page from the new token URL — a
+reload of an old tab is not enough. To confirm which generation the browser really
+has, fetch the entry's own URL and grep the text:
+
+```js
+const entry = window.__DSH_BOOT__.entries.find(e => e.id === '@local/dsh-orchestrator')
+const text = await (await fetch(entry.url, { cache: 'no-store' })).text()
+text.includes('plugins.bundle.config')   // the string you just added
+```
+
+### 4c. Reading the settings document from the page
+
+Per-plugin configuration is a **server-side document** the client mirrors. When a
+settings surface is missing or wrong, the question is almost always "is the host
+serving this namespace at all?", and the answer is one authenticated `fetch` from
+the page — no DevTools panel, no server logs:
+
+```js
+const body = { type: 'client-request', rpcId: 'probe', method: 'settings/describe', payload: { args: {} } }
+const response = await fetch('api/settings/describe', {
+  method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+})
+const entry = (await response.json()).result.value.namespaces.find(n => n.ns === 'orchestrator')
+// → { ns, schema, value, base, user, revision }   (undefined when nothing serves it)
+```
+
+Instructive failure, from the run that built the plugin settings page: the document
+**did** list `"ns":"orchestrator"` while the page was absent, because the client's
+guarded `ctx.configForms` read threw (Cordis refuses a service that was not
+injected) and the `try`/`catch` swallowed it. `value` is projected from
+`entry.fiber.config` — the **running** entry — which is what makes this probe the
+right instrument for "did a saved setting reach the plugin", rather than only "did
+it reach the file".
+
+`api/settings/mutate` is the write half (`{ ns, ops, expectedRevision }`), and its
+refusal is explicit: `result.ok:false` with `error.message` reading
+`invalid config: $.maxConcurrentWorkers expected number but got 4`. Hook `window.fetch`
+before the interaction if you want the exact payloads on the record.
+
+**A settings write lands in the profile's `cordis.patch.yml`** (the row gains a
+`config:` block) — that is the user's profile, so back the file up first and restore
+it afterwards, or reset through the page itself.
+
+**The DevTools MCP writable paths are not this workspace.** `take_screenshot` with a
+`filePath` is refused unless the path is inside the MCP server's own configured
+roots; take the screenshot without a path (it comes back inline) instead of guessing
+at a directory.
+
 ---
 
 ## 5. Running a host-side spike without shipping it

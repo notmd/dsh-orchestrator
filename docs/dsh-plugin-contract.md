@@ -216,6 +216,49 @@ window.__ModuleLoader__.load({
 
 ---
 
+### A2.6 A plugin's own configuration page on the Plugins page
+
+Verified 2026-10-02 against the installed **`0.2.0-rc.2`**, whose packages sit in
+`/Applications/DeepSeek Harness.app/Contents/Resources/app.asar` (`dsh/node_modules/@deepseek-ai/…`)
+and resolve from `~/.dsh/profiles/node_modules/`. This is **newer than the `0.1.7-rc.2`** the
+rest of this appendix was measured on, and the settings surface is part of what changed:
+`plugins.bundle.config` did not exist as far as this document knew.
+
+| Fact | Where it comes from |
+|---|---|
+| The sidebar's **Plugins** page declares three configuration slots: `plugins.item` (list), `plugins.bundle.config` (keyed), `plugins.row.config` (keyed) | `dsh-client-ui-plugin-manager/lib/client.js` — `SLOTS = ['plugins.item','plugins.bundle.config','plugins.row.config']` |
+| A keyed slot renders **nothing** without a registration under the exact key | same file: `configured: ledger.bundles.has(openPkg.name)`, keys read as `entry.options.key` |
+| The slot key is the **BUNDLE package name**; the settings namespace is the **profile entry id** | `renderSlot("plugins.bundle.config", { view: "page" }, { entryKey: pkg.name })` vs `dsh-settings`'s `ns: entry.options.id` |
+| The bundle page renders the entry between the description and the component rows, asking for `view: 'page'` (a form with its own save controls) | same file, the `PackageDetail` render path |
+| An entry is configurable **only if its module exports `Config` and a field is marked `.volatile()`** | `dsh-settings/lib/index.js`: `schema(entry) = entry.fiber?.runtime?.Config`, then `volatileForm(schema)`; `if (form === undefined) return []` |
+| **Non-volatile fields never reach the client** — `.volatile()` decides what the page may edit, not only how a write lands | `volatileForm` strips everything else; the describe payload carries the marked subset alone |
+| A volatile field resolves to a **live reference**, not a value: `{ get, [Symbol(cosmokit.volatile.write)] }` | measured: `Config['~standard'].validate({}).value.maxReviewRounds` is that object, built by **schemastery itself** at validation time |
+| A volatile-only change is committed **in place**, so the running plugin sees it with no remount | `cordis-plugin-loader/lib/index.js`: `equalExceptVolatile` → `_commitVolatile` → `cosmokit.updateVolatile(ref, source)` |
+| A plugin that reads a **non-volatile** field once at activation cannot honour a live edit: the Loader mutates the config object, the plugin's own copy is elsewhere | the same mechanism from the other side — why `pollIntervalMs` and `defaultRepo` are deliberately NOT volatile |
+| Reading a service that was **not injected THROWS**, even when the service exists | measured live: a `try`/`catch` guard on `ctx.configForms` returned `undefined` and the page never registered, while `POST api/settings/describe` listed `"ns":"orchestrator"`. The fix is a child scope: `ctx.inject(['configForms'], (scoped) => …)` |
+| The client form is `ctx.configForms.get(entryId)` → `{ getSnapshot, subscribe, set, unset, mutate }`; a page whose namespace is owned elsewhere registers through `whileServed(namespaces, register)` | `dsh-client-ui-settings/lib/client.js` (`ConfigForms`, `ConfigFormController`) |
+| A write is fenced by revision, and one atomic `mutate` carries a whole draft | `mutate(ns, ops, expectedRevision)`; a mismatch or a schema refusal answers `result.ok: false` |
+| A **refused** write preserves the drafts and refreshes the values | the client controller's `recover()` → `mirror.load()`; the page keeps its staged edits and shows the refusal |
+| A settings write **persists into the profile's patch**, not a private file | `~/.dsh/profiles/<profile>/cordis.patch.yml` gained `- id: orchestrator / name: … / config: { maxConcurrentWorkers: 4 }` when the page saved, and lost the key when the field was reset |
+
+Consequences for this plugin:
+
+1. The row's `Config` is `src/config/schema.ts`. It is the **only** thing that publishes the
+   plugin's settings to the UI, and its defaults are read from `PLUGIN_DEFAULTS` so the two
+   cannot drift.
+2. `apply()` must read its config **through the live references** for a volatile marker to mean
+   anything. `livePluginConfig` normalizes once and then defines getters over those references,
+   so every sweep, spawn and tool call — each reading `config.<field>` at use time — follows an
+   edit with no wiring of its own.
+3. A field earns the marker only if the running plugin re-reads it. Offering `pollIntervalMs` or
+   `defaultRepo` would be a control that does nothing; the page says so in words rather than
+   showing a subset in silence.
+4. A number typed into a text field arrives as a **string**, and the host's schema refuses `"4"`
+   for a `number` field (`invalid config: $.maxConcurrentWorkers expected number but got 4`).
+   Coerce on staging and validate before saving; that refusal cost a live round trip.
+
+---
+
 ## A3. Host services
 
 ### A3.1 Creating a worker Session — the exact recipe

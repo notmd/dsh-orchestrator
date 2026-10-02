@@ -117,7 +117,12 @@ test('the dialog is a labelled modal and every input has an accessible name', ()
   assert.match(client, /'aria-modal': 'true'/)
   assert.match(client, /'aria-labelledby': 'dsho-settings-title'/)
   // The three inline editors each pass the row's own label as the input's aria-label.
-  const inlineEdits = [...client.matchAll(/h\(InlineEdit, \{[\s\S]*?\}\)/g)]
+  // Scoped to the DIALOG's own body: the plugin's settings page on the Plugins page has one
+  // editor per config field, so a whole-file count is a number that moves whenever a row is
+  // added anywhere -- an assertion that cannot be about the dialog any more. The page's own
+  // editors are guarded in `plugin-config.test.ts`.
+  const dialog = functionBody(client, 'function SettingsDialog(')
+  const inlineEdits = [...dialog.matchAll(/h\(InlineEdit, \{[\s\S]*?\n\s*\}\)/g)]
   assert.equal(inlineEdits.length, 6, 'branch, prefix, assignee, worker permissions, reviewer and reviewer permissions')
   for (const [block] of inlineEdits) assert.match(block, /label: translate\('orchestrator\.settings\./)
 })

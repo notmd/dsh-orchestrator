@@ -193,6 +193,118 @@ const CONNECT_PATH = '/dsho/api/connect'
 const TASKS_PATH = '/dsho/api/tasks'
 
 /**
+ * The Plugins page's keyed slot for a bundle's own configuration.
+ *
+ * The sidebar's **Plugins** page (`@deepseek-ai/dsh-client-ui-plugin-manager`) declares
+ * `plugins.item` (a list of official plugins), `plugins.bundle.config` and
+ * `plugins.row.config` — the last two keyed, the first by BUNDLE package name and the second
+ * by `<package>#<row id>`. A keyed slot renders nothing unless an entry registers under that
+ * exact key (`configured: ledger.bundles.has(openPkg.name)`), which is why this plugin's page
+ * showed only its description and its component list until this registration existed.
+ *
+ * `plugins.bundle.config` is the right one of the three: the page in question is the
+ * *bundle's* page — the plugin's own — and its config section sits between the description
+ * and the rows. `plugins.item` is for the deployment's official plugins, and
+ * `plugins.row.config` is for one row of a bundle, which is a different object than this
+ * plugin's own defaults.
+ *
+ * The BUNDLE is addressed by package name and the CONFIG by entry id, and the two are
+ * different strings on purpose (the page dispatches by the first, the Settings service by the
+ * second). Getting either wrong is invisible — a page that never appears, or a form bound to
+ * a namespace nobody serves — so both are spelled once here and pinned by
+ * `test/client/plugin-config.test.ts`.
+ */
+const BUNDLE_CONFIG_SLOT = 'plugins.bundle.config'
+
+/** The bundle this plugin is: the key the Plugins page dispatches by. Matches `package.json`. */
+const PLUGIN_PACKAGE_ID = '@local/dsh-orchestrator'
+
+/** The profile entry id, and therefore the settings namespace. Mirrors the host's `CONFIG_ENTRY_ID`. */
+const CONFIG_ENTRY_ID = 'orchestrator'
+
+/** How one config field is edited. The host's schema decides the same thing from its type. */
+type ConfigFieldKind = 'boolean' | 'number' | 'text'
+
+/** One row of the plugin's settings page. */
+interface ConfigFieldView {
+  /** The name in the row's Config — the path the write is addressed by. */
+  field: string
+  kind: ConfigFieldKind
+  labelKey: string
+  hintKey: string
+}
+
+/** One section: a caption over its rows. */
+interface ConfigSectionView {
+  titleKey: string
+  fields: readonly ConfigFieldView[]
+}
+
+/**
+ * The page's rows, in the order it renders them.
+ *
+ * This table is the client's mirror of the host's *volatile* fields — the ones that can be
+ * changed while the plugin runs — because this file is compiled with `module: none` and
+ * cannot import the host's schema. `test/client/plugin-config.test.ts` reads
+ * `src/config/schema.ts`'s markers and asserts the two agree field for field, so a field that
+ * gains or loses a marker on the host half fails here rather than quietly vanishing from (or
+ * appearing in) the page.
+ *
+ * The fields deliberately absent are the ones the host's schema leaves ordinary, and the page
+ * says why at the bottom rather than pretending they do not exist: `defaultRepo`,
+ * `pollIntervalMs` and `reviewSweepIntervalMs` are read once when the plugin loads, and
+ * `planGate` plus the `webhook` block are not wired to any behaviour yet.
+ */
+const CONFIG_SECTIONS: readonly ConfigSectionView[] = [
+  {
+    titleKey: 'orchestrator.plugin.section.workers',
+    fields: [
+      { field: 'maxConcurrentWorkers', kind: 'number', labelKey: 'orchestrator.plugin.maxConcurrentWorkers', hintKey: 'orchestrator.plugin.maxConcurrentWorkersHint' },
+      { field: 'workerAgentPreset', kind: 'text', labelKey: 'orchestrator.plugin.workerAgentPreset', hintKey: 'orchestrator.plugin.workerAgentPresetHint' },
+      { field: 'workerPermissionPreset', kind: 'text', labelKey: 'orchestrator.plugin.workerPermissionPreset', hintKey: 'orchestrator.plugin.workerPermissionPresetHint' },
+    ],
+  },
+  {
+    titleKey: 'orchestrator.plugin.section.review',
+    fields: [
+      { field: 'reviewerAgentPreset', kind: 'text', labelKey: 'orchestrator.plugin.reviewerAgentPreset', hintKey: 'orchestrator.plugin.reviewerAgentPresetHint' },
+      { field: 'reviewerPermissionPreset', kind: 'text', labelKey: 'orchestrator.plugin.reviewerPermissionPreset', hintKey: 'orchestrator.plugin.reviewerPermissionPresetHint' },
+      { field: 'autoReview', kind: 'boolean', labelKey: 'orchestrator.plugin.autoReview', hintKey: 'orchestrator.plugin.autoReviewHint' },
+      { field: 'autoInjectReview', kind: 'boolean', labelKey: 'orchestrator.plugin.autoInjectReview', hintKey: 'orchestrator.plugin.autoInjectReviewHint' },
+      { field: 'autoInjectCI', kind: 'boolean', labelKey: 'orchestrator.plugin.autoInjectCI', hintKey: 'orchestrator.plugin.autoInjectCIHint' },
+      { field: 'requireHumanApprovalBeforeReady', kind: 'boolean', labelKey: 'orchestrator.plugin.requireHumanApprovalBeforeReady', hintKey: 'orchestrator.plugin.requireHumanApprovalBeforeReadyHint' },
+    ],
+  },
+  {
+    titleKey: 'orchestrator.plugin.section.loop',
+    fields: [
+      { field: 'maxReviewRounds', kind: 'number', labelKey: 'orchestrator.plugin.maxReviewRounds', hintKey: 'orchestrator.plugin.maxReviewRoundsHint' },
+      { field: 'reviewMaxNudge', kind: 'number', labelKey: 'orchestrator.plugin.reviewMaxNudge', hintKey: 'orchestrator.plugin.reviewMaxNudgeHint' },
+      { field: 'autoReviewFailedRetryLimit', kind: 'number', labelKey: 'orchestrator.plugin.autoReviewFailedRetryLimit', hintKey: 'orchestrator.plugin.autoReviewFailedRetryLimitHint' },
+      { field: 'reviewIdleThresholdMs', kind: 'number', labelKey: 'orchestrator.plugin.reviewIdleThresholdMs', hintKey: 'orchestrator.plugin.reviewIdleThresholdMsHint' },
+      { field: 'noSignalGraceMs', kind: 'number', labelKey: 'orchestrator.plugin.noSignalGraceMs', hintKey: 'orchestrator.plugin.noSignalGraceMsHint' },
+    ],
+  },
+  {
+    titleKey: 'orchestrator.plugin.section.pulls',
+    fields: [
+      { field: 'draftPrs', kind: 'boolean', labelKey: 'orchestrator.plugin.draftPrs', hintKey: 'orchestrator.plugin.draftPrsHint' },
+      { field: 'prBodyTemplate', kind: 'text', labelKey: 'orchestrator.plugin.prBodyTemplate', hintKey: 'orchestrator.plugin.prBodyTemplateHint' },
+      { field: 'hideWorktreeWorkspaces', kind: 'boolean', labelKey: 'orchestrator.plugin.hideWorktreeWorkspaces', hintKey: 'orchestrator.plugin.hideWorktreeWorkspacesHint' },
+    ],
+  },
+  {
+    titleKey: 'orchestrator.plugin.section.reports',
+    fields: [
+      { field: 'maxReportCharacters', kind: 'number', labelKey: 'orchestrator.plugin.maxReportCharacters', hintKey: 'orchestrator.plugin.maxReportCharactersHint' },
+      { field: 'reportBatchFallbackMs', kind: 'number', labelKey: 'orchestrator.plugin.reportBatchFallbackMs', hintKey: 'orchestrator.plugin.reportBatchFallbackMsHint' },
+      { field: 'reportSettlementWindowMs', kind: 'number', labelKey: 'orchestrator.plugin.reportSettlementWindowMs', hintKey: 'orchestrator.plugin.reportSettlementWindowMsHint' },
+      { field: 'reportInterruptWindowMs', kind: 'number', labelKey: 'orchestrator.plugin.reportInterruptWindowMs', hintKey: 'orchestrator.plugin.reportInterruptWindowMsHint' },
+    ],
+  },
+]
+
+/**
  * The English fallback, keyed by the locale namespace.
  *
  * Mirrors `locale/en.json`, and a test asserts the two agree -- so a string cannot be
@@ -304,6 +416,77 @@ const FALLBACK: Record<string, string> = {
   'orchestrator.task.start': 'Start task',
   'orchestrator.task.starting': 'Starting…',
   'orchestrator.task.failed': 'Could not create the task: {message}',
+  // The plugin's own settings page, on the sidebar's Plugins page. Its copy is here rather
+  // than only in `en.json` for the same reason every other string is: the page must render in
+  // a host whose locale service is missing, and `test/locale.test.ts` keeps the two in step.
+  'orchestrator.plugin.description': 'The defaults every project inherits. An edit applies to the running plugin at once.',
+  'orchestrator.plugin.section.workers': 'Workers',
+  'orchestrator.plugin.section.review': 'Review',
+  'orchestrator.plugin.section.loop': 'Review loop',
+  'orchestrator.plugin.section.pulls': 'Pull requests',
+  'orchestrator.plugin.section.reports': 'Worker reports',
+  'orchestrator.plugin.maxConcurrentWorkers': 'Concurrent workers',
+  'orchestrator.plugin.maxConcurrentWorkersHint': 'How many workers may run at once. Queued work starts as a slot frees.',
+  'orchestrator.plugin.workerAgentPreset': 'Worker agent preset',
+  'orchestrator.plugin.workerAgentPresetHint': 'The preset a worker session spawns as, unless a project overrides it.',
+  'orchestrator.plugin.workerPermissionPreset': 'Worker permissions',
+  'orchestrator.plugin.workerPermissionPresetHint':
+    'The sandbox and approval boundary a worker runs under. A worker commits and pushes, and a linked worktree keeps its git data in the parent repository, so a worktree-scoped sandbox cannot finish a stage.',
+  'orchestrator.plugin.reviewerAgentPreset': 'Reviewer agent preset',
+  'orchestrator.plugin.reviewerAgentPresetHint': 'The preset a review pass spawns as, unless a project overrides it.',
+  'orchestrator.plugin.reviewerPermissionPreset': 'Reviewer permissions',
+  'orchestrator.plugin.reviewerPermissionPresetHint':
+    'The sandbox boundary a review pass runs under. It has to post its review, but it must mutate nothing — read-only is necessary and not sufficient.',
+  'orchestrator.plugin.autoReview': 'Auto review pull requests',
+  'orchestrator.plugin.autoReviewHint': 'Our read-only reviewer runs on every pull-request head.',
+  'orchestrator.plugin.autoInjectReview': 'Route review findings to the worker',
+  'orchestrator.plugin.autoInjectReviewHint': 'A reviewer that asks for changes sends them to the worker to iterate on.',
+  'orchestrator.plugin.autoInjectCI': 'Route failing checks to the worker',
+  'orchestrator.plugin.autoInjectCIHint': 'A failing check reaches the worker as feedback instead of waiting for a person.',
+  'orchestrator.plugin.requireHumanApprovalBeforeReady': 'Require a human approval before Ready',
+  'orchestrator.plugin.requireHumanApprovalBeforeReadyHint': 'A card reaches Ready only after a person approves its pull request.',
+  'orchestrator.plugin.maxReviewRounds': 'Automatic review rounds',
+  'orchestrator.plugin.maxReviewRoundsHint': 'How many times the worker may be sent back for changes before automation stops.',
+  'orchestrator.plugin.reviewMaxNudge': 'Feedback rounds per commit',
+  'orchestrator.plugin.reviewMaxNudgeHint': 'How often a person may send review feedback to one worker per commit.',
+  'orchestrator.plugin.autoReviewFailedRetryLimit': 'Failed review attempts',
+  'orchestrator.plugin.autoReviewFailedRetryLimitHint':
+    'How many review passes that fail outright are retried before the card says automation stopped.',
+  'orchestrator.plugin.reviewIdleThresholdMs': 'Review idle threshold (ms)',
+  'orchestrator.plugin.reviewIdleThresholdMsHint': 'How long a worker inside a review pass may look idle before the pass is treated as stopped.',
+  'orchestrator.plugin.noSignalGraceMs': 'No-signal grace (ms)',
+  'orchestrator.plugin.noSignalGraceMsHint': 'How long a card may show no signal before it is treated as stalled rather than busy.',
+  'orchestrator.plugin.draftPrs': 'Open pull requests as drafts',
+  'orchestrator.plugin.draftPrsHint': 'A draft cannot be merged until someone marks it ready.',
+  'orchestrator.plugin.prBodyTemplate': 'Pull-request body template',
+  'orchestrator.plugin.prBodyTemplateHint': 'The body template a worker opens its pull request with.',
+  'orchestrator.plugin.hideWorktreeWorkspaces': 'Hide worker workspaces',
+  'orchestrator.plugin.hideWorktreeWorkspacesHint': 'Keeps the worktrees this plugin creates out of the workspace list.',
+  'orchestrator.plugin.maxReportCharacters': 'Report length cap (characters)',
+  'orchestrator.plugin.maxReportCharactersHint': 'A longer worker report is truncated before it reaches the orchestrator.',
+  'orchestrator.plugin.reportBatchFallbackMs': 'Report batch window (ms)',
+  'orchestrator.plugin.reportBatchFallbackMsHint': 'How long reports are collected before they are delivered together.',
+  'orchestrator.plugin.reportSettlementWindowMs': 'Report settlement window (ms)',
+  'orchestrator.plugin.reportSettlementWindowMsHint': 'How long a report waits for its worker to settle before it is delivered.',
+  'orchestrator.plugin.reportInterruptWindowMs': 'Report interrupt window (ms)',
+  'orchestrator.plugin.reportInterruptWindowMsHint': 'How long a report may wait for attention before it interrupts a running turn.',
+  'orchestrator.plugin.on': 'on',
+  'orchestrator.plugin.off': 'off',
+  'orchestrator.plugin.overridden': 'Overridden',
+  'orchestrator.plugin.reset': 'Reset to default',
+  'orchestrator.plugin.save': 'Save',
+  'orchestrator.plugin.saving': 'Saving…',
+  'orchestrator.plugin.saved': 'Saved',
+  'orchestrator.plugin.discard': 'Discard',
+  'orchestrator.plugin.saveFailed': 'The deployment did not accept these values. Check them against the current values and save again.',
+  'orchestrator.plugin.readOnly': 'This deployment stores settings read-only. These are the values in effect.',
+  'orchestrator.plugin.unavailable': 'This plugin is not loaded, so its settings cannot be shown right now.',
+  'orchestrator.plugin.loading': 'Reading the plugin settings…',
+  'orchestrator.plugin.notLive':
+    'Not listed here: the default repository, the poll interval, the review sweep interval, the plan gate and the webhook. The plugin reads those once when it loads, or does not use them yet, so they are edited in the profile configuration.',
+  'orchestrator.plugin.invalidNumber': 'Enter a whole number of at least 1.',
+  'orchestrator.plugin.invalidText': 'Enter a value.',
+  'orchestrator.plugin.invalidBoolean': 'This is a switch.',
 }
 
 type Translate = (key: string, params?: Record<string, string | number>) => string
@@ -342,6 +525,88 @@ function readLocale(ctx: unknown): unknown {
     // Not injected. The panel loads in English rather than taking the shell down.
     return undefined
   }
+}
+
+/**
+ * The settings service's shared configuration form, as this page uses it.
+ *
+ * Declared structurally for the same reason {@link CardView} is: this file is a script with
+ * no imports, so the service's real types are out of reach. The methods are the ones
+ * `@deepseek-ai/dsh-client-ui-settings`'s `ConfigFormController` publishes —
+ * `getSnapshot`/`subscribe` to read, `set`/`unset`/`mutate` to write — and
+ * `ConfigForms.get(entryId)`/`whileServed(namespaces, register)` on the service itself.
+ *
+ * The write methods take the revision read before editing and answer whether the Host
+ * accepted, which is the whole reason a staged form exists here: one atomic `mutate` of every
+ * staged field, fenced at the revision the draft started from, so two editors of the same row
+ * cannot silently overwrite each other.
+ */
+interface ConfigFormSnapshot {
+  /** `loading` until the first read lands, `ready` once the namespace is served, `unavailable` if it is not. */
+  status?: string
+  /** The effective values: the user's override over the composed default. */
+  value?: Record<string, unknown>
+  /** The inherited values beneath the override — the schema defaults and any lower layer. */
+  base?: Record<string, unknown>
+  /** The profile's own overrides, which is what the "Overridden" badge reports. */
+  user?: Record<string, unknown>
+  /** The revision the next write is fenced at. */
+  revision?: number
+  /** False on a deployment that stores settings read-only. */
+  writable?: boolean
+  mode?: string
+}
+
+interface ConfigFormView {
+  getSnapshot(): ConfigFormSnapshot
+  subscribe(listener: () => void): () => void
+  set(field: string, value: unknown): Promise<boolean>
+  unset(field: string): Promise<boolean>
+  mutate(operations: ReadonlyArray<Record<string, unknown>>, expectedRevision?: number): Promise<boolean>
+}
+
+interface ConfigFormsView {
+  get(entryId: string): ConfigFormView
+  whileServed(namespaces: readonly string[], register: (served: ReadonlySet<string>) => () => void): () => void
+}
+
+/**
+ * The seat a slot owner registers into, plus the effect scope that owns the registration.
+ *
+ * Structural, like everything else here, and shared by the outer context and the injected child
+ * so a call site can be handed either.
+ */
+interface SlotSeat {
+  inject(owner: string, callback: () => unknown): () => void
+  register(options: Record<string, unknown>, component: unknown): () => void
+}
+
+/** The child scope `ctx.inject(['configForms'], …)` hands its plugin. */
+interface ClientScope {
+  slots: SlotSeat
+  effect(callback: () => (() => void) | void, label?: string): () => void
+}
+
+/**
+ * The settings service, or undefined when it cannot serve a form.
+ *
+ * **A guarded `ctx.configForms` read is not enough, and that cost a live debugging round.** A
+ * Cordis context THROWS when a service is read without being injected — the same trap the
+ * `locale` read above documents — so a try/catch on the PARENT context swallowed the throw and
+ * the page never existed on a host where the service is perfectly present. The settings
+ * document listed our namespace the whole time (`api/settings/describe` carried
+ * `"ns":"orchestrator"`); nothing on the client ever asked for it.
+ *
+ * The fix is the documented one for an optional peer: `ctx.inject(['configForms'], …)`, which
+ * starts a CHILD scope where the service is injectable. The parent half is untouched, so a
+ * deployment without the Web settings UI keeps every other surface this plugin offers — and
+ * this function is then a SHAPE check rather than an error handler: a service that exists but
+ * cannot serve a form is a different, quieter failure.
+ */
+function readConfigForms(ctx: unknown): ConfigFormsView | undefined {
+  const service = (ctx as { configForms?: { get?: unknown; whileServed?: unknown } }).configForms
+  if (typeof service?.get !== 'function' || typeof service?.whileServed !== 'function') return undefined
+  return service as ConfigFormsView
 }
 
 /**
@@ -434,7 +699,8 @@ loader.load({
     // React comes from the browser module table — never a second copy.
     const React = require('react') as {
       createElement: (type: unknown, props?: unknown, ...children: unknown[]) => unknown
-      useState: <T>(initial: T) => [T, (next: T | ((previous: T) => T)) => void]
+      /** A lazy initializer is accepted too, because React accepts one at runtime. */
+      useState: <T>(initial: T | (() => T)) => [T, (next: T | ((previous: T) => T)) => void]
       useEffect: (effect: () => void | (() => void), deps?: unknown[]) => void
       useRef: <T>(initial: T) => { current: T }
     }
@@ -861,6 +1127,44 @@ loader.load({
 @media (prefers-reduced-motion: reduce) {
   .dsho-switch__thumb { transition: none; }
 }
+
+/* ---------------------------------------------------------------------------
+   The plugin's OWN settings page, on the sidebar's Plugins page.
+
+   A different host surface than the dialogs above: the page draws the title, the icon and
+   the crumb, and drops the entry's form into its content column, so there is no scrim, no
+   panel surface and no close button here. It reuses the same row and section rules, which
+   is the point -- a plugin whose own page looked like a different product than its dialogs
+   would read as two plugins.
+
+   It carries its own stylesheet, because the panel half mounts that STYLE ELEMENT inside
+   its own tree and none of the panel is on screen while a person is on the Plugins page.
+   (No backticks in this block, and no angle-bracket tag name either: this is a template
+   literal, so a backtick in prose closes the stylesheet and the next words become code. The
+   file's own history says that mistake has cost three builds. It just cost one more.) */
+.dsho-config { display: flex; flex-direction: column; }
+.dsho-config__intro { margin: 0 0 6px; font-size: 0.8125rem; line-height: 20px;
+  color: var(--dsw-alias-label-tertiary, inherit); }
+.dsho-config__note { margin: 14px 0 0; font-size: 0.75rem; line-height: 18px;
+  color: var(--dsw-alias-label-tertiary, inherit); }
+.dsho-config__actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px;
+  margin-top: 18px; }
+/* The status sits at the LEFT of the action row, so Save does not move when a receipt
+   appears beside it -- a button that jumps under the pointer is how a second click
+   discards a draft. */
+.dsho-config__status { margin-right: auto; font-size: 0.75rem; line-height: 18px;
+  color: var(--dsw-alias-label-tertiary, inherit); }
+.dsho-config__status[data-status='error'] { color: var(--dsw-alias-state-error-primary, #e5484d); }
+.dsho-config__status[data-status='ok'] { color: var(--dsw-alias-state-success-primary, #30a46c); }
+/* The "Overridden" pill: the host's own tag geometry in its tertiary tone, because this is
+   metadata about where a value came from rather than a state anything is in. */
+.dsho-tag { flex: none; padding: 1px 7px; border-radius: 999px; font-size: 0.6875rem; line-height: 16px;
+  color: var(--dsw-alias-label-tertiary, inherit);
+  border: 1px solid var(--dsw-alias-border-l2, rgba(127,127,127,0.24)); }
+/* The label column takes the slack on the panel's rows; on a full-width settings page that
+   would push every control to the far right, so the control column is capped instead. */
+.dsho-config .dsho-row__label { padding-right: 24px; }
+.dsho-config .dsho-row__control { max-width: 60%; }
 `
 
     /** What the panel is currently showing. */
@@ -1506,6 +1810,344 @@ loader.load({
         h('h3', { className: 'dsho-section__title' }, props.title),
         ...rows,
       )
+    }
+
+    /** Each field's editor, derived once from the table the page renders from. */
+    const CONFIG_FIELD_KINDS: Record<string, ConfigFieldKind> = {}
+    for (const section of CONFIG_SECTIONS) {
+      for (const field of section.fields) CONFIG_FIELD_KINDS[field.field] = field.kind
+    }
+
+    /**
+     * A staged reset. A symbol, not `undefined`, so "put this field back" is distinguishable
+     * from "this field has no staged edit" -- the difference between an `unset` write and no
+     * write at all.
+     */
+    const CONFIG_RESET = Symbol('dsho.config.reset')
+
+    /**
+     * The plugin's settings page, rendered into the Plugins page's `plugins.bundle.config` slot.
+     *
+     * ## Staged, not immediate
+     *
+     * The plugin's own dialogs write one edit per interaction. This page does not, and the
+     * reason is the host's shape rather than taste: the Plugins page renders `view: 'page'`
+     * for "forms with their own save controls", the settings service exposes `mutate` for one
+     * atomic list of operations, and a revision that fences those operations against another
+     * editor. So the page holds a draft, validates it against the same rules the host's
+     * schema encodes, and writes everything at once on **Save**. A draft is dropped when the
+     * page is left, which is what the official pages promise too.
+     *
+     * ## The three states a row can be in
+     *
+     *   - **effective** — the value the plugin is running on (`snapshot.value`).
+     *   - **overridden** — the profile's own patch sets this field (`snapshot.user`), which is
+     *     what the badge reports and the Reset control clears, in both senses: clearing the
+     *     draft, or staging an `unset` that restores the inherited value.
+     *   - **blocked** — a number that is not a whole number, or an empty preset name. Those are
+     *     the two rules this page can check without the host, and they disable Save rather than
+     *     sending a write the host will refuse.
+     *
+     * Every value the page SHOWS comes from the host: the draft is the only local state, and
+     * after a save the snapshot is re-read rather than assumed, so a control can never display
+     * a value the host did not accept.
+     */
+    function PluginConfigPage(props: { form: ConfigFormView }) {
+      const form = props.form
+      const [snapshot, setSnapshot] = React.useState<ConfigFormSnapshot>(() => form.getSnapshot())
+      const [staged, setStaged] = React.useState<Record<string, unknown> | null>(null)
+      const [invalid, setInvalid] = React.useState<Record<string, string>>({})
+      const [status, setStatus] = React.useState<{ kind: 'idle' | 'saving' | 'saved' | 'failed'; message?: string }>({
+        kind: 'idle',
+      })
+      /**
+       * The revision the draft started from.
+       *
+       * Captured ONCE, at the first staged edit, and handed to the save. The host refuses a
+       * write whose expected revision has moved, which is the only thing standing between two
+       * editors of one row and a silent overwrite.
+       */
+      const fence = React.useRef<number | undefined>(undefined)
+
+      React.useEffect(() => form.subscribe(() => setSnapshot(form.getSnapshot())), [])
+
+      // "Saved" is a receipt, not a state: it clears itself so the action row goes quiet again.
+      // A FAILURE does not clear -- it has to stay until the person does something about it.
+      const savedKind = status.kind
+      React.useEffect(() => {
+        if (savedKind !== 'saved') return
+        const timer = setTimeout(() => setStatus({ kind: 'idle' }), 2500)
+        return () => clearTimeout(timer)
+      }, [savedKind])
+
+      /** The values as the host resolves them, never as a draft supposes. */
+      const hostValues = snapshot.value ?? {}
+      const overrides = snapshot.user ?? {}
+      const writable = snapshot.writable === true
+
+      const stagedAsReset = (field: string): boolean => staged !== null && Object.hasOwn(staged, field) && staged[field] === CONFIG_RESET
+      const isStaged = (field: string): boolean => staged !== null && Object.hasOwn(staged, field)
+
+      /** What the row shows: the draft where there is one, the host's value otherwise. */
+      const valueOf = (field: string): unknown => {
+        if (stagedAsReset(field)) return (snapshot.base ?? {})[field]
+        if (isStaged(field)) return staged![field]
+        return hostValues[field]
+      }
+
+      const displayOf = (field: string): string => {
+        const value = valueOf(field)
+        if (value === undefined || value === null) return ''
+        if (typeof value === 'boolean') return value ? translate('orchestrator.plugin.on') : translate('orchestrator.plugin.off')
+        return String(value)
+      }
+
+      /**
+       * Stage one edit, and refuse to keep a no-op.
+       *
+       * A staged value that already matches what the host reports is dropped: without this,
+       * opening a row, typing the same text and leaving it would arm Save with a write that
+       * changes nothing, which is how a "did I already save this?" doubt starts.
+       */
+      const stage = (field: string, kind: ConfigFieldKind, raw: unknown): void => {
+        const problem = problemWith(kind, raw)
+        // A VALID draft is coerced to the field's type before it is stored, and an invalid one is
+        // kept exactly as typed so it can be corrected.
+        //
+        // This is not cosmetic. Measured in a live host: an editor hands back a STRING, the write
+        // went out as `{"op":"set","path":["maxConcurrentWorkers"],"value":"4"}`, and the host
+        // refused it — `invalid config: $.maxConcurrentWorkers expected number but got 4`. The
+        // page's validation had already accepted it, because `Number("4")` is a whole number, so
+        // nothing but this coercion stands between a text field and a schema that demands a
+        // number. The failure path held up (drafts kept, refusal shown), and it still cost the
+        // person a round trip for a value that was never wrong.
+        const next = problem === undefined ? coerce(kind, raw) : raw
+        setInvalid((previous) => {
+          const copy = { ...previous }
+          if (problem === undefined) delete copy[field]
+          else copy[field] = problem
+          return copy
+        })
+        setStaged((previous) => {
+          const draft: Record<string, unknown> = { ...(previous ?? {}) }
+          if (problem === undefined && sameAsHost(kind, next, hostValues[field])) delete draft[field]
+          else draft[field] = next
+          return Object.keys(draft).length === 0 ? null : draft
+        })
+        if (fence.current === undefined) fence.current = snapshot.revision
+      }
+
+      /** Stage "back to the inherited value": an `unset` on save, and the base value meanwhile. */
+      const stageReset = (field: string): void => {
+        setInvalid((previous) => {
+          const copy = { ...previous }
+          delete copy[field]
+          return copy
+        })
+        setStaged((previous) => ({ ...(previous ?? {}), [field]: CONFIG_RESET }))
+        if (fence.current === undefined) fence.current = snapshot.revision
+      }
+
+      const discard = (): void => {
+        setStaged(null)
+        setInvalid({})
+        fence.current = undefined
+        setStatus({ kind: 'idle' })
+      }
+
+      const blocked = Object.keys(invalid).length > 0
+      const saving = status.kind === 'saving'
+      const hasDraft = staged !== null
+
+      /**
+       * One write for the whole draft.
+       *
+       * A refusal — a conflict, or a value the host's own validation rejects — leaves the
+       * drafts exactly where they are, so the person can compare them against the values the
+       * refresh just brought in. Nothing here guesses which field was at fault: the settings
+       * service answers the whole mutation with one boolean, and blaming a row would be an
+       * invention.
+       */
+      const save = (): void => {
+        if (staged === null || blocked || saving) return
+        const operations = Object.entries(staged).map(([field, value]) =>
+          value === CONFIG_RESET ? { op: 'unset', path: [field] } : { op: 'set', path: [field], value },
+        )
+        setStatus({ kind: 'saving' })
+        void Promise.resolve(form.mutate(operations, fence.current))
+          .then((accepted) => {
+            if (accepted) {
+              setStaged(null)
+              fence.current = undefined
+              setStatus({ kind: 'saved' })
+              return
+            }
+            setStatus({ kind: 'failed', message: translate('orchestrator.plugin.saveFailed') })
+          })
+          .catch((error: unknown) => {
+            setStatus({
+              kind: 'failed',
+              message: translate('orchestrator.plugin.saveFailed') + ` (${error instanceof Error ? error.message : String(error)})`,
+            })
+          })
+      }
+
+      /**
+       * One row.
+       *
+       * The badge and the Reset control are siblings of the editor rather than part of it,
+       * because they describe the field while the editor changes it: "this value came from the
+       * profile" is true whether or not a draft exists.
+       */
+      const rowFor = (view: ConfigFieldView): unknown => {
+        const field = view.field
+        const label = translate(view.labelKey)
+        const reset = stagedAsReset(field)
+        const overridden = !reset && Object.hasOwn(overrides, field)
+        const control =
+          view.kind === 'boolean'
+            ? h(Switch, {
+                id: `dsho-config-${field}`,
+                label,
+                checked: valueOf(field) === true,
+                disabled: !writable,
+                onChange: (next: boolean) => stage(field, 'boolean', next),
+              })
+            : h(InlineEdit, {
+                id: `dsho-config-${field}`,
+                label,
+                value: displayOf(field),
+                display: displayOf(field),
+                placeholder: String((snapshot.base ?? {})[field] ?? ''),
+                disabled: !writable,
+                onCommit: (next: string) => stage(field, view.kind, next),
+              })
+
+        return h(
+          SettingsRow,
+          { key: field, label, hint: translate(view.hintKey), error: invalid[field] },
+          ...(overridden
+            ? [h('span', { key: 'tag', className: 'dsho-tag' }, translate('orchestrator.plugin.overridden'))]
+            : []),
+          h('span', { key: 'control' }, control),
+          ...(overridden
+            ? [
+                h(
+                  'button',
+                  {
+                    key: 'reset',
+                    type: 'button',
+                    className: 'dsho-inline__reset',
+                    disabled: !writable,
+                    onClick: () => stageReset(field),
+                  },
+                  translate('orchestrator.plugin.reset'),
+                ),
+              ]
+            : []),
+        )
+      }
+
+      const statusNode =
+        status.kind === 'idle'
+          ? null
+          : h(
+              'span',
+              {
+                className: 'dsho-config__status',
+                'data-status': status.kind === 'failed' ? 'error' : status.kind === 'saved' ? 'ok' : 'info',
+                role: 'status',
+              },
+              status.kind === 'saving'
+                ? translate('orchestrator.plugin.saving')
+                : status.kind === 'saved'
+                  ? translate('orchestrator.plugin.saved')
+                  : (status.message ?? ''),
+            )
+
+      const intro = h('p', { className: 'dsho-config__intro' }, translate('orchestrator.plugin.description'))
+
+      /** Shown instead of the rows when there is nothing to edit, or nothing to edit with. */
+      const notes = (): unknown[] => {
+        if (snapshot.status === 'unavailable') return [h('p', { key: 'state', className: 'dsho-note' }, translate('orchestrator.plugin.unavailable'))]
+        if (snapshot.value === undefined) return [h('p', { key: 'state', className: 'dsho-note' }, translate('orchestrator.plugin.loading'))]
+        return writable ? [] : [h('p', { key: 'state', className: 'dsho-note' }, translate('orchestrator.plugin.readOnly'))]
+      }
+
+      const editable = snapshot.status !== 'unavailable' && snapshot.value !== undefined
+
+      return h(
+        'div',
+        { className: 'dsho-config', 'data-plugin-config-form': true },
+        h('style', null, CSS),
+        intro,
+        ...notes(),
+        ...CONFIG_SECTIONS.map((section) =>
+          h(SettingsSection, { key: section.titleKey, title: translate(section.titleKey) }, section.fields.map((field) => rowFor(field))),
+        ),
+        // The omissions, stated. The plugin's schema keeps a few fields off this page -- the ones
+        // it reads once at load, and the ones nothing branches on yet -- and a settings page that
+        // silently showed a subset would read as the plugin forgetting its own settings.
+        h('p', { className: 'dsho-config__note' }, translate('orchestrator.plugin.notLive')),
+        h(
+          'div',
+          { className: 'dsho-config__actions' },
+          statusNode,
+          hasDraft
+            ? h(
+                'button',
+                { type: 'button', className: 'dsho-btn dsho-btn--quiet', disabled: saving, onClick: discard },
+                translate('orchestrator.plugin.discard'),
+              )
+            : null,
+          h(
+            'button',
+            {
+              type: 'button',
+              className: 'dsho-btn dsho-btn--primary',
+              disabled: !editable || !writable || !hasDraft || blocked || saving,
+              onClick: save,
+            },
+            translate('orchestrator.plugin.save'),
+          ),
+        ),
+      )
+    }
+
+    /**
+     * A staged value in the type the host's schema declares for it.
+     *
+     * Only numbers need it: a text field's value is a string already, a switch hands back a
+     * boolean, and numbers arrive from an `<input>` as text.
+     */
+    function coerce(kind: ConfigFieldKind, value: unknown): unknown {
+      return kind === 'number' ? Number(String(value).trim()) : value
+    }
+
+    /**
+     * The problem with one staged value, or nothing.
+     *
+     * Two rules, and they are the host's own: `normalizePluginConfig` requires positive
+     * integers for every count and duration, and non-empty strings for every preset name. A
+     * page that let a blank preset through would spend a round trip to be refused, and the
+     * refusal names the whole mutation rather than the row.
+     */
+    function problemWith(kind: ConfigFieldKind, value: unknown): string | undefined {
+      if (kind === 'text') {
+        return typeof value === 'string' && value.trim() !== '' ? undefined : translate('orchestrator.plugin.invalidText')
+      }
+      if (kind === 'number') {
+        const parsed = typeof value === 'number' ? value : Number(String(value).trim())
+        return Number.isInteger(parsed) && parsed >= 1 ? undefined : translate('orchestrator.plugin.invalidNumber')
+      }
+      return typeof value === 'boolean' ? undefined : translate('orchestrator.plugin.invalidBoolean')
+    }
+
+    /** Whether a staged value is what the host already reports, so it is not an edit at all. */
+    function sameAsHost(kind: ConfigFieldKind, next: unknown, host: unknown): boolean {
+      if (kind === 'boolean') return next === host
+      if (kind === 'number') return Number(String(next).trim()) === Number(host)
+      return String(next) === String(host)
     }
 
     /**
@@ -2930,11 +3572,16 @@ loader.load({
       apply(ctx: {
         uiWorkspace?: unknown
         locale?: unknown
-        slots: {
-          inject: (owner: string, callback: () => unknown) => () => void
-          register: (options: Record<string, unknown>, component: unknown) => () => void
-        }
+        slots: SlotSeat
         effect: (callback: () => (() => void) | void, label?: string) => () => void
+        /**
+         * Cordis's child-scope starter, and the ONLY legal way to reach `configForms`.
+         *
+         * Optional in the type because a host without the plugin registry (a bare React
+         * harness) must still be able to run this half: the settings page is skipped rather
+         * than the whole client entry failing.
+         */
+        inject?: (services: string[], callback: (scoped: unknown) => void) => unknown
       }) {
         // Assigned once, here, where the locale is known.
         //
@@ -3107,6 +3754,70 @@ loader.load({
             disposePanels()
           }
         }, 'dsho: project rows and panels')
+
+        /**
+         * The plugin's own settings page, on the sidebar's Plugins page.
+         *
+         * A CHILD scope, not a guarded read: `ctx.inject(['configForms'], …)` starts a plugin
+         * whose dependencies include the settings service, which is the only way to read it
+         * without Cordis throwing. That is deliberate — it is how this half stays whole in a
+         * deployment that has no Web settings UI at all: the child simply never starts, and the
+         * boards, the rows and the dialogs are untouched. Declaring `configForms` in THIS half's
+         * `inject` would have been shorter and would have left those surfaces inactive on such a
+         * deployment.
+         *
+         * Inside it, two more conditions, each answering a different question:
+         *
+         *   - `whileServed([CONFIG_ENTRY_ID])` — is OUR entry served? The settings document lists
+         *     the entries whose Config declares a field it can edit, so this is true exactly while
+         *     the host half is loaded with the schema from `src/config/schema.ts`. Nothing to
+         *     configure, nothing registered: a form bound to a namespace nobody serves would show
+         *     blank values and save nothing.
+         *   - `scoped.slots.inject(BUNDLE_CONFIG_SLOT)` — has the Plugins page declared the slot?
+         *     The page owns it and declares it with its own panel, so a client that loads before
+         *     (or without) the Plugins panel registers later instead.
+         *
+         * The form is obtained INSIDE the served window rather than once at activation, so no
+         * controller exists for a namespace this deployment does not serve.
+         */
+        if (typeof ctx.inject !== 'function') {
+          // No plugin registry, so no child scope and no legal way to reach the settings service.
+          console.warn(`${PLUGIN_PACKAGE_ID}: this host has no ctx.inject, so the plugin settings page is not registered`)
+        } else {
+          ctx.inject(['configForms'], (scoped: unknown) => {
+            const forms = readConfigForms(scoped)
+            if (forms === undefined) {
+              // Loud, because the alternative is a page that is simply absent. This half has no
+              // logger service (it declares none, and reading one would throw), and the console
+              // is the channel a person debugging the browser already has open.
+              console.warn(`${PLUGIN_PACKAGE_ID}: the settings service cannot serve a form, so the plugin settings page is not registered`)
+              return
+            }
+            const seats = scoped as ClientScope
+            // Registered under the child's own effect, so the page is disposed with the child --
+            // and the child with this plugin. `whileServed`'s disposer is the caller's to own,
+            // which is what this wrapper is for.
+            seats.effect(
+              () =>
+                forms.whileServed([CONFIG_ENTRY_ID], () => {
+                  const form = forms.get(CONFIG_ENTRY_ID)
+                  return seats.slots.inject(BUNDLE_CONFIG_SLOT, () =>
+                    seats.slots.register(
+                      {
+                        name: BUNDLE_CONFIG_SLOT,
+                        key: PLUGIN_PACKAGE_ID,
+                        // The page's own chrome is the host's; this entry supplies the form and
+                        // its actions, and the registration's `inject` is how they reach it.
+                        inject: () => ({ form }),
+                      },
+                      PluginConfigPage,
+                    ),
+                  )
+                }),
+              'dsho: plugin settings page',
+            )
+          })
+        }
 
         /**
          * Keep the project list current.

@@ -25,8 +25,8 @@
  * @module dsho
  */
 
-import { normalizePluginConfig } from './config/validate.ts'
 import type { PluginConfig, PluginConfigInput } from './config/validate.ts'
+import { livePluginConfig } from './config/schema.ts'
 import type { HostContext } from './host/context.ts'
 import { own } from './host/context.ts'
 import { buildOrchestratorTools } from './host/tools.ts'
@@ -53,6 +53,16 @@ import { FACT_SCHEMAS } from './host/schemas.ts'
 
 /** The plugin row name. Must match `cordis.patch.yml` and `package.json`. */
 export const name = 'dsh-orchestrator'
+
+/**
+ * The row's own config schema, re-exported because the Loader reads it off THIS module.
+ *
+ * `export { Config }` is what puts the entry in the Settings document: the service walks the
+ * active entries, reads each one's `Config`, and keeps the fields marked `.volatile()`. An
+ * entry without one is not configurable and does not appear on the Plugins page at all, which
+ * is the state this file was in until the settings page existed. See `./config/schema.ts`.
+ */
+export { Config } from './config/schema.ts'
 
 /**
  * Services this plugin requires before it may activate.
@@ -116,7 +126,13 @@ function readWorkspaceLister(ctx: HostContext): WorkspaceListerLike {
  * @throws {ConfigError} when the row's config is unusable.
  */
 export function apply(ctx: HostContext, config?: PluginConfigInput): PluginConfig {
-  const resolved = normalizePluginConfig(config)
+  // A LIVE view, not a snapshot. The plugins page edits this row's config while the plugin
+  // runs, and a volatile field is committed into the config object the Loader handed us
+  // instead of remounting the plugin -- so a plain normalized copy would freeze every value
+  // at activation and the page's edits would silently do nothing. `livePluginConfig` keeps
+  // the same object shape while reading those fields from the entry's live references, which
+  // is why every consumer below can go on reading `resolved.maxConcurrentWorkers` per use.
+  const resolved = livePluginConfig(config)
 
   // Built once, shared by every tool that needs them. The command seam is
   // stateless; the store is opened on first use so that activation stays
