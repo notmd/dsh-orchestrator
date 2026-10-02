@@ -272,6 +272,7 @@ export async function submitVerdict(
     summary?: string
     findings?: readonly ReviewFindingInput[]
     githubReviewId?: string
+    githubReviewNodeId?: string
     headSha?: string
   },
   callerSessionId: string | undefined,
@@ -319,6 +320,9 @@ export async function submitVerdict(
     endedAt: at,
     ...(args.summary ? { summary: args.summary } : {}),
     ...(args.githubReviewId ? { githubReviewId: args.githubReviewId } : {}),
+    // Recorded so this review can be told apart from a person's later. The node id is the
+    // matching key; see `ourReviewIds`.
+    ...(args.githubReviewNodeId ? { githubReviewNodeId: args.githubReviewNodeId } : {}),
   }
   await store.reviewRuns.put(run.id ?? completed.headSha, completed)
 

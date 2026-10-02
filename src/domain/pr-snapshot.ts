@@ -61,6 +61,57 @@ export interface PrComment {
   isBot: boolean | undefined
 }
 
+/**
+ * One INLINE review comment — the kind attached to a file and a line.
+ *
+ * Kept separate from {@link PrComment} rather than folded into it, because they come from
+ * different endpoints with different shapes and only this one carries `path`/`line`:
+ * `comments` is `gh pr view --json comments` (the PR conversation), while these come from
+ * `gh api repos/{owner}/{repo}/pulls/{n}/comments`.
+ *
+ * **Why they had to be fetched at all.** A person reviewing a diff clicks a line and types
+ * — GitHub submits that as a review whose *body* is empty, with the text living on the
+ * inline comment. Reading only `reviews[].body` therefore missed every line comment: the
+ * review was skipped for having nothing to say while the thing that was said sat in an
+ * endpoint the plugin never called.
+ */
+export interface PrReviewComment {
+  /**
+   * The comment's node id, matching the id space `reviews[].id` uses.
+   *
+   * A node id rather than the numeric REST id, so a caller comparing comment ids with
+   * review ids is comparing one space. `reviewId` is deliberately the numeric form,
+   * because THAT is what the provider gives a comment for its parent review.
+   */
+  id: string
+  /** The review this comment belongs to, in the REST id space. `''` when unreported. */
+  reviewId: string
+  /**
+   * The REST database id, kept ONLY so a reply can be resolved to the comment it answers.
+   *
+   * GitHub gives a reply the numeric id of its parent in `in_reply_to_id`, but gives the
+   * comment itself two ids; without this field the two cannot be compared and the thread
+   * cannot be walked at all.
+   */
+  restId: string
+  /**
+   * The REST id of the comment this one replies to, when it is a reply.
+   *
+   * Replies are how a worker reports "Fixed in <sha>" on a finding. Those are the worker's
+   * OWN words, and routing them back to it as though a person had written them is how a
+   * review exchange becomes a nudge loop.
+   */
+  inReplyToId?: string
+  author: string
+  body: string
+  /** The file the comment is anchored to. */
+  path: string
+  /** The line, when the provider supplied one (an outdated comment may not). */
+  line: number | undefined
+  createdAt: string
+  isBot: boolean | undefined
+}
+
 /** The facts the board reads for one pull request. */
 export interface PrSnapshot {
   number: number
@@ -75,6 +126,13 @@ export interface PrSnapshot {
   headRefName: string
   reviews: readonly PrReview[]
   comments: readonly PrComment[]
+  /**
+   * Inline review comments, from a SECOND endpoint.
+   *
+   * Absent on a snapshot built before this field existed, so every reader treats
+   * `undefined` as "not fetched" rather than "none".
+   */
+  reviewComments?: readonly PrReviewComment[]
   /** For actionable-feedback detection. */
   lastCommentId: string
   updatedAt: string
@@ -203,6 +261,52 @@ export function parsePrView(payload: unknown, observedAt: number): PrSnapshot {
 }
 
 /**
+ * Parses `gh api repos/{owner}/{repo}/pulls/{n}/comments`.
+ *
+ * A bare JSON **array**, unlike every other payload this module reads, because that is what
+ * the REST endpoint returns.
+ *
+ * `isBot` comes from the REST `user.type` marker (`"Bot"` / `"User"`), which IS present
+ * here — unlike `gh pr view --json reviews`, which gives no marker at all. It is still only
+ * a hint for these comments, because our own reviewer posts from the pull request author's
+ * own account (R17) and so has no bot identity: the reliable discriminator remains the
+ * parent review's id.
+ */
+export function parseReviewComments(payload: unknown): PrReviewComment[] {
+  if (!Array.isArray(payload)) return []
+  const out: PrReviewComment[] = []
+  for (const entry of payload as unknown[]) {
+    const comment = (typeof entry === 'object' && entry !== null ? entry : {}) as Record<string, unknown>
+    const user = typeof comment.user === 'object' && comment.user !== null ? (comment.user as Record<string, unknown>) : {}
+    const login = typeof user.login === 'string' ? user.login : ''
+    const type = typeof user.type === 'string' ? user.type : ''
+    // An outdated comment loses `line` but keeps `original_line`; the line it was written
+    // against is more useful to a worker than nothing at all.
+    const line =
+      typeof comment.line === 'number' ? comment.line : typeof comment.original_line === 'number' ? comment.original_line : undefined
+    const replyTo =
+      comment.in_reply_to_id === null || comment.in_reply_to_id === undefined
+        ? undefined
+        : String(comment.in_reply_to_id)
+    out.push({
+      id: typeof comment.node_id === 'string' ? comment.node_id : String(comment.id ?? ''),
+      restId: comment.id === null || comment.id === undefined ? '' : String(comment.id),
+      ...(replyTo === undefined ? {} : { inReplyToId: replyTo }),
+      reviewId: comment.pull_request_review_id === null || comment.pull_request_review_id === undefined
+        ? ''
+        : String(comment.pull_request_review_id),
+      author: login,
+      body: typeof comment.body === 'string' ? comment.body : '',
+      path: typeof comment.path === 'string' ? comment.path : '',
+      line,
+      createdAt: typeof comment.created_at === 'string' ? comment.created_at : '',
+      isBot: type === '' ? undefined : type === 'Bot',
+    })
+  }
+  return out
+}
+
+/**
  * The snapshot written when an observation **failed**.
  *
  * Carries `fetched: false` and the **prior** snapshot's identity, so a caller that
@@ -223,6 +327,7 @@ export function unfetchedSnapshot(prior: PrSnapshot | undefined, error: string, 
       headRefName: '',
       reviews: [],
       comments: [],
+      reviewComments: [],
       lastCommentId: '',
       updatedAt: '',
       observedAt,

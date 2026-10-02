@@ -63,7 +63,14 @@ export const REVIEWER_OUTPUT = `Post the review to the pull request as a comment
 then emit the machine verdict through \`orchestrator_review_verdict\` and nothing else.
 
 The machine verdict is the only thing that moves the board. Prose is ignored, however clear
-it is — so if you find the change is not ready, say so through the tool.`
+it is — so if you find the change is not ready, say so through the tool.
+
+Report the review's NODE id (\`PRR_…\`) as \`githubReviewNodeId\`, alongside the numeric id if
+you have it. The plugin must later recognise this review as its own, and the snapshot it
+reads is built from \`gh pr view --json reviews\`, which reports node ids only — a numeric id
+alone cannot be matched, and this review would then be mistaken for a person's. Posting from
+the pull request author's own account is required, so there is no bot identity to fall back
+on.`
 
 /** Every clause, in injection order. */
 export const REVIEWER_CONTRACT_CLAUSES: readonly string[] = [

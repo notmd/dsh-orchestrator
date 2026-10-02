@@ -34,6 +34,8 @@ export interface MockPr {
   statusCheckRollup?: unknown[]
   reviews?: unknown[]
   comments?: unknown[]
+  /** Inline review comments, as the REST `/pulls/{n}/comments` endpoint returns them. */
+  reviewComments?: unknown[]
 }
 
 /** The mock's world. */
@@ -44,6 +46,17 @@ export interface MockGitHub {
   /** A human review, as the provider would report it. */
   addReview(prNumber: number, review: { id: string; state: string; author: string; body?: string; isBot?: boolean }): void
   addComment(prNumber: number, comment: { id: string; author: string; body: string; isBot?: boolean }): void
+  /**
+   * A review comment anchored to a file and line, as GitHub stores one.
+   *
+   * `reviewId` is the numeric id of the review it belongs to — the field the plugin uses
+   * to recognise its OWN reviewer's inline comments, since our reviewer posts from the pull
+   * request author's account and so cannot be filtered by author.
+   */
+  addReviewComment(
+    prNumber: number,
+    comment: { id: string; reviewId?: string; author: string; body: string; path: string; line?: number; isBot?: boolean },
+  ): void
   setState(prNumber: number, state: MockPr['state']): void
   head(prNumber: number, sha: string): void
 }
@@ -98,6 +111,14 @@ export function mockGitHub(options: {
       return ok(pr.url)
     }
     if (joined.startsWith('gh pr list')) return ok(JSON.stringify(prs.map((pr) => ({ ...pr }))))
+    // The inline review comments. A SECOND endpoint, because `gh pr view --json` has no
+    // field for them -- which is why a person's line comment was invisible to the plugin.
+    if (joined.startsWith('gh api') && joined.includes('/comments')) {
+      const number = Number(/pulls\/(\d+)\/comments/.exec(joined)?.[1] ?? '')
+      const pr = prs.find((candidate) => candidate.number === number)
+      if (!pr) return { exitCode: 1, stdout: '', stderr: `no pull request ${number}` }
+      return ok(JSON.stringify(pr.reviewComments ?? []))
+    }
     if (joined.startsWith('gh pr view')) {
       const number = Number(argv[3])
       const pr = prs.find((candidate) => candidate.number === number)
@@ -139,6 +160,25 @@ export function mockGitHub(options: {
           id: comment.id,
           author: { login: comment.author, __typename: comment.isBot === true ? 'Bot' : 'User' },
           body: comment.body,
+        },
+      ]
+    },
+    addReviewComment(prNumber, comment) {
+      const pr = prs.find((candidate) => candidate.number === prNumber)
+      if (!pr) throw new Error(`no pull request ${prNumber}`)
+      pr.reviewComments = [
+        ...(pr.reviewComments ?? []),
+        {
+          // REST shape, not GraphQL: this endpoint returns `node_id` and a numeric
+          // `pull_request_review_id`, and `user.type` as the bot marker.
+          id: comment.id,
+          node_id: comment.id,
+          pull_request_review_id: comment.reviewId === undefined ? null : Number(comment.reviewId),
+          user: { login: comment.author, type: comment.isBot === true ? 'Bot' : 'User' },
+          body: comment.body,
+          path: comment.path,
+          line: comment.line ?? null,
+          created_at: '2026-10-01T00:00:00Z',
         },
       ]
     },

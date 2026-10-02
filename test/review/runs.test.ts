@@ -23,6 +23,7 @@ import {
   isSettled,
   isVerdict,
   latestCompletedRunForOtherHead,
+  ourReviewIds,
   runsForHead,
   summarizeReviewRuns,
 } from '../../src/review/runs.ts'
@@ -290,4 +291,40 @@ test('latestCompletedRunForOtherHead: only a settled, judged pass for another he
   await t.test('an empty target head finds nothing', () => {
     assert.equal(latestCompletedRunForOtherHead([judged], ''), undefined)
   })
+})
+
+// ---------------------------------------------------------------------------
+// Recognising a review WE posted
+// ---------------------------------------------------------------------------
+
+test('ourReviewIds carries BOTH id spaces, because neither derives from the other', () => {
+  // The live failure this exists for. `githubReviewId` is the REST database id that the
+  // review POST returns (`5384713460`); the snapshot is built from `gh pr view --json
+  // reviews`, which reports only the GraphQL node id (`PRR_…`). A set built from the
+  // numeric form answers `has(nodeId)` with false every single time, so the plugin's own
+  // review was treated as if a person had written it.
+  const runs = [
+    run({ headSha: HEAD_A, githubReviewId: '5384713460', githubReviewNodeId: 'PRR_kwDOU3D4VM8AAAABQPQ09A' }),
+    run({ headSha: HEAD_B, githubReviewNodeId: 'PRR_kwDOU3D4VM8AAAABQSdoIQ' }),
+    run({ headSha: HEAD_B, githubReviewId: '5384713461' }),
+  ]
+  const ids = ourReviewIds(runs)
+
+  assert.ok(ids.has('PRR_kwDOU3D4VM8AAAABQPQ09A'), 'the node id is the matching key')
+  assert.ok(ids.has('5384713460'), 'and the REST id is kept too')
+  assert.ok(ids.has('PRR_kwDOU3D4VM8AAAABQSdoIQ'), 'a run that reported only a node id still counts')
+  assert.ok(ids.has('5384713461'), 'as does one that reported only a REST id')
+  assert.equal(ids.size, 4)
+})
+
+test('ourReviewIds ignores absent and empty ids rather than adding a key that matches nothing', () => {
+  // An empty string in the set is not harmless: it would match a review whose id the
+  // provider could not supply, silently excluding a real review from the board.
+  const ids = ourReviewIds([
+    run({ headSha: HEAD_A }),
+    run({ headSha: HEAD_A, githubReviewId: '', githubReviewNodeId: '' }),
+  ])
+  assert.equal(ids.size, 0)
+  assert.equal(ourReviewIds([]).size, 0)
+  assert.equal(ourReviewIds(undefined).size, 0)
 })

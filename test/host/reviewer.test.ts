@@ -426,3 +426,29 @@ test('forcing does NOT bypass ineligibility: a PR with no head is still refused'
   assert.match(text, /head commit of acme\/widgets#42 is not known yet/)
   assert.equal((await raw.reviewRuns.list()).length, 1, 'only the pre-existing run')
 })
+
+test('the review ids the reviewer reports are stored, so the review is recognisable later', async () => {
+  // Both are kept, and the NODE id is the one that matters: the snapshot is built from
+  // `gh pr view --json reviews`, which reports node ids only. Until this field existed the
+  // run stored just the REST id, so `ourReviewIds` could never match the snapshot and the
+  // plugin's own review was routed to the worker as if a person had written it.
+  const { deps, raw } = await review()
+  await submitVerdict(
+    deps,
+    { verdict: 'approved', githubReviewId: '5384713460', githubReviewNodeId: 'PRR_kwDOU3D4VM8AAAABQPQ09A' },
+    'dsho-rev-1',
+  )
+  const run = (await raw.reviewRuns.get('run-1')) as ReviewRun
+  assert.equal(run.githubReviewId, '5384713460')
+  assert.equal(run.githubReviewNodeId, 'PRR_kwDOU3D4VM8AAAABQPQ09A')
+})
+
+test('a verdict that reports no review id stores neither field', async () => {
+  // The fields are optional, and an absent id must not become the empty string -- an empty
+  // id in the set would match a review whose id the provider could not supply.
+  const { deps, raw } = await review()
+  await submitVerdict(deps, { verdict: 'approved' }, 'dsho-rev-1')
+  const run = (await raw.reviewRuns.get('run-1')) as ReviewRun
+  assert.equal(run.githubReviewId, undefined)
+  assert.equal(run.githubReviewNodeId, undefined)
+})

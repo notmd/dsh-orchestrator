@@ -103,14 +103,56 @@ export interface ReviewRun {
   harness?: string
   /** The real PR review the pass posted. */
   githubReviewId?: string
+  /**
+   * The SAME review, in the id space the PR snapshot records (`PRR_…`).
+   *
+   * Both forms are kept because they are not interchangeable and neither can be derived
+   * from the other: `githubReviewId` is the REST database id the `gh api` POST returns
+   * (`5384713460`), while `gh pr view --json reviews` — which is what the snapshot is
+   * built from — reports only the GraphQL node id (`PRR_kwDOU3D4VM8AAAABQPQ09A`).
+   *
+   * That mismatch is what made `ourReviewIds` dead code: the set was built from one id
+   * space and asked about the other, so every comparison was false and the plugin's own
+   * review was treated as if a person had written it. This field is the matching key.
+   */
+  githubReviewNodeId?: string
   createdAt?: number
   startedAt?: number
   endedAt?: number
 }
 
+/**
+ * Every id by which a review WE posted can be recognised.
+ *
+ * One definition, because two consumers ask the same question and a second copy is how
+ * they drift apart: the board excludes our own reviews from what it shows a person as
+ * "external" review, and the feedback loop must never route our own findings back to the
+ * worker as though a human had asked for them.
+ *
+ * Both id spaces are included deliberately. A run that reported only the REST id still
+ * cannot be matched against a snapshot, but including it costs nothing and covers a future
+ * fetch that carries the numeric form.
+ *
+ * **Why this cannot be done by author.** The reviewer acts from the pull request author's
+ * own account — GitHub rejects `APPROVE` and `REQUEST_CHANGES` on your own PR (R17), and
+ * `prReviewArgv` documents that the reviewer *is* you. With one login there is no bot
+ * identity to filter on, and `gh pr view --json reviews` supplies no `type`/`__typename`
+ * marker either, so `isBot` is `undefined` for our reviews and for a person's alike. Ids
+ * are the only reliable discriminator.
+ */
+export function ourReviewIds(runs: readonly ReviewRun[] | undefined | null): Set<string> {
+  const ids = new Set<string>()
+  for (const run of runs ?? []) {
+    if (!run) continue
+    for (const id of [run.githubReviewNodeId, run.githubReviewId]) {
+      if (typeof id === 'string' && id !== '') ids.add(id)
+    }
+  }
+  return ids
+}
+
 /** The loop bounds. Values verified against the reference source and PRD §13. */
-export const REVIEW_BOUND_DEFAULTS = Object.freeze({
-  maxReviewRounds: 3,
+export const REVIEW_BOUND_DEFAULTS = Object.freeze({  maxReviewRounds: 3,
   autoReviewFailedRetryLimit: 3,
 })
 

@@ -339,6 +339,14 @@ export function buildOrchestratorTools(options: {
           },
         },
         githubReviewId: { type: 'string', description: 'The id of the PR review you posted.' },
+        githubReviewNodeId: {
+          type: 'string',
+          description:
+            'The NODE id of the review you posted — the `PRR_…` form, i.e. the `node_id` field of the ' +
+            '`gh api .../pulls/<n>/reviews` response. Report it so this review can later be told apart ' +
+            'from a person\u2019s: the snapshot is built from `gh pr view --json reviews`, which reports ' +
+            'only node ids, so the numeric `id` can never be matched against it.',
+        },
         headSha: { type: 'string', description: 'The commit you reviewed. Must match the pinned one.' },
       },
       outputType: 'string',

@@ -24,12 +24,12 @@
  * @module dsho/host/observer-service
  */
 
-import { parsePrView, unfetchedSnapshot } from '../domain/pr-snapshot.ts'
+import { parsePrView, parseReviewComments, unfetchedSnapshot } from '../domain/pr-snapshot.ts'
 import type { PrSnapshot } from '../domain/pr-snapshot.ts'
 import { normalizeIssue } from '../domain/issues.ts'
 import { normalizeWorker } from '../domain/workers.ts'
 import type { Worker } from '../domain/workers.ts'
-import { prViewArgv } from '../github/argv.ts'
+import { prReviewCommentsArgv, prViewArgv } from '../github/argv.ts'
 import { classifyCommandFailure } from './exec.ts'
 import type { RunCommand } from './worktree.ts'
 import type { LazyFactStore } from './store.ts'
@@ -41,6 +41,8 @@ export interface ObserverDeps {
   now?: () => number
   /** Overrides the argv builder, for a caller that needs different fields. */
   argvFor?: (pr: { number: number; repository: string }) => readonly string[]
+  /** Overrides the inline-comment argv builder, for the same reason. */
+  reviewCommentsArgvFor?: (pr: { number: number; repository: string }) => readonly string[]
 }
 
 /** One worker's observation. */
@@ -140,6 +142,48 @@ export async function observeWorker(
   }
 
   const snapshot = parsePrView(payload, now)
+
+  // A SECOND call, because inline review comments are on an endpoint `gh pr view --json`
+  // does not expose. Its failure is a failed observation rather than an empty list: an
+  // unfetched snapshot must never read as "the person withdrew their comment" (R13), and
+  // that is the exact shape of the bug this closes.
+  const commentsArgv = (deps.reviewCommentsArgvFor ?? prReviewCommentsArgv)({
+    number: worker.pr.number,
+    repository,
+  })
+  const commentsResult = await deps.run(commentsArgv, { cwd: worker.worktreePath })
+  if (commentsResult.exitCode !== 0) {
+    const failure = classifyCommandFailure(commentsResult)
+    const failed = unfetchedSnapshot(prior, failure.kind, now)
+    await store.prSnapshots.put(snapshotKey(worker.id), failed)
+    return {
+      workerId: worker.id,
+      prNumber: worker.pr.number,
+      fetched: false,
+      changed: false,
+      changedFields: [],
+      snapshot: failed,
+      error: failure.kind,
+    }
+  }
+  let commentPayload: unknown
+  try {
+    commentPayload = JSON.parse(commentsResult.stdout)
+  } catch {
+    const failed = unfetchedSnapshot(prior, 'unparseable', now)
+    await store.prSnapshots.put(snapshotKey(worker.id), failed)
+    return {
+      workerId: worker.id,
+      prNumber: worker.pr.number,
+      fetched: false,
+      changed: false,
+      changedFields: [],
+      snapshot: failed,
+      error: 'unparseable',
+    }
+  }
+  snapshot.reviewComments = parseReviewComments(commentPayload)
+
   const fields = changedFields(prior, snapshot)
   await store.prSnapshots.put(snapshotKey(worker.id), snapshot)
 

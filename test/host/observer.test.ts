@@ -156,7 +156,12 @@ test('a merged snapshot IS terminal, but only when it was fetched', () => {
 // Observing
 // ---------------------------------------------------------------------------
 
-async function observer(results: Array<Partial<CommandResult>>) {
+/** Whether an argv is the inline-comment request rather than the PR-facts one. */
+function isReviewCommentsCall(argv: readonly string[]): boolean {
+  return argv.some((arg) => arg.endsWith('/comments'))
+}
+
+async function observer(results: Array<Partial<CommandResult>>, comments = '[]') {
   const store = createMemoryFactStore()
   await store.repos.put('repo-1', { id: 'repo-1', owner: 'acme', name: 'widgets', rootPath: '/r' })
   await store.issues.put('iss-1', {
@@ -188,6 +193,10 @@ async function observer(results: Array<Partial<CommandResult>>) {
   const calls: string[][] = []
   const run: RunCommand = async (argv) => {
     calls.push([...argv])
+    // Observation is now TWO requests: the `gh pr view` facts and the inline review
+    // comments. Routed by argv rather than by position, so a test that queues results for
+    // the facts does not silently answer the comments call with a PR payload.
+    if (isReviewCommentsCall(argv)) return { exitCode: 0, stdout: comments, stderr: '' }
     const answer = results[Math.min(call, results.length - 1)] ?? { exitCode: 0, stdout: payload() }
     call += 1
     return { exitCode: 0, stdout: '', stderr: '', ...answer }
@@ -291,4 +300,78 @@ test('a store failure is contained, not thrown at the caller', async () => {
     run: (async () => ({ exitCode: 0, stdout: payload(), stderr: '' })) as RunCommand,
   })
   assert.deepEqual(outcome.observations, [])
+})
+
+// ---------------------------------------------------------------------------
+// Inline review comments — the endpoint `gh pr view --json` does not expose
+// ---------------------------------------------------------------------------
+
+test('observation fetches inline review comments from their own endpoint', async () => {
+  // The bug this closes: a person reviewing a diff clicks a line and types, and GitHub
+  // files that as a review whose BODY is empty with the text on the inline comment. Reading
+  // only `reviews[].body` meant every line comment was invisible -- the review looked like
+  // it had nothing to say while the thing they said was on an endpoint nobody called.
+  const { deps, calls } = await observer(
+    [{ exitCode: 0, stdout: payload() }],
+    JSON.stringify([
+      {
+        id: 1,
+        node_id: 'PRRC_kwDOU3D4VM',
+        pull_request_review_id: 5388068897,
+        user: { login: 'notmd', type: 'User' },
+        body: 'can you also remove this',
+        path: 'README.md',
+        line: 42,
+        created_at: '2026-10-02T03:34:12Z',
+      },
+    ]),
+  )
+  const outcome = await observeAll(deps)
+
+  assert.equal(outcome.observations[0]!.fetched, true)
+  const snapshot = outcome.observations[0]!.snapshot
+  assert.equal(snapshot.reviewComments?.length, 1, 'the inline comment is on the snapshot')
+  const comment = snapshot.reviewComments![0]!
+  assert.equal(comment.id, 'PRRC_kwDOU3D4VM', 'the node id, matching the id space reviews use')
+  assert.equal(comment.reviewId, '5388068897', 'and the numeric parent review id, for exclusion')
+  assert.equal(comment.body, 'can you also remove this')
+  assert.equal(comment.path, 'README.md')
+  assert.equal(comment.line, 42)
+  assert.equal(comment.isBot, false, 'REST does supply the type marker')
+
+  // Two requests, and the second one is the comments endpoint.
+  assert.ok(
+    calls.some((argv) => argv.some((arg) => arg.endsWith('/comments'))),
+    'the inline comments were actually requested',
+  )
+})
+
+test('R13: a failed inline-comment fetch is a failed observation, not "no comments"', async () => {
+  // The direction matters. Treating the failure as an empty list would read as "the person
+  // withdrew their comment" -- exactly the fabrication R13 forbids, and the one that
+  // silently drops feedback a worker was supposed to act on.
+  const { deps, raw } = await observer([{ exitCode: 0, stdout: payload({ state: 'OPEN' }) }])
+  await observeAll(deps)
+  assert.equal(((await raw.prSnapshots.get(snapshotKey('wrk-1'))) as PrSnapshot).fetched, true)
+
+  const failing = await observer([{ exitCode: 0, stdout: payload() }], 'not json at all')
+  const outcome = await observeAll(failing.deps)
+  assert.equal(outcome.observations[0]!.fetched, false)
+  assert.equal(outcome.observations[0]!.error, 'unparseable')
+})
+
+test('an outdated inline comment keeps the line it was written against', async () => {
+  // GitHub drops `line` when the diff moves on but keeps `original_line`. The line they
+  // commented on is more useful to the worker than no location at all.
+  const { deps } = await observer(
+    [{ exitCode: 0, stdout: payload() }],
+    JSON.stringify([
+      { node_id: 'c1', pull_request_review_id: 7, user: { login: 'a', type: 'User' }, body: 'x', path: 'a.ts', line: null, original_line: 12 },
+      { node_id: 'c2', pull_request_review_id: 7, user: { login: 'a', type: 'User' }, body: 'y', path: 'b.ts' },
+    ]),
+  )
+  const outcome = await observeAll(deps)
+  const comments = outcome.observations[0]!.snapshot.reviewComments!
+  assert.equal(comments[0]!.line, 12)
+  assert.equal(comments[1]!.line, undefined, 'no line at all stays absent, not zero')
 })

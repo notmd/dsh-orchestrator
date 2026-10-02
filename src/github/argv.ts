@@ -46,6 +46,29 @@ export const PR_VIEW_FIELDS = [
 export const REPO_VIEW_FIELDS = ['nameWithOwner', 'defaultBranchRef', 'url', 'isPrivate'] as const
 
 /**
+ * `gh api repos/{owner}/{repo}/pulls/{n}/comments` — the INLINE review comments.
+ *
+ * A second call because `gh pr view --json` has no field for them. That absence is what
+ * made a person's line comment invisible: `reviews[]` carries only the review's own body,
+ * and a review submitted from clicked lines has an empty one, so nothing in the
+ * `pr view` payload ever contained the text they typed.
+ *
+ * `--paginate` because the default page is 30 and a busy review easily exceeds it — a
+ * truncated list would read as "those comments are gone", which is the R13 hazard.
+ * `PR_VIEW_FIELDS` keeps its contract note: a field added to `PrSnapshot` from this
+ * endpoint belongs in `parseReviewComments`, not in that list.
+ */
+export function prReviewCommentsArgv(options: { number: number; repository: string }): string[] {
+  assertPullRequestNumber(options.number)
+  return [
+    'gh',
+    'api',
+    '--paginate',
+    `repos/${options.repository}/pulls/${options.number}/comments`,
+  ]
+}
+
+/**
  * `gh pr view <n> --json <fields>`.
  *
  * `--repo owner/name` is passed explicitly rather than relying on the cwd's

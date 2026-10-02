@@ -33,7 +33,7 @@ import { normalizeIssue } from '../domain/issues.ts'
 import { WorkerPhase, isTerminalPhase, normalizeWorker, workerSessionTitle } from '../domain/workers.ts'
 import type { Worker } from '../domain/workers.ts'
 import { snapshotKey } from './observer-service.ts'
-import { changesRequestedCycles, summarizeReviewRuns } from '../review/runs.ts'
+import { changesRequestedCycles, ourReviewIds, summarizeReviewRuns } from '../review/runs.ts'
 import type { ReviewRun } from '../review/runs.ts'
 import { isBotAuthor } from '../domain/pr-snapshot.ts'
 import type { PrSnapshot } from '../domain/pr-snapshot.ts'
@@ -142,8 +142,11 @@ export function toPrFacts(
   const headSha = snapshot.headSha ?? ''
   // Our own provider reviews are excluded by id, because the aggregate
   // `reviewDecision` mixes ours with a person's and cannot tell whose turn it is.
-  const ourReviewIds = new Set(runs.map((run) => run.githubReviewId).filter((id): id is string => !!id))
-  const external = (snapshot.reviews ?? []).filter((review) => !ourReviewIds.has(review.id))
+  // The set comes from ONE shared definition. The inline copy that used to be here built
+  // its set from `githubReviewId` -- the REST id -- while the snapshot reports node ids, so
+  // every comparison was false and the exclusion never removed anything.
+  const ourIds = ourReviewIds(runs)
+  const external = (snapshot.reviews ?? []).filter((review) => !ourIds.has(review.id))
 
   // Normalized on the way out, so a caller gets Go's zero values on every field
   // rather than an object with holes. The reducer tolerates holes; a caller reading

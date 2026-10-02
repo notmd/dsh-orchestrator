@@ -35,6 +35,7 @@ import {
   prCreateArgv,
   prListArgv,
   prReviewArgv,
+  prReviewCommentsArgv,
   prViewArgv,
   pushArgv,
   repoViewArgv,
@@ -336,4 +337,23 @@ test('the preflight argv is exactly what git and gh expect', () => {
 test('the PR_VIEW_FIELDS list is stable and ordered', () => {
   assert.equal(PR_VIEW_FIELDS.length, 13)
   assert.equal(new Set(PR_VIEW_FIELDS).size, PR_VIEW_FIELDS.length, 'no duplicates')
+})
+
+test('the inline-comment argv targets the one endpoint `pr view --json` cannot reach', () => {
+  // `PR_VIEW_FIELDS` deliberately does not list a field for these, because none exists:
+  // `gh pr view --json` reports review BODIES and conversation comments, and a review
+  // submitted from clicked lines has an empty body. Without this request a person's line
+  // comment is invisible to the plugin.
+  const argv = prReviewCommentsArgv({ number: 42, repository: 'acme/widgets' })
+  assert.deepEqual(argv, ['gh', 'api', '--paginate', 'repos/acme/widgets/pulls/42/comments'])
+  // `--paginate`: the default page is 30, and a truncated list would read as "those
+  // comments are gone" -- the R13 hazard, in the direction that drops feedback.
+  assert.ok(argv.includes('--paginate'))
+})
+
+test('the inline-comment argv refuses a number that is not a pull request', () => {
+  // Same guard as every other builder: `--paginate` on a nonsense path would be a silent
+  // 404 rather than an error anyone could act on.
+  assert.throws(() => prReviewCommentsArgv({ number: 0, repository: 'acme/widgets' }))
+  assert.throws(() => prReviewCommentsArgv({ number: -1, repository: 'acme/widgets' }))
 })

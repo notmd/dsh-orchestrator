@@ -27,9 +27,11 @@
  * @module dsho/host/feedback-service
  */
 
-import type { PrReview, PrSnapshot } from '../domain/pr-snapshot.ts'
+import type { PrReview, PrReviewComment, PrSnapshot } from '../domain/pr-snapshot.ts'
 import { isBlockedWorker, normalizeWorker } from '../domain/workers.ts'
 import type { Worker } from '../domain/workers.ts'
+import { ourReviewIds } from '../review/runs.ts'
+import type { ReviewRun } from '../review/runs.ts'
 import type { PluginConfig } from '../config/validate.ts'
 import type { LiveWorkers } from './handle-registry.ts'
 import type { LazyFactStore } from './store.ts'
@@ -58,6 +60,15 @@ interface Actionable {
   kind: 'changes_requested' | 'comment' | 'ci_failed' | 'merge_conflict'
   author: string
   body: string
+  /**
+   * Where an inline comment was anchored.
+   *
+   * Carried because "can you also remove this" is unanswerable without it: the worker has
+   * a branch full of files and no way to know which "this" a person clicked. A review-level
+   * comment has no location, so both stay optional.
+   */
+  path?: string
+  line?: number
 }
 
 /**
@@ -73,21 +84,93 @@ function isHuman(review: PrReview): boolean {
 }
 
 /**
+ * The same rule for an inline comment.
+ *
+ * Kept separate rather than generalized over both shapes: they are different records from
+ * different endpoints, and this one carries a real marker (REST `user.type`) that the
+ * review payload does not — so the two will not necessarily agree, and a shared helper
+ * would have to pretend they do.
+ */
+function isHumanComment(comment: PrReviewComment): boolean {
+  return comment.isBot !== true
+}
+
+/**
  * The feedback that has not been routed yet.
  *
  * Exported because it is the whole of the dedup logic and is worth testing without a
  * store, a worker, or a session in the way.
+ *
+ * `ourIds` is the set from {@link import('../review/runs.ts').ourReviewIds}. Without it the
+ * plugin's own review is indistinguishable from a person's — both are `COMMENTED`, both are
+ * authored by the same login, and `isBot` is `undefined` for both — so the loop routes the
+ * plugin's findings back to the worker as though a human had asked for them, spending a
+ * nudge from a bounded budget on its own output.
+ *
+ * Inline comments are read as well as review bodies, because that is where a person
+ * reviewing a diff types: a review submitted from clicked lines has an empty body, and its
+ * text is on `pulls/{n}/comments` instead.
  */
-export function actionableFeedback(snapshot: PrSnapshot, alreadyRouted: readonly string[]): Actionable[] {
+export function actionableFeedback(
+  snapshot: PrSnapshot,
+  alreadyRouted: readonly string[],
+  ours: ReadonlySet<string> = new Set(),
+): Actionable[] {
   const routed = new Set(alreadyRouted)
   const out: Actionable[] = []
   for (const review of snapshot.reviews ?? []) {
     if (routed.has(review.id) || !isHuman(review)) continue
+    if (ours.has(review.id)) continue
     if (review.state === 'CHANGES_REQUESTED') {
       out.push({ id: review.id, kind: 'changes_requested', author: review.author, body: review.body ?? '' })
     } else if (review.state === 'COMMENTED' && (review.body ?? '').trim() !== '') {
       out.push({ id: review.id, kind: 'comment', author: review.author, body: review.body ?? '' })
     }
+  }
+
+  // INLINE comments, which are where a person reviewing a diff actually types.
+  //
+  // These were invisible until this endpoint was fetched, and no review-level rule can
+  // recover them: a review submitted from clicked lines has an EMPTY body, so the loop
+  // above sees nothing to route whether or not the body check is relaxed. An item added
+  // here is a different id from its parent review's, so a review that has both a summary
+  // and line comments routes both -- which is correct, they say different things.
+  const comments = snapshot.reviewComments ?? []
+  /**
+   * The REST ids of comments that sit on OUR OWN reviews -- the roots of our threads.
+   *
+   * Measured live, and the reason this set exists: the worker answers each finding by
+   * replying in its thread ("Done in 53d8ce5 — the same line now names..."). A reply is a
+   * NEW review with a fresh id, so the parent-review exclusion above does not catch it, and
+   * without this the worker's own words come back to it attributed to a person -- and
+   * because the routed list resets on every new head, each push re-sends them. That is a
+   * nudge loop bounded only by `reviewMaxNudge`.
+   */
+  const ourThreadRoots = new Set(
+    comments
+      .filter((comment) => ours.has(comment.reviewId) || ours.has(comment.id))
+      .map((comment) => comment.restId)
+      .filter((id) => id !== ''),
+  )
+
+  for (const comment of comments) {
+    if (routed.has(comment.id) || !isHumanComment(comment)) continue
+    // Ours by parent review. Our own reviewer posts one inline comment per finding, so
+    // without this the loop would hand the worker its own review back as human feedback.
+    if (ours.has(comment.reviewId) || ours.has(comment.id)) continue
+    // A direct reply into one of our threads. Deliberately ONE level: a reply to a reply is
+    // either the worker again or a person engaging, and the PRD ranks dropping a person's
+    // comment as the failure that matters -- so the doubt routes.
+    if (comment.inReplyToId !== undefined && ourThreadRoots.has(comment.inReplyToId)) continue
+    if (comment.body.trim() === '') continue
+    out.push({
+      id: comment.id,
+      kind: 'comment',
+      author: comment.author,
+      body: comment.body,
+      ...(comment.path ? { path: comment.path } : {}),
+      ...(comment.line !== undefined ? { line: comment.line } : {}),
+    })
   }
   return out
 }
@@ -152,6 +235,11 @@ export function renderFeedback(worker: Worker, items: readonly Actionable[], prU
       : item.kind === 'ci_failed' ? 'is failing'
       : 'does not apply cleanly'
     lines.push(item.kind === 'changes_requested' || item.kind === 'comment' ? `${item.author} ${label}:` : `The ${item.author} ${label}:`)
+    // The location goes ABOVE the text for an inline comment, so the worker reads which
+    // file and line before it reads what was asked -- "this" is meaningless without it.
+    if (item.path) {
+      lines.push(`  ${item.path}${item.line !== undefined ? `:${item.line}` : ''}`)
+    }
     lines.push(item.body.trim() === '' ? '  (no comment body)' : item.body.trim())
     lines.push('')
   }
@@ -181,10 +269,27 @@ export async function routeHumanFeedback(
   const routedIds = prior && prior.headSha === headSha ? prior.routedIds : []
   const nudgedAtHead = prior && prior.headSha === headSha ? prior.nudgedAtHead : 0
 
+  const store = await deps.store.get()
+
+  // Which of the reviews on this PR are OURS. Read from the stored review runs rather than
+  // guessed from the author, because there is no bot identity to guess from (see
+  // `ourReviewIds`). A store read failure yields an empty set: the guard is about avoiding
+  // a wasted nudge, and failing it must not silence a person.
+  let ours: Set<string> = new Set()
+  try {
+    const runs = (await store.reviewRuns.list()).filter((candidate) => {
+      const run = candidate as ReviewRun | null
+      return typeof run === 'object' && run !== null && run.workerId === worker.id
+    }) as ReviewRun[]
+    ours = ourReviewIds(runs)
+  } catch {
+    // Leave `ours` empty.
+  }
+
   // `autoInjectCI` gates the check-driven items, which is what makes the flag real
   // rather than a board-only annotation.
   const items = [
-    ...actionableFeedback(snapshot, routedIds),
+    ...actionableFeedback(snapshot, routedIds, ours),
     ...(deps.config.autoInjectCI ? ciFeedback(snapshot, routedIds) : []),
   ]
   if (items.length === 0) {
@@ -210,7 +315,6 @@ export async function routeHumanFeedback(
     return { workerId: worker.id, routed: 0, reason: 'no-live-handle' }
   }
 
-  const store = await deps.store.get()
   live.handle.agent.followup({
     content: [{ type: 'text', text: renderFeedback(worker, items, snapshot.url ?? '') }],
     source: { kind: 'user' },

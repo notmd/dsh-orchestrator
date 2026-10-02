@@ -350,3 +350,194 @@ test('the routing honours autoInjectCI, and holds nothing when it is off', async
   assert.equal(outcome.routed, 1, 'and on means on')
   assert.equal(sent.length, 1)
 })
+
+test('our own review is excluded BY ID, and an unknown id never silences a person', () => {
+  // The live failure this exists for. The reviewer acts from the pull request author's own
+  // account -- GitHub rejects APPROVE and REQUEST_CHANGES on your own PR (R17) -- so a
+  // review WE posted and one a person posted share a login, are both COMMENTED, and both
+  // carry `isBot: undefined` because `gh pr view --json reviews` supplies no type marker.
+  // Neither the author nor the bot flag can separate them. Only the id can.
+  const ours = 'PRR_kwDOU3D4VM8AAAABQPQ09A'
+  const theirs = 'PRR_kwDOU3D4VM8AAAABQSdoIQ'
+  const snap = snapshot({
+    reviews: [
+      { id: ours, state: 'COMMENTED', author: 'notmd', isBot: undefined, body: 'Reviewed a794158 against main' },
+      { id: theirs, state: 'COMMENTED', author: 'notmd', isBot: undefined, body: 'can you also remove this' },
+    ],
+  })
+
+  assert.deepEqual(
+    actionableFeedback(snap, [], new Set([ours])).map((item) => item.id),
+    [theirs],
+    'our own finding is not routed back as though a person asked for it',
+  )
+
+  // And with nothing known, BOTH are treated as human. That is the safety direction: an
+  // unknown id costs a wasted nudge, while guessing "ours" would silently drop a person's
+  // review -- the failure this module's own docstring says matters.
+  assert.equal(actionableFeedback(snap, []).length, 2)
+  assert.equal(actionableFeedback(snap, [], new Set()).length, 2)
+})
+
+test('a CHANGES_REQUESTED review of ours is excluded too, not just an approving one', () => {
+  // Our reviewer cannot submit a real CHANGES_REQUESTED on our own PR, but a run that
+  // posted with a comment event still lands as COMMENTED -- and the exclusion must hold for
+  // whichever state the provider reports, or a future posting path reopens the same bug.
+  const snap = snapshot({
+    reviews: [{ id: 'ours', state: 'CHANGES_REQUESTED', author: 'you', isBot: undefined, body: 'fix this' }],
+  })
+  assert.equal(actionableFeedback(snap, [], new Set(['ours'])).length, 0)
+  assert.equal(actionableFeedback(snap, []).length, 1)
+})
+
+// ---------------------------------------------------------------------------
+// Inline comments — where a person reviewing a diff actually types
+// ---------------------------------------------------------------------------
+
+test('a human INLINE comment is actionable even though its review body is empty', () => {
+  // THE live bug. A review submitted from clicked lines has an empty body, so every
+  // review-level rule skips it -- and no relaxation of the body check can help, because the
+  // text is not in the review at all. It is on `pulls/{n}/comments`.
+  const snap = snapshot({
+    reviews: [{ id: 'PRR_theirs', state: 'COMMENTED', author: 'notmd', isBot: undefined, body: '' }],
+    reviewComments: [
+      {
+        id: 'PRRC_one',
+        reviewId: '5388068897',
+        author: 'notmd',
+        body: 'can you also remove this',
+        path: 'README.md',
+        line: 42,
+        createdAt: '',
+        isBot: false,
+      },
+    ],
+  })
+
+  const items = actionableFeedback(snap, [])
+  assert.deepEqual(items.map((item) => item.id), ['PRRC_one'], 'the line comment is what is actionable')
+  assert.equal(items[0]!.kind, 'comment')
+  assert.equal(items[0]!.path, 'README.md')
+  assert.equal(items[0]!.line, 42)
+})
+
+test('our own inline comments are excluded by their parent review id', () => {
+  // Our reviewer posts one inline comment per finding, from the pull request author's own
+  // account. Without this the worker is handed its own review back as human feedback --
+  // and because our reviewer is told to anchor comments to lines, these are the majority of
+  // the comments on the PR.
+  const snap = snapshot({
+    reviewComments: [
+      { id: 'PRRC_ours', reviewId: '5384713460', author: 'notmd', body: 'missing test', path: 'a.ts', line: 3, createdAt: '', isBot: undefined },
+      { id: 'PRRC_theirs', reviewId: '5388068897', author: 'notmd', body: 'remove this', path: 'b.ts', line: 9, createdAt: '', isBot: false },
+    ],
+  })
+
+  assert.deepEqual(actionableFeedback(snap, [], new Set(['5384713460'])).map((item) => item.id), ['PRRC_theirs'])
+
+  // And with nothing known, BOTH count -- the safety direction, since an unknown id must
+  // never silence a person.
+  assert.equal(actionableFeedback(snap, []).length, 2)
+})
+
+test('an inline comment a provider typed as a bot is not a person', () => {
+  // This endpoint DOES carry `user.type`, unlike `gh pr view --json reviews`.
+  const snap = snapshot({
+    reviewComments: [
+      { id: 'PRRC_bot', reviewId: '1', author: 'dependabot', body: 'bump it', path: 'a.ts', line: 1, createdAt: '', isBot: true },
+      { id: 'PRRC_person', reviewId: '2', author: 'robothon', body: 'look here', path: 'b.ts', line: 2, createdAt: '', isBot: false },
+    ],
+  })
+  assert.deepEqual(actionableFeedback(snap, []).map((item) => item.id), ['PRRC_person'], 'a human whose login contains "bot" stays human')
+})
+
+test('an already-routed inline comment is not routed twice, and a blank one is not routed at all', () => {
+  const snap = snapshot({
+    reviewComments: [
+      { id: 'PRRC_one', reviewId: '1', author: 'a', body: 'x', path: 'a.ts', line: 1, createdAt: '', isBot: false },
+      { id: 'PRRC_blank', reviewId: '1', author: 'a', body: '   ', path: 'a.ts', line: 2, createdAt: '', isBot: false },
+    ],
+  })
+  assert.deepEqual(actionableFeedback(snap, []).map((item) => item.id), ['PRRC_one'])
+  assert.equal(actionableFeedback(snap, ['PRRC_one']).length, 0)
+})
+
+test('an anonymous inline comment is still human, and the message says WHERE it was left', () => {
+  // "can you also remove this" is unanswerable without the file and line: the worker has a
+  // whole branch and no idea which "this" was clicked.
+  const worker = normalizeWorker({ id: 'w', issueId: 'i', sessionId: 's', branch: 'dsho/issue-7', worktreePath: '/p', workspaceId: 'ws', phase: WorkerPhase.implementing, phaseHistory: [], lastSignalAt: 1, createdAt: 1, updatedAt: 1 })
+  const text = renderFeedback(
+    worker,
+    [{ id: 'c', kind: 'comment', author: 'notmd', body: 'can you also remove this', path: 'README.md', line: 42 }],
+    'pr/7',
+  )
+  assert.match(text, /notmd commented/)
+  assert.match(text, /README\.md:42/, 'the location is stated before the ask')
+  assert.match(text, /can you also remove this/)
+
+  // A comment with no line still names the file rather than printing a bare colon.
+  const noLine = renderFeedback(
+    worker,
+    [{ id: 'c', kind: 'comment', author: 'notmd', body: 'and this one', path: 'a.ts' }],
+    'pr/7',
+  )
+  assert.match(noLine, /\ba\.ts\b/)
+  assert.doesNotMatch(noLine, /a\.ts:/)
+})
+
+test('a worker replying "Fixed in <sha>" inside OUR thread is not routed back to it', () => {
+  // Measured on a live PR, which is why these ids are real rather than invented. The worker
+  // answers each finding by replying in its thread; GitHub files that as a NEW review with a
+  // fresh id, so the parent-review exclusion does not catch it. The worker then received its
+  // own words back attributed to a person ("notmd commented: Fixed in 4b60626..."), and
+  // because the routed list RESETS on every new head, each push re-sent them -- a nudge loop
+  // bounded only by `reviewMaxNudge`.
+  const OURS_REVIEW = '5388158326'
+  const snap = snapshot({
+    reviewComments: [
+      // Our reviewer's finding: the thread root. Excluded as ours.
+      { id: 'PRRC_kwDOU3D4VM74HhjW', restId: '4162722006', reviewId: OURS_REVIEW, author: 'notmd', body: 'this asserts a suite…', path: 'README.md', line: 46, createdAt: '', isBot: false },
+      // The worker's reply to it. Excluded because its thread root is ours.
+      { id: 'PRRC_kwDOU3D4VM74Hi0b', restId: '4162727195', inReplyToId: '4162722006', reviewId: '5388163659', author: 'notmd', body: 'Fixed in 4b60626. The `## Status` lead now reads…', path: 'README.md', line: 46, createdAt: '', isBot: false },
+      // A person's top-level comment: routed.
+      { id: 'PRRC_kwDOU3D4VM74Hk20', restId: '4162735540', reviewId: '5388174157', author: 'notmd', body: 'Can you also mention the typecheck-only command here?', path: 'README.md', line: 48, createdAt: '', isBot: false },
+    ],
+  })
+
+  const ours = new Set([OURS_REVIEW, 'PRR_kwDOU3D4VM8AAAABQSjFdg'])
+  assert.deepEqual(
+    actionableFeedback(snap, [], ours).map((item) => item.id),
+    ['PRRC_kwDOU3D4VM74Hk20'],
+    'the person is routed; our finding and the worker reply are not',
+  )
+})
+
+test('a reply whose thread root we cannot resolve is routed, not dropped', () => {
+  // One level only, and the doubt routes. A reply to a reply is either the worker again or
+  // a person engaging, and the PRD ranks dropping a person's comment as the worse failure.
+  const snap = snapshot({
+    reviewComments: [
+      // A reply to a comment that is NOT in this payload -- an older page, or an id we
+      // cannot place. Nothing says it is ours, so it is actionable.
+      { id: 'PRRC_unknown_root', restId: '900', inReplyToId: '777', reviewId: '55', author: 'notmd', body: 'still not right', path: 'a.ts', line: 9, createdAt: '', isBot: false },
+    ],
+  })
+  assert.equal(actionableFeedback(snap, [], new Set(['5388158326'])).length, 1)
+})
+
+test('a reply to the WORKER\'s own reply is still routed', () => {
+  // The excluded set is the roots of OUR threads only. Once a person replies there, their
+  // reply answers the worker, not our reviewer -- dropping it would silence the person at
+  // the exact moment they are engaging.
+  const snap = snapshot({
+    reviewComments: [
+      { id: 'PRRC_ours', restId: '100', reviewId: '5388158326', author: 'notmd', body: 'finding', path: 'a.ts', line: 1, createdAt: '', isBot: false },
+      { id: 'PRRC_worker_reply', restId: '200', inReplyToId: '100', reviewId: '900', author: 'notmd', body: 'Done in abc123', path: 'a.ts', line: 1, createdAt: '', isBot: false },
+      { id: 'PRRC_person_reply', restId: '300', inReplyToId: '200', reviewId: '901', author: 'notmd', body: 'Not quite — the second paragraph still says otherwise.', path: 'a.ts', line: 1, createdAt: '', isBot: false },
+    ],
+  })
+  assert.deepEqual(
+    actionableFeedback(snap, [], new Set(['5388158326'])).map((item) => item.id),
+    ['PRRC_person_reply'],
+  )
+})
