@@ -45,7 +45,7 @@ flowchart LR
 
 Most of the suite is offline unit tests, but the integration tests (`test/integration/*.test.ts` and `test/host/worktree.integration.test.ts`) create real temporary repositories and run real `git init`/`commit`/`branch`/`worktree`, so `git` has to be installed. Only `gh` and the model provider are mocked, which is why nothing reaches the network.
 
-`npm run verify` is the full gate: typecheck, then tests, then build. `npm run verify:all` goes further: it typechecks `test/` and `fixtures/` as well, and builds the spike.
+`npm run verify` is the full gate: typecheck, then tests, then build. For the typecheck alone, run `npm run typecheck` (source only) or `npm run typecheck:all` (source, tests and fixtures); `npm run verify:all` also builds the spike.
 
 ## Status
 
