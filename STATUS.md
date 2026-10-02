@@ -89,7 +89,7 @@ Scaffolding: `package.json` (bundle manifest, `dsh.bundle.patch`), `cordis.patch
 
 ## 3. Findings worth not rediscovering
 
-> **Read this index first.** The section below is the largest part of this file (~390
+> **Read this index first.** The section below is the largest part of this file (~440
 > lines) and is written as prose, because each finding is a story. But **ten of the
 > findings are one lesson wearing different clothes**, and knowing the shape saves
 > reading them all:
