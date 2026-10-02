@@ -47,6 +47,11 @@ Most of the suite is offline unit tests, but the integration tests (`test/integr
 
 `npm run verify` is the full gate: typecheck, then tests, then build. For the typecheck alone, run `npm run typecheck` (source only) or `npm run typecheck:all` (source, tests and fixtures); `npm run verify:all` also builds the spike.
 
+## Requirements
+
+- **Node 24** — the runtime the sources and tests target: `node --test` loads them through Node 24's built-in type stripping, and DSH's desktop runtime bundles Node 24.18.1.
+- **`git`** — the integration tests run real `git init`/`commit`/`branch`/`worktree`, so a `git` binary must be on `PATH`.
+
 ## Status
 
 Implemented and audited. [STATUS.md](STATUS.md) is the handoff document — what is finished, what is next, and which decisions are deliberate — and the source of truth for the current numbers: at the time of writing, 879 tests, with `npm run verify` and `npm run verify:all` both exiting 0. Open: M6 (the PRD marks it optional), A4 (deliberately left mocked), and two housekeeping items.
