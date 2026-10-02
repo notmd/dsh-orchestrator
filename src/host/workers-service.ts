@@ -224,7 +224,11 @@ export async function startWorkerForTool(
         ...(args.nameTheTask === true ? { nameTheTask: true } : {}),
       })}`,
       hideFromWorkspace: deps.config.hideWorktreeWorkspaces,
-      permissionPreset: deps.config.workerPermissionPreset,
+      // The project's assigned boundary wins over the plugin default, exactly as the agent
+      // preset below does. Read live off the record, so changing it on the settings page
+      // applies to the next worker rather than to the next reload.
+      permissionPreset:
+        repo.workerPermissionPreset !== '' ? repo.workerPermissionPreset : deps.config.workerPermissionPreset,
       // The project's assigned preset wins over the plugin default. This is the
       // "Assignee" row: which agent works this project's issues. Read live off the
       // record, so a change applies to the next worker rather than to the next reload.

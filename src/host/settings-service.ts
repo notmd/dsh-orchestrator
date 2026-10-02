@@ -60,7 +60,12 @@ export interface SettingsView {
    * instead of leaving the user to guess, and so the client never has to know the config
    * layer. Two fields, not the whole config: what the page can display is what it needs.
    */
-  defaults: { autoReview: boolean; workerAgentPreset: string; reviewerAgentPreset: string }
+  defaults: {
+    autoReview: boolean
+    workerAgentPreset: string
+    workerPermissionPreset: string
+    reviewerAgentPreset: string
+  }
 }
 
 /** A refusal the route answers with, rather than throwing. */
@@ -159,6 +164,7 @@ export function settingsDefaults(config: PluginConfig): SettingsView['defaults']
   return {
     autoReview: config.autoReview,
     workerAgentPreset: config.workerAgentPreset,
+    workerPermissionPreset: config.workerPermissionPreset,
     reviewerAgentPreset: config.reviewerAgentPreset,
   }
 }

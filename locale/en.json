@@ -80,5 +80,8 @@
   "orchestrator.task.cancel": "Cancel",
   "orchestrator.task.start": "Start task",
   "orchestrator.task.starting": "Starting…",
-  "orchestrator.task.failed": "Could not create the task: {message}"
+  "orchestrator.task.failed": "Could not create the task: {message}",
+  "orchestrator.settings.workerPermissions": "Worker permissions",
+  "orchestrator.settings.workerPermissionsHint": "Sandbox and approval boundary this project’s workers run under. A worker commits and pushes, and a linked worktree’s git data lives in the parent repository, so a worktree-scoped sandbox cannot complete a stage.",
+  "orchestrator.settings.workerPermissionsDefault": "default"
 }

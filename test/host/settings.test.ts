@@ -85,6 +85,7 @@ test('the payload names the project and serializes its settings', async () => {
     sessionPrefix: '',
     intakeEnabled: true,
     workerAgentPreset: '',
+    workerPermissionPreset: '',
     reviewerAgentPreset: '',
     autoReview: null,
   })

@@ -92,13 +92,20 @@ interface SettingsPayload {
     sessionPrefix: string
     intakeEnabled: boolean
     workerAgentPreset: string
+    /** The boundary a worker runs under. Empty = the plugin default. */
+    workerPermissionPreset: string
     /** The preset this project's reviewer runs as. Empty = the plugin default. */
     reviewerAgentPreset: string
     /** `null` means "inherit the plugin default"; it is not `false`. */
     autoReview: boolean | null
   } | null
   /** The plugin defaults an unset per-project override falls back to, so the page can name them. */
-  defaults: { autoReview: boolean; workerAgentPreset: string; reviewerAgentPreset: string }
+  defaults: {
+    autoReview: boolean
+    workerAgentPreset: string
+    workerPermissionPreset: string
+    reviewerAgentPreset: string
+  }
 }
 
 /** One workspace the person already uses, as `/dsho/api/workspaces` serialises it. */
@@ -246,6 +253,9 @@ const FALLBACK: Record<string, string> = {
   'orchestrator.settings.assignee': 'Assignee',
   'orchestrator.settings.assigneeHint': 'Agent preset for this project\u2019s workers.',
   'orchestrator.settings.assigneeDefault': 'default',
+  'orchestrator.settings.workerPermissions': 'Worker permissions',
+  'orchestrator.settings.workerPermissionsHint': 'Sandbox and approval boundary this project\u2019s workers run under. A worker commits and pushes, and a linked worktree\u2019s git data lives in the parent repository, so a worktree-scoped sandbox cannot complete a stage.',
+  'orchestrator.settings.workerPermissionsDefault': 'default',
   'orchestrator.settings.autoReview': 'Auto review PRs',
   'orchestrator.settings.reviewers': 'Reviewers',
   'orchestrator.settings.defaultReviewer': 'Default reviewer',
@@ -2044,6 +2054,25 @@ loader.load({
                     : settings.workerAgentPreset,
                 placeholder: payload.defaults.workerAgentPreset,
                 onCommit: (next: string) => save({ workerAgentPreset: next }),
+              }),
+            ),
+            h(
+              SettingsRow,
+              {
+                label: translate('orchestrator.settings.workerPermissions'),
+                hint: translate('orchestrator.settings.workerPermissionsHint'),
+                error: fieldError('workerPermissionPreset'),
+              },
+              h(InlineEdit, {
+                id: 'dsho-worker-permissions',
+                label: translate('orchestrator.settings.workerPermissions'),
+                value: settings.workerPermissionPreset,
+                display:
+                  settings.workerPermissionPreset === ''
+                    ? `${translate('orchestrator.settings.workerPermissionsDefault')} (${payload.defaults.workerPermissionPreset})`
+                    : settings.workerPermissionPreset,
+                placeholder: payload.defaults.workerPermissionPreset,
+                onCommit: (next: string) => save({ workerPermissionPreset: next }),
               }),
             ),
           ],

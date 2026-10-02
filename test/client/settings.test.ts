@@ -118,7 +118,7 @@ test('the dialog is a labelled modal and every input has an accessible name', ()
   assert.match(client, /'aria-labelledby': 'dsho-settings-title'/)
   // The three inline editors each pass the row's own label as the input's aria-label.
   const inlineEdits = [...client.matchAll(/h\(InlineEdit, \{[\s\S]*?\}\)/g)]
-  assert.equal(inlineEdits.length, 4, 'branch, prefix, assignee and reviewer')
+  assert.equal(inlineEdits.length, 5, 'branch, prefix, assignee, worker permissions and reviewer')
   for (const [block] of inlineEdits) assert.match(block, /label: translate\('orchestrator\.settings\./)
 })
 
@@ -207,7 +207,15 @@ test('a failed save is reported on the row that caused it', () => {
   assert.match(dialog, /const fields = Object\.keys\(patch\)/, 'the save records which keys it sent')
   assert.match(dialog, /status\.fields\?\.includes\(field\) === true/, 'and a row asks whether it was one of them')
   const wired = [...client.matchAll(/fieldError\('([A-Za-z]+)'\)/g)].map((match) => match[1])
-  assert.deepEqual(wired.sort(), ['autoReview', 'defaultBranch', 'intakeEnabled', 'reviewerAgentPreset', 'sessionPrefix', 'workerAgentPreset'])
+  assert.deepEqual(wired.sort(), [
+    'autoReview',
+    'defaultBranch',
+    'intakeEnabled',
+    'reviewerAgentPreset',
+    'sessionPrefix',
+    'workerAgentPreset',
+    'workerPermissionPreset',
+  ])
   // The row renders it in place of the hint, not below it: stacking both makes one row
   // taller than the rest and buries the message.
   const row = functionBody(client, 'function SettingsRow(')

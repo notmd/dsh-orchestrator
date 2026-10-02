@@ -180,7 +180,9 @@ test('the verified constants match the PRD §13 values', () => {
   assert.equal(PLUGIN_DEFAULTS.maxReportCharacters, 1_000)
   assert.equal(PLUGIN_DEFAULTS.pollIntervalMs, 30_000)
   assert.equal(PLUGIN_DEFAULTS.maxConcurrentWorkers, 2)
-  assert.equal(PLUGIN_DEFAULTS.workerPermissionPreset, 'workspace-write')
+  // Deliberately NOT the PRD's `workspace-write`: a linked worktree's git data lives in the
+  // parent repo, so a worktree-scoped sandbox cannot run `git add`/`commit`/`push` at all.
+  assert.equal(PLUGIN_DEFAULTS.workerPermissionPreset, 'danger-full-access')
   assert.equal(PLUGIN_DEFAULTS.reviewerPermissionPreset, 'read-only')
   assert.equal(PLUGIN_DEFAULTS.webhook.enabled, false)
 })
@@ -280,7 +282,7 @@ test('REPO_CONFIG_DEFAULTS is not mutated by normalization', () => {
 
 test('resolvePermissionPresets: the worker writes, the reviewer does not', () => {
   const presets = resolvePermissionPresets({})
-  assert.equal(presets.workerPermissionPreset, 'workspace-write')
+  assert.equal(presets.workerPermissionPreset, 'danger-full-access')
   assert.equal(presets.reviewerPermissionPreset, 'read-only')
   assert.notEqual(
     presets.workerPermissionPreset,

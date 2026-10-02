@@ -80,5 +80,8 @@
   "orchestrator.task.cancel": "取消",
   "orchestrator.task.start": "开始任务",
   "orchestrator.task.starting": "正在开始…",
-  "orchestrator.task.failed": "无法创建任务：{message}"
+  "orchestrator.task.failed": "无法创建任务：{message}",
+  "orchestrator.settings.workerPermissions": "工作者权限",
+  "orchestrator.settings.workerPermissionsHint": "本项目工作者运行所用的沙箱与审批边界。工作者需要提交并推送，而链接工作树的 git 数据位于父仓库中，因此仅限工作树的沙箱无法完成阶段。",
+  "orchestrator.settings.workerPermissionsDefault": "默认"
 }

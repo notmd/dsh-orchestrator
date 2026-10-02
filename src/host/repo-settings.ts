@@ -13,6 +13,7 @@
  * | `sessionPrefix` | `WorktreeManager.create` → `branchName`, as the branch's namespace segment |
  * | `intakeEnabled` | `fillSlots`, which auto-spawns workers for queued issues |
  * | `workerAgentPreset` | the spawn recipe, as the worker session's agent preset |
+ * | `workerPermissionPreset` | `workers-service`, as the sandbox/approval boundary a worker is created under |
  * | `autoReview` | `startReviewPass`, as the per-repo override of the plugin default |
  *
  * The remaining `RepoConfig` fields (`verifyCommands` excepted, which lives on the
@@ -77,6 +78,23 @@ export interface ProjectSettings {
   /** The agent preset this project's workers run as. Empty = the plugin default. */
   workerAgentPreset: string
   /**
+   * The PERMISSION preset this project's workers run under. Empty = the plugin default.
+   *
+   * Per project because the right answer is a property of the repository, not the install:
+   * a throwaway sandbox repo and a monorepo with production credentials in `.env` should not
+   * be forced to share one boundary.
+   *
+   * The plugin default is `danger-full-access`, and that is not laziness. A worker commits
+   * and pushes, and a **linked git worktree keeps no git data of its own** — its `.git` is a
+   * one-line `gitdir:` pointer into the PARENT repository's `.git/worktrees/<name>`. Under
+   * `workspace-write` the index, refs and objects are all outside the sandbox root, so
+   * `git add`, `git commit` and `git push` are refused and the worker stalls on an approval
+   * prompt that no one is there to answer. The stages this plugin exists to run cannot
+   * complete under a worktree-scoped sandbox, so the honest default is the one that works;
+   * a project that wants a tighter boundary sets it here.
+   */
+  workerPermissionPreset: string
+  /**
    * The agent preset this project's REVIEWER runs as. Empty = the plugin default.
    *
    * PRD §13.1 requires this per repo -- "a heavy repo can use a stricter reviewer" -- and
@@ -95,6 +113,7 @@ export const PROJECT_SETTINGS_KEYS = Object.freeze([
   'sessionPrefix',
   'intakeEnabled',
   'workerAgentPreset',
+  'workerPermissionPreset',
   'reviewerAgentPreset',
   'autoReview',
 ] as const)
@@ -115,6 +134,7 @@ export const PROJECT_SETTINGS_DEFAULTS: Readonly<ProjectSettings> = Object.freez
   sessionPrefix: '',
   intakeEnabled: true,
   workerAgentPreset: '',
+  workerPermissionPreset: '',
   reviewerAgentPreset: '',
   autoReview: undefined,
 })
@@ -136,6 +156,10 @@ export function normalizeProjectSettings(raw: unknown): ProjectSettings {
     intakeEnabled:
       typeof record.intakeEnabled === 'boolean' ? record.intakeEnabled : PROJECT_SETTINGS_DEFAULTS.intakeEnabled,
     workerAgentPreset: asString(record.workerAgentPreset, PROJECT_SETTINGS_DEFAULTS.workerAgentPreset),
+    workerPermissionPreset: asString(
+      record.workerPermissionPreset,
+      PROJECT_SETTINGS_DEFAULTS.workerPermissionPreset,
+    ),
     reviewerAgentPreset: asString(record.reviewerAgentPreset, PROJECT_SETTINGS_DEFAULTS.reviewerAgentPreset),
     autoReview: typeof record.autoReview === 'boolean' ? record.autoReview : undefined,
   }
@@ -186,6 +210,9 @@ export function applyProjectSettingsPatch(current: ProjectSettings, patch: unkno
   if ('sessionPrefix' in record) next.sessionPrefix = validatePrefix(record.sessionPrefix)
   if ('intakeEnabled' in record) next.intakeEnabled = validateBoolean('intakeEnabled', record.intakeEnabled)
   if ('workerAgentPreset' in record) next.workerAgentPreset = validatePreset('workerAgentPreset', record.workerAgentPreset)
+  if ('workerPermissionPreset' in record) {
+    next.workerPermissionPreset = validatePreset('workerPermissionPreset', record.workerPermissionPreset)
+  }
   if ('reviewerAgentPreset' in record) next.reviewerAgentPreset = validatePreset('reviewerAgentPreset', record.reviewerAgentPreset)
   if ('autoReview' in record) next.autoReview = validateOverride('autoReview', record.autoReview)
 
@@ -296,6 +323,7 @@ export function serializeProjectSettings(settings: ProjectSettings): Record<stri
     sessionPrefix: normalized.sessionPrefix,
     intakeEnabled: normalized.intakeEnabled,
     workerAgentPreset: normalized.workerAgentPreset,
+    workerPermissionPreset: normalized.workerPermissionPreset,
     reviewerAgentPreset: normalized.reviewerAgentPreset,
     autoReview: normalized.autoReview ?? null,
   }

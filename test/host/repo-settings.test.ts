@@ -34,6 +34,7 @@ test('a record that predates the settings reads as the defaults', () => {
     sessionPrefix: '',
     intakeEnabled: true,
     workerAgentPreset: '',
+    workerPermissionPreset: '',
     reviewerAgentPreset: '',
     autoReview: undefined,
   })
@@ -54,6 +55,7 @@ test('a patch writes each field, and trims it', () => {
     sessionPrefix: ' web ',
     intakeEnabled: false,
     workerAgentPreset: '  strict  ',
+    workerPermissionPreset: '  workspace-write  ',
     reviewerAgentPreset: '  strict-reviewer  ',
     autoReview: true,
   })
@@ -61,8 +63,34 @@ test('a patch writes each field, and trims it', () => {
   assert.equal(next.sessionPrefix, 'web')
   assert.equal(next.intakeEnabled, false)
   assert.equal(next.workerAgentPreset, 'strict')
+  assert.equal(next.workerPermissionPreset, 'workspace-write')
   assert.equal(next.reviewerAgentPreset, 'strict-reviewer')
   assert.equal(next.autoReview, true)
+})
+
+test('the permission preset is its own key, refused by name and clearable', () => {
+  // The bug this prevents: a page that put the AGENT preset in the permission field, or the
+  // reverse, would be accepted by a shared field and would run the right agent under the
+  // wrong boundary -- which is a security-relevant mix-up, not a cosmetic one.
+  const error = refusal({ workerPermissionPreset: true })
+  assert.equal(error.key, 'workerPermissionPreset')
+  assert.match(error.problem, /must be a string/)
+
+  const cleared = applyProjectSettingsPatch(
+    { ...PROJECT_SETTINGS_DEFAULTS, workerPermissionPreset: 'read-only' },
+    { workerPermissionPreset: '' },
+  )
+  assert.equal(cleared.workerPermissionPreset, '', 'empty means the plugin default')
+  assert.equal(serializeProjectSettings(cleared).workerPermissionPreset, '')
+
+  // Setting one must not disturb the other: they are adjacent on the page and mean very
+  // different things.
+  const both = applyProjectSettingsPatch(PROJECT_SETTINGS_DEFAULTS, {
+    workerAgentPreset: 'strict',
+    workerPermissionPreset: 'danger-full-access',
+  })
+  assert.equal(both.workerAgentPreset, 'strict')
+  assert.equal(both.workerPermissionPreset, 'danger-full-access')
 })
 
 test('the reviewer preset is its own key, refused by name and clearable', () => {

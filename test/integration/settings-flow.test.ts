@@ -61,10 +61,18 @@ function scratchRepo(): string {
 function spawnFixture() {
   /** Every `agentPresets.resolve()` argument, in order: worker first, then the reviewer. */
   const resolvedPresets: string[] = []
+  /** Every `permissionPresets.set()` NAME, in spawn order. */
+  const appliedPermissions: string[] = []
   return {
     resolvedPresets,
+    appliedPermissions,
     deps: {
-      permissionPresets: { resolve: () => undefined, set() {} },
+      permissionPresets: {
+        resolve: () => undefined,
+        set(_session: unknown, name: string) {
+          appliedPermissions.push(name)
+        },
+      },
       agentPresets: {
         async resolve(name: string) {
           resolvedPresets.push(name)
@@ -181,6 +189,29 @@ test('the assignee preset reaches the spawn, and clearing it returns to the plug
   await updateProjectSettings(deps as never, { repoId: repo.id, patch: { workerAgentPreset: '' } })
   await startWorkerForTool(deps as never, { title: 'Two' })
   assert.equal(spawn.resolvedPresets[1], deps.config.workerAgentPreset, 'and empty falls back to the plugin default')
+})
+
+test('the WORKER permission preset reaches the spawn, per project, and clearing it returns to the default', async () => {
+  // This one is not cosmetic either. A worker commits and pushes, and a linked git worktree
+  // keeps no git data of its own -- its `.git` points into the PARENT repo, so a
+  // worktree-scoped sandbox refuses `git add`/`commit`/`push` and the worker stalls on an
+  // approval nobody answers. The preset that reaches the spawn is therefore the difference
+  // between a stage that can finish and one that cannot.
+  const { deps, repo, spawn } = await harness()
+  assert.deepEqual(spawn.appliedPermissions, [], 'nothing applied yet')
+
+  await updateProjectSettings(deps as never, { repoId: repo.id, patch: { workerPermissionPreset: 'read-only' } })
+  await startWorkerForTool(deps as never, { title: 'One' })
+  assert.deepEqual(spawn.appliedPermissions, ['read-only'], 'the project boundary is the one applied')
+
+  await updateProjectSettings(deps as never, { repoId: repo.id, patch: { workerPermissionPreset: '' } })
+  await startWorkerForTool(deps as never, { title: 'Two' })
+  assert.equal(
+    spawn.appliedPermissions[1],
+    deps.config.workerPermissionPreset,
+    'and empty falls back to the plugin default',
+  )
+  assert.equal(deps.config.workerPermissionPreset, 'danger-full-access', 'which is full access, so a stage can finish')
 })
 
 test('the REVIEWER preset reaches the reviewer spawn, per project', async () => {

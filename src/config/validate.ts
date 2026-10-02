@@ -104,7 +104,19 @@ export const PLUGIN_DEFAULTS: Readonly<PluginConfig> = Object.freeze({
   defaultRepo: '',
   pollIntervalMs: 30_000,
   maxConcurrentWorkers: 2,
-  workerPermissionPreset: 'workspace-write',
+  /**
+   * Full access, because a worker's own workflow cannot complete without it.
+   *
+   * A linked git worktree keeps no git data of its own: `.git` in the worktree is a
+   * one-line `gitdir:` pointer into the PARENT repo's `.git/worktrees/<name>`. Under
+   * `workspace-write` the sandbox root is the worktree, so the index, refs and objects
+   * git must write are all outside it — `git add`, `git commit` and `git push` are
+   * refused, the worker escalates, and `approval: ask` stalls it on a prompt no one is
+   * there to answer. The pipeline this plugin exists to run cannot finish that way, so
+   * the default is the boundary that works. Per project via
+   * `workerPermissionPreset` in the settings page.
+   */
+  workerPermissionPreset: 'danger-full-access',
   workerAgentPreset: 'standard',
   planGate: 'notify',
   autoInjectReview: true,
