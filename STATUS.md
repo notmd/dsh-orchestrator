@@ -73,7 +73,7 @@ blocked upstream (G5's merge precondition and G1's conditional-request path). §
 | 6s.1 | **One board per project, not one global board.** A connected project gets a sidebar row AND a `main` keyed panel, addressed by the same id (`orchestrator:<repoId>`); the host scopes the cards, lanes, archive and counts by `?repoId=`, and the project list on every snapshot stays complete so the row list is never scoped by whichever panel polled last. The global row is gone: it could not answer "which project is this?" | **live** (two seeded projects: each row opened its own board and its own settings dialog) + 8 executable client tests against a fake `ctx.slots`, and 7 host scoping tests |
 | 6t | **The panel renders in a real GUI.** Module loaded, nav row present, selection works, and the panel shows its heading, count and empty state | **live** |
 | 6u | **The whole path, end to end.** A host spike drove `connectRepo → createIssue → startWorker → buildBoard` against the real services: a real worktree, a real session, and a card in `building` reading `Awaiting PR` | **live**; found a real argv bug |
-| 6v / 6v.3 | **The lane sequence, closed in chunk 41.** The worker opens a PR (`gh pr create`), the observer sees it, the review sweep schedules a pass, and the card visibly moves `building → validating (Review scheduled) → validating (Reviewing) → needs_review (Needs human review)` — plus the failed-pass path. The half after `worker_start` had never executed before chunk 41. | §7.5, §7.6, A13, A17 — **CLOSED, verified live**; see chunk 41 for the trace. The lane spike needed its own storage domain because **a storage domain can only be opened once per process**, and the plugin's own `~/.dsh/storages/dsho.json` still holds test rows. |
+| 6v / 6v.3 | **The lane sequence, closed in chunk 41.** The worker opens a PR (`gh pr create`), the observer sees it, the review sweep schedules a pass, and the card visibly moves `building → validating (Review scheduled) → validating (Reviewing) → needs_review (Needs human review)` — plus the failed-pass path. The half after `worker_start` had never executed before chunk 41. | §7.5, §7.6, A13, A17 — **CLOSED, verified live**; see chunk 41 for the trace. The lane spike needed its own storage domain because **a storage domain can only be opened once per process**, and the plugin's own `~/.dsh/storages/dsho.json` now carries the plugin's live records rather than any spike rows (§4). |
 | 13 | **M2's inspector renders.** It was implemented and building but unrendered: seeding a card pointed the lane spike at the plugin's own domain, and the plugin's endpoint began answering "domain 'dsho' is already open". The spike now writes to its OWN domain. | §11.2, M2 — **CLOSED**: rendered and driven by keyboard in a live GUI (`83b7a47`, `f278330`). |
 
 Spikes: **M0 spike 1** (the panel seat is real) and **M0 spike 2**
@@ -334,12 +334,18 @@ a test easier, establish what the boundary was protecting.**
 **Registering something is easier than unregistering it.** The spikes left rows in two
 storage domains *and* workspace entries in the profile's live `workspace.json`. The
 domains were removable because their rows pointed at throwaway `/tmp` paths — a deletion
-guarded by the data rather than by the intention. The workspace entries are not: that
-file is a running service's own bookkeeping, and hand-editing it would mean
-reimplementing the registry from outside with the user's real workspaces in the same
-table. **A spike that registers through a service needs a way to unregister through it**,
-and M0 spikes should prefer paths nothing else indexes.
+guarded by the data rather than by the intention. The workspace entries looked like they
+were not: that file is a running service's own bookkeeping, and hand-editing it would
+mean reimplementing the registry from outside with the user's real workspaces in the
+same table. They turned out to be removable **through** the service — `Workspace.delete`
+removed every `/tmp/dsho-*` registration and the user's four real workspaces survived
+(`b4ab859`) — so the earlier "not removable" reading was wrong: the file was off-limits,
+not the operation. **A spike that registers through a service needs a way to unregister
+through it**; prefer that to reaching into its state file, and when it exposes no such
+operation, say so rather than editing the file. M0 spikes should prefer paths nothing
+else indexes.
 
+**Two green halves that disagreed with each other.** The observer writes a PR snapshot
 under `snapshotKey(workerId)`; the board read them by matching the snapshot's url to
 `worker.pr.url`. Those differ in the **normal** case — one comes from the worker's
 report, the other from the provider — so a real pull request never moved a card, with
