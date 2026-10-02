@@ -58,6 +58,13 @@ interface CardView {
   showStatusLoader: boolean
   isFinished: boolean
   escalationReason?: string
+  /**
+   * What is left before the merge, when the card is waiting on one.
+   *
+   * Mirrors `BoardCardView.mergeBlockers`, read from the chosen pull request so it
+   * describes the same PR the card's phrase does (finding G3).
+   */
+  mergeBlockers?: readonly string[]
   /** The worker's branch. Mirrors `BoardCardView.branch`. */
   branch?: string
   /** Humans who reviewed, never bots. Mirrors `BoardCardView.reviewers`. */
@@ -225,6 +232,14 @@ const FALLBACK: Record<string, string> = {
   'orchestrator.inspector.noReview': 'No automated review has run at this commit.',
   'orchestrator.inspector.noFindings': 'No findings recorded for this commit.',
   'orchestrator.inspector.review': 'review {id}',
+  'orchestrator.inspector.mergeBlockers': 'What is left before the merge',
+  'orchestrator.blocker.conflicting': 'the branch conflicts with its base',
+  'orchestrator.blocker.draft': 'it is still a draft',
+  'orchestrator.blocker.ci_failing': 'checks are failing',
+  'orchestrator.blocker.changes_requested': 'changes were requested',
+  'orchestrator.blocker.review_required': 'a review is required',
+  'orchestrator.blocker.provider_blocked': 'the provider reports it as blocked',
+  'orchestrator.blocker.unknown_state': 'the provider has not worked out mergeability yet',
   'orchestrator.inspector.close': 'Close',
   'orchestrator.connect.title': 'Orchestrator projects',
   'orchestrator.connect.sub': 'Connect a checkout to start orchestrating it.',
@@ -1229,6 +1244,7 @@ loader.load({
       const card = props.card
       const review = card.review
       const findings = review?.findings ?? []
+      const blockers = card.mergeBlockers ?? []
       const tone = toneOf(card)
       return h(
         'aside',
@@ -1268,6 +1284,23 @@ loader.load({
                     finding.path ? ` · ${finding.path}${finding.line ? `:${finding.line}` : ''}` : '',
                   ),
                   `${finding.summary}: ${finding.detail}`,
+                ),
+              ),
+            ),
+        // The reasons, when the card is waiting on a merge. Rendered below the findings
+        // because it answers the question the phrase raises ("Mergeable — and if not,
+        // what?") and a machine reading the user cannot inspect is one they cannot act on.
+        blockers.length === 0
+          ? null
+          : h(
+              'div',
+              { className: 'dsho-inspector__blockers' },
+              h('strong', { className: 'dsho-sub' }, translate('orchestrator.inspector.mergeBlockers')),
+              h(
+                'ul',
+                { className: 'dsho-inspector__findings' },
+                ...blockers.map((blocker, index) =>
+                  h('li', { key: `${blocker}:${index}`, className: 'dsho-note' }, translate(`orchestrator.blocker.${blocker}`)),
                 ),
               ),
             ),

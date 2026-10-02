@@ -34,13 +34,20 @@
 import { newId } from '../domain/ids.ts'
 import { normalizeIssue } from '../domain/issues.ts'
 import { normalizeRepo } from './repo.ts'
-import { normalizeWorker } from '../domain/workers.ts'
+import {
+  WorkerPhase,
+  isTerminalPhase,
+  isValidPhaseTransition,
+  normalizeWorker,
+  setPhase,
+} from '../domain/workers.ts'
 import type { Worker } from '../domain/workers.ts'
 import { reviewerSystemPrompt, reviewerTaskMessage } from '../domain/reviewer-contract.ts'
 import type { ReviewRun } from '../review/runs.ts'
 import { ReviewRunStatus, ReviewVerdict, changesRequestedCycles, isVerdict } from '../review/runs.ts'
 import { evaluateSession } from '../review/planner.ts'
 import type { PRFactsForPlan } from '../review/planner.ts'
+import { advanceWorkerPhase } from './phase-write.ts'
 import { spawnWorker } from './spawn.ts'
 import type { SpawnDeps, SpawnedWorker } from './spawn.ts'
 import type { LazyFactStore } from './store.ts'
@@ -175,7 +182,11 @@ export async function startReviewPass(
     session: {
       autoReview: true,
       kind: 'worker',
-      isTerminated: false,
+      // Derived from the phase, never hardcoded. §12.3 lists this flag as one of the
+      // overlapping terminal representations; this is the one place it is handed to
+      // the planner, and pinning it to `false` made a finished worker permanently
+      // reviewable.
+      isTerminated: isTerminalPhase(worker.phase),
       activity,
       lastActivityAt: worker.lastSignalAt,
       reviewerHarness: reviewerPreset,
@@ -251,6 +262,19 @@ export async function startReviewPass(
   }
   await store.reviewRuns.put(runId, run)
   deps.live?.register({ workerId: `reviewer:${runId}`, sessionId, handle: spawned.handle, ...(spawned.scope ? { scope: spawned.scope } : {}) })
+
+  // §12.1's first named producer: the reviewer service owns `awaiting_auto_review`.
+  // The phase means "our own pass is the next turn on this pull request", which is
+  // exactly what has just been arranged. Guarded rather than assumed, because a
+  // worker can be further along than its pull request was (a re-review of a merged
+  // PR, a forced pass on a finished worker) and the write must not be the thing that
+  // decides whether that is legal.
+  if (isValidPhaseTransition(worker.phase, WorkerPhase.awaitingAutoReview)) {
+    await store.workers.put(
+      worker.id,
+      setPhase(worker, WorkerPhase.awaitingAutoReview, `review pass scheduled for ${headSha.slice(0, 7)}`, at),
+    )
+  }
 
   return [
     `Review scheduled for ${repository}#${worker.pr.number} at ${headSha.slice(0, 7)} (round ${round}).`,
@@ -377,6 +401,10 @@ async function routeFindingsToWorker(
         'Fix these, push, and the new commit will be reviewed again.',
     ),
   )
+  // §12.1's second named producer: routing findings back to the worker *is* the
+  // transition into `addressing_feedback`. Recorded only after the follow-up was
+  // actually delivered, so the phase never claims a loop that was merely intended.
+  await advanceWorkerPhase(deps.store, run.workerId, WorkerPhase.addressingFeedback, 'addressing review findings', (deps.now ?? Date.now)())
   return `Routed ${(completed.findings ?? []).length} finding(s) to ${run.workerId}.`
 }
 
@@ -409,6 +437,20 @@ export async function reportReviewFailure(
       candidate.triggerSource !== 'manual',
   ).length
   const remaining = Math.max(0, deps.config.autoReviewFailedRetryLimit - autoFailures)
+
+  // The genuine `failed` path §12.1 asks for. PRD §8 has exactly this edge —
+  // `awaiting_auto_review --> failed: reviewer failed, rounds exhausted` — and until now
+  // nothing wrote it: a pass that kept failing left the worker claiming a loop that had
+  // stopped. Only the LAST failure crosses it, because one failure is a retry.
+  if (remaining === 0) {
+    await advanceWorkerPhase(
+      deps.store,
+      run.workerId,
+      WorkerPhase.failed,
+      `review failed ${autoFailures}× at ${run.headSha.slice(0, 7)} with no budget left`,
+      at,
+    )
+  }
 
   return [
     `Recorded a failed pass for ${run.workerId} at ${run.headSha.slice(0, 7)}${args.reason ? `: ${args.reason}` : '.'}`,

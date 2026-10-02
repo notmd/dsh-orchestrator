@@ -30,13 +30,15 @@ import type { PluginConfig, PluginConfigInput } from './config/validate.ts'
 import type { HostContext } from './host/context.ts'
 import { own } from './host/context.ts'
 import { buildOrchestratorTools } from './host/tools.ts'
-import { createRunCommand } from './host/exec.ts'
+import { createRateLimitCooldown, createRunCommand } from './host/exec.ts'
+import { githubTokenChain } from './github/auth.ts'
 import { createSpawnDeps } from './host/spawn-deps.ts'
 import { createLiveWorkers } from './host/handle-registry.ts'
 import { OUTBOX_TICK_MS, deliverPendingReports } from './host/outbox-service.ts'
 import { observeAll } from './host/observer-service.ts'
 import { sweepReviewPasses } from './host/reviewer-service.ts'
 import { sweepCompletions } from './host/completion.ts'
+import { sweepMergeReadiness } from './host/merge-readiness.ts'
 import { sweepHumanFeedback } from './host/feedback-service.ts'
 import { fillSlots } from './host/workers-service.ts'
 import { createBoardRoute } from './host/board-route.ts'
@@ -120,7 +122,20 @@ export function apply(ctx: HostContext, config?: PluginConfigInput): PluginConfi
   // stateless; the store is opened on first use so that activation stays
   // synchronous and a storage problem surfaces at a tool call, where the user can
   // act on it, rather than at load time where it would disable the plugin.
-  const run = createRunCommand({ subprocess: ctx.subprocess, cwd: resolved.defaultRepo || process.cwd() })
+  // Two command seams, deliberately. The chain resolves its credential by running
+  // `gh auth token` — so it must be built over a seam that does NOT inject a token, or it
+  // would resolve its own output. `run` is the seam every plugin call uses: it injects the
+  // resolved credential as `GH_TOKEN` for `gh` (finding G6 — DSH strips credential-shaped
+  // names from a child's environment, so the ported chain was dead code and a project-scoped
+  // `AO_GITHUB_TOKEN` reached nothing), and it drops the memo when GitHub rejects it, so a
+  // rotated token is picked up without a restart.
+  const cwd = resolved.defaultRepo || process.cwd()
+  const baseRun = createRunCommand({ subprocess: ctx.subprocess, cwd })
+  const credentials = githubTokenChain({ env: process.env, run: baseRun })
+  const run = createRunCommand({ subprocess: ctx.subprocess, cwd, token: credentials })
+  // One back-off clock for the whole install (finding G7): GitHub's limit is per credential,
+  // so one worker being throttled means every worker will be.
+  const cooldown = createRateLimitCooldown()
   const store = lazyFactStore(() => openFactStore({ facility: ctx.storageDomain, schemas: FACT_SCHEMAS }))
   const spawn = createSpawnDeps(ctx)
   const live = createLiveWorkers()
@@ -256,8 +271,17 @@ export function apply(ctx: HostContext, config?: PluginConfigInput): PluginConfi
       // limit. A failed observation keeps the prior snapshot (R13), so a GitHub
       // outage degrades the board to `No signal` instead of fabricating a merge.
       const observer = setInterval(() => {
-        void observeAll({ store, run })
+        void observeAll({ store, run, cooldown })
           .then((outcome) => {
+            // A throttled credential is reported once per tick and nothing is attempted, which
+            // is what `describeFailure` promises the user on a rate-limited call.
+            if (outcome.rateLimited) {
+              log(ctx, 'warn', `${name}: GitHub rate limit is active; pull-request observation is paused`)
+              return
+            }
+            if (outcome.recovered.length > 0) {
+              log(ctx, 'info', `${name}: recovered ${outcome.recovered.length} unbound pull request(s)`)
+            }
             const changed = outcome.observations.filter((observation) => observation.changed)
             if (changed.length > 0) {
               log(ctx, 'info', `${name}: ${changed.length} pull request(s) changed`)
@@ -317,6 +341,24 @@ export function apply(ctx: HostContext, config?: PluginConfigInput): PluginConfi
       }, resolved.pollIntervalMs)
       completion.unref?.()
 
+      // Merge readiness (§12.1). The declared phase axis and the derived lane must not
+      // drift apart, so this reconciles one against the other — the SAME reducer that
+      // draws the card decides when the phase becomes `merge_ready`, and takes it back
+      // out again when the card leaves `Ready`. Runs on the PR cadence, not the review
+      // cadence, because it is a function of provider facts.
+      const readiness = setInterval(() => {
+        void sweepMergeReadiness({ store, config: resolved, activityOf: boardDeps.activityOf })
+          .then((outcomes) => {
+            for (const outcome of outcomes) {
+              log(ctx, 'info', `${name}: ${outcome.workerId} is now ${outcome.phase} (${outcome.reason})`)
+            }
+          })
+          .catch((error: unknown) => {
+            log(ctx, 'warn', `${name}: the merge-readiness sweep failed: ${String(error)}`)
+          })
+      }, resolved.pollIntervalMs)
+      readiness.unref?.()
+
       // The review sweep. This is the loop that makes the requested flow happen
       // without a human: every worker whose current head has no pass gets one, and
       // the per-worker decision (one pass per head, retry limits, the round cap) is
@@ -343,6 +385,7 @@ export function apply(ctx: HostContext, config?: PluginConfigInput): PluginConfi
         clearInterval(completion)
         clearInterval(feedback)
         clearInterval(slots)
+        clearInterval(readiness)
         clearInterval(reviewer)
         for (const dispose of disposers) dispose()
         // A9: unloading leaves sessions and worktrees INTACT. Disposing an agent

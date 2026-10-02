@@ -18,6 +18,7 @@ import {
   DisplayStatus,
   KANBAN_LANES,
   KanbanColumn,
+  chosenKanbanPR,
   deriveKanbanPresentation,
   prFacts,
 } from '../contract/kanban.ts'
@@ -332,6 +333,8 @@ export interface BoardCardView {
   isFinished: boolean
   /** Why the automated loop stopped, if it did. */
   escalationReason?: 'review-round-limit' | 'review-failed-retry-limit'
+  /** What is left before the merge, when the card is waiting on one. */
+  mergeBlockers?: readonly string[]
   prs: readonly KanbanPRFacts[]
 }
 
@@ -379,6 +382,13 @@ export function presentCard(
     prs,
   }
   if (derived.escalationReason) view.escalationReason = derived.escalationReason
+  // Read from the CHOSEN pull request — the one whose facts drew the column — through the
+  // SAME ranking the reducer used, so the reasons describe the same PR the phrase above
+  // them does. Empty is omitted rather than sent as an empty list, because every reader
+  // treats absence as "nothing to say" and a present-but-empty array as a promise that
+  // there was something to look at.
+  const blockers = chosenKanbanPR(session, prs)?.chosen.mergeBlockers ?? []
+  if (blockers.length > 0) view.mergeBlockers = blockers
   return view
 }
 

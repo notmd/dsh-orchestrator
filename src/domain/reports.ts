@@ -62,6 +62,8 @@ export interface Report {
   issueId: string
   /** Absent when the report only attaches an output. */
   state?: ReportState
+  /** The pipeline stage the worker declared, when it declared one. */
+  stage?: ReportStage
   note: string
   /** True when `note` was longer than the cap and had to be shortened. */
   truncated?: boolean
@@ -132,6 +134,55 @@ export function truncateNote(
   if (text.length <= limit) return { note: text, truncated: false }
   const marker = ' …[truncated]'
   return { note: text.slice(0, Math.max(0, limit - marker.length)) + marker, truncated: true }
+}
+
+/**
+ * The pipeline stage a worker declares, as a **stage**, not a state.
+ *
+ * §12.1 of the reference teardown found that nine of fourteen `WorkerPhase` values
+ * were unreachable: production wrote only `queued`, `awaiting_human`, `shipping`,
+ * `merged` and `closed`, while `planning`/`implementing`/`verifying`/
+ * `self_reviewing`/`addressing_feedback` were declared, documented in the PRD and
+ * never assigned. This is the missing producer: PRD §8.1 says each stage is "a
+ * checkpoint the worker declares", and PRD §12.2 maps the `orchestrator_checkpoint`
+ * tool onto `orchestrator_report` — so the stage travels on the report.
+ *
+ * Kept separate from {@link ReportState} rather than folded into it because they are
+ * orthogonal in exactly the way `state` and `outputs` are: a worker can attach an
+ * artifact at a stage without changing state, and can report `needs_input` from any
+ * stage. The values are the `WorkerPhase` strings, deliberately — the stage *is* the
+ * phase, so there is no second vocabulary to keep in step.
+ *
+ * `shipping` is absent on purpose: it is entered by reporting `done` or by binding a
+ * `pr_created` output, which is where PRD §8.1 puts it.
+ */
+export const ReportStage = Object.freeze({
+  planning: 'planning',
+  implementing: 'implementing',
+  verifying: 'verifying',
+  selfReviewing: 'self_reviewing',
+  addressingFeedback: 'addressing_feedback',
+} as const)
+
+/** The union of every declarable stage. */
+export type ReportStage = (typeof ReportStage)[keyof typeof ReportStage]
+
+/** Every declarable stage, in pipeline order. */
+export const REPORT_STAGES: readonly ReportStage[] = Object.freeze([
+  ReportStage.planning,
+  ReportStage.implementing,
+  ReportStage.verifying,
+  ReportStage.selfReviewing,
+  ReportStage.addressingFeedback,
+])
+
+/** Validates a stage, or returns undefined when none was given. */
+export function assertReportStage(value: string | undefined): ReportStage | undefined {
+  if (value === undefined || value === '') return undefined
+  if (!(REPORT_STAGES as readonly string[]).includes(value)) {
+    throw new ReportError('stage', `must be one of ${REPORT_STAGES.join(' | ')}, got ${JSON.stringify(value)}`)
+  }
+  return value as ReportStage
 }
 
 /** Reports whether a state means a person is the unblocker. */

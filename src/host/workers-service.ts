@@ -25,6 +25,7 @@ import { newId } from '../domain/ids.ts'
 import { IssueState, assignWorker, byQueueOrder, normalizeIssue, releaseWorker } from '../domain/issues.ts'
 import type { Issue } from '../domain/issues.ts'
 import { WorkerPhase, isTerminalPhase, normalizeWorker, workerSessionTitle } from '../domain/workers.ts'
+import { advanceWorkerPhase } from './phase-write.ts'
 import type { Worker } from '../domain/workers.ts'
 import { createIssueForTool } from './issues-service.ts'
 import { dirtyPaths } from './root-cleanliness.ts'
@@ -348,6 +349,12 @@ export async function messageWorkerForTool(
  * the branch and any uncommitted changes are still the worker's, and re-working the
  * issue reuses the same path (worktree creation is idempotent for a canonical path).
  * Collection belongs to release --- `done`, `cancelled`, or a merged pull request.
+ *
+ * The **worker record** is a different matter, and that is where `abandoned` belongs
+ * (§12.1's "a genuine `failed`/`abandoned` path"). The issue goes back to the queue and
+ * a *different* worker picks it up, so this record will never act again — and leaving it
+ * in a live phase made it hold a concurrency slot it could not use. The work is not
+ * abandoned; this attempt at it is.
  */
 export async function stopWorkerForTool(
   deps: WorkerToolDeps,
@@ -378,6 +385,16 @@ export async function stopWorkerForTool(
       } else {
         const issue = normalizeIssue(issueStored)
         await store.issues.put(issue.id, releaseWorker(issue, 'requeue'))
+        // The worker record is finished, even though its work is not. See the module comment:
+        // the issue is requeued for a NEW worker, so this one cannot act again, and a live
+        // phase would let it hold a concurrency slot forever.
+        await advanceWorkerPhase(
+          deps.store,
+          worker.id,
+          WorkerPhase.abandoned,
+          args.reason?.trim() || 'stopped and its issue requeued',
+          (deps.now ?? Date.now)(),
+        )
         released =
           `${issue.id} is back in the queue as \`open\`, free for another worker. ` +
           `Its worktree at ${worker.worktreePath} was kept: stopping a turn is not abandoning the work.`

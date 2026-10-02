@@ -50,7 +50,7 @@ import { setTaskTitleForTool } from './tasks-service.ts'
 import type { TaskRefinements } from './task-refinements.ts'
 import { reportReviewFailure, startReviewPass, submitVerdict } from './reviewer-service.ts'
 import { buildBoard, renderBoard } from './board-service.ts'
-import { OutputKind, ReportState } from '../domain/reports.ts'
+import { OutputKind, ReportStage, ReportState } from '../domain/reports.ts'
 import type { SpawnDeps } from './spawn.ts'
 import { IssuePriority, IssueState } from '../domain/issues.ts'
 import { normalizeWorker } from '../domain/workers.ts'
@@ -218,14 +218,22 @@ export function buildOrchestratorTools(options: {
       name: 'orchestrator_report',
       description:
         'Report to the orchestrator. This is the only channel that reaches it, and the only source of ' +
-        'phase truth: nothing is inferred from your transcript. Use `needs_input` when you are waiting ' +
-        'on an answer, `stuck` when you cannot proceed without a decision, `done` when the task is ' +
+        'phase truth: nothing is inferred from your transcript. Declare your pipeline `stage` as you move ' +
+        'through it, and use `state` for how the turn ended: `needs_input` when you are waiting on an ' +
+        'answer, `stuck` when you cannot proceed without a decision, `done` when the task is ' +
         'finished. Attach an artifact as soon as it exists, not at the end.',
       parameters: {
         state: {
           type: 'string',
           enum: Object.values(ReportState),
           description: 'checkpoint | needs_input | stuck | done. Optional if you are only attaching an output.',
+        },
+        stage: {
+          type: 'string',
+          enum: Object.values(ReportStage),
+          description:
+            'Where you are in the pipeline: planning | implementing | verifying | self_reviewing | ' +
+            'addressing_feedback. Declare it as a checkpoint when you arrive in a stage. Optional.',
         },
         note: {
           type: 'string',

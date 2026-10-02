@@ -57,7 +57,25 @@ export interface SubprocessLike {
     }
     graceMs?: number
     signal?: AbortSignal
+    /**
+     * Explicit environment entries, merged onto the service's scrubbed ambient one.
+     *
+     * Required for one thing: **a credential**. `dsh-subprocess` deliberately strips
+     * credential-shaped names (`*_TOKEN`, `*_SECRET`, …) from a child's environment, and
+     * its own documentation says a credential must travel through the spec's explicit
+     * `env`. Without this the ported token chain was dead code (finding G6): a
+     * project-scoped `AO_GITHUB_TOKEN` could not reach `gh` at all, so the module's
+     * documented precedence was a statement about a variable nothing read.
+     */
+    env?: NodeJS.ProcessEnv
   }): SubprocessHandleLike
+}
+
+/** A credential the seam may inject, and may invalidate when GitHub rejects it. */
+export interface TokenProvider {
+  token(): Promise<string>
+  /** Drops any memo, so the next call re-reads the credential. */
+  invalidate(): void
 }
 
 /** Raised when the command could not be started at all — distinct from a non-zero exit. */
@@ -97,6 +115,15 @@ export function createRunCommand(options: {
   timeoutMs?: number
   maxOutputBytes?: number
   graceMs?: number
+  /**
+   * The GitHub credential chain, when there is one (finding G6).
+   *
+   * Used for `gh` only, and failure to resolve it is **not** fatal: `gh` has its own
+   * configured credential, so an install with no `AO_GITHUB_TOKEN`, no `GITHUB_TOKEN` and
+   * no `gh auth` behaves exactly as it did before — the call simply runs without an
+   * injected `GH_TOKEN`.
+   */
+  token?: TokenProvider
 }): RunCommand {
   const timeoutMs = options.timeoutMs ?? EXEC_DEFAULTS.timeoutMs
   const maxOutputBytes = options.maxOutputBytes ?? EXEC_DEFAULTS.maxOutputBytes
@@ -111,11 +138,18 @@ export function createRunCommand(options: {
       controller.abort()
     }, deadlineMs)
 
+    // The credential, resolved for `gh` and injected explicitly. Done before the spawn so
+    // the child starts with it, and a failure here falls back to the ambient credential
+    // rather than failing the command: the chain's own contract is that a missing token is
+    // `NoTokenError` ("try the next source"), not a broken command.
+    const env = await injectedEnvFor(argv, options.token)
+
     let handle: SubprocessHandleLike
     try {
       handle = options.subprocess.spawn({
         argv: [...argv],
         cwd: runOptions?.cwd ?? options.cwd,
+        ...(env ? { env } : {}),
         // Every disposition explicit: the seam applies no defaults of its own, so
         // an unset one is not "the service's choice" but an error or a surprise.
         stdio: {
@@ -160,10 +194,37 @@ export function createRunCommand(options: {
         truncated: Boolean(stdout?.lossy || stderr?.lossy),
       }
       if (timedOut) result.timedOut = true
+      // An auth-class rejection drops the credential memo, so a rotated token is picked up
+      // without a restart. Ported from the reference's `invalidate` forwarding; until the
+      // chain was wired into this seam the behaviour could never run (finding G6).
+      if (argv[0] === 'gh' && classifyCommandFailure(result).invalidatesToken) options.token?.invalidate()
       return result
     } finally {
       clearTimeout(timer)
     }
+  }
+}
+
+/**
+ * The explicit environment for one command, or `undefined` when there is nothing to add.
+ *
+ * Only `gh` gets a credential: `git` authenticates through the remote's configured helper,
+ * and injecting `GH_TOKEN` into a `git push` would be a second credential path nobody asked
+ * for. The variable is `GH_TOKEN`, which is the one `gh` documents as "use this
+ * credential, ignore the stored login" — the same variable the reference's local path sets.
+ */
+async function injectedEnvFor(
+  argv: readonly string[],
+  token: TokenProvider | undefined,
+): Promise<NodeJS.ProcessEnv | undefined> {
+  if (!token || argv[0] !== 'gh') return undefined
+  try {
+    const value = await token.token()
+    return value === '' ? undefined : { GH_TOKEN: value }
+  } catch {
+    // No credential from any source: run without one and let `gh` use its own
+    // configuration, which is exactly what happened before this existed.
+    return undefined
   }
 }
 
@@ -261,6 +322,74 @@ export function retryAfterMs(result: CommandResult, now = Date.now()): number | 
   }
 
   return undefined
+}
+
+/** How long the observer waits after a rate-limit rejection, when GitHub gives no hint. */
+export const RATE_LIMIT_DEFAULTS = Object.freeze({
+  /** The reference's `defaultRateLimitCooldown`. */
+  defaultCooldownMs: 60_000,
+  /** A parsed `X-RateLimit-Reset` is honoured, but not for a whole day. */
+  maxCooldownMs: 15 * 60_000,
+})
+
+/**
+ * A deterministic back-off clock for GitHub rate limits (finding G7).
+ *
+ * The teardown's finding was blunt: `describeFailure(rateLimited)` tells the user "the plugin
+ * backs off rather than retrying", `retryAfterMs` parses the provider's own hint — and
+ * **nothing implemented a back-off and nothing called `retryAfterMs`**, so the honest
+ * behaviour was "retries every tick against an already-exhausted budget". A message that
+ * overstates the mechanism is the same class of defect as a board that claims a loop nobody
+ * is running.
+ *
+ * This is that mechanism, and it is deliberately a plain object with no timers: the observer
+ * asks whether it may run, and the answer is a timestamp. A cooldown that slept would hold a
+ * worker's slot, which is the failure the bounded-work NFR exists to prevent.
+ */
+export interface RateLimitCooldown {
+  /** Epoch ms when the cooldown clears, or `undefined` when nothing is cooling down. */
+  clearsAt(now?: number): number | undefined
+  /** Records the outcome of one command: starts a cooldown, or clears one on success. */
+  record(result: CommandResult, now?: number): void
+  /** Forgets any cooldown, for a caller that wants to force a pass. */
+  clear(): void
+}
+
+/** Builds a {@link RateLimitCooldown}. */
+export function createRateLimitCooldown(options: {
+  defaultCooldownMs?: number
+  maxCooldownMs?: number
+} = {}): RateLimitCooldown {
+  const defaultMs = options.defaultCooldownMs ?? RATE_LIMIT_DEFAULTS.defaultCooldownMs
+  const maxMs = options.maxCooldownMs ?? RATE_LIMIT_DEFAULTS.maxCooldownMs
+  let until: number | undefined
+
+  return {
+    clearsAt(now = Date.now()) {
+      if (until === undefined) return undefined
+      if (until <= now) {
+        until = undefined
+        return undefined
+      }
+      return until
+    },
+    record(result, now = Date.now()) {
+      const failure = classifyCommandFailure(result)
+      if (failure.kind !== FailureKind.rateLimited) {
+        // Any completed call proves the budget is usable again. Clearing on success is what
+        // keeps a cooldown from outliving the condition that caused it.
+        if (failure.kind === FailureKind.ok) until = undefined
+        return
+      }
+      // The provider's own hint wins; the default is what keeps a hint-less rejection
+      // (`api rate limit exceeded` with no headers) from being retried immediately.
+      const hinted = retryAfterMs(result, now) ?? defaultMs
+      until = now + Math.min(Math.max(hinted, 0), maxMs)
+    },
+    clear() {
+      until = undefined
+    },
+  }
 }
 
 /** The message a human should read for a classified failure. */

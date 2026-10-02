@@ -36,6 +36,13 @@ export interface MockPr {
   comments?: unknown[]
   /** Inline review comments, as the REST `/pulls/{n}/comments` endpoint returns them. */
   reviewComments?: unknown[]
+  /**
+   * Review threads, as the GraphQL `reviewThreads` field returns them.
+   *
+   * A separate list from the comments, because that is how GitHub models it: the comments
+   * endpoint has no resolution state, and the thread endpoint has nothing else. Finding G4.
+   */
+  reviewThreads?: Array<{ id: string; isResolved: boolean; isOutdated: boolean; commentRestIds: Array<string | number> }>
 }
 
 /** The mock's world. */
@@ -53,10 +60,19 @@ export interface MockGitHub {
    * to recognise its OWN reviewer's inline comments, since our reviewer posts from the pull
    * request author's account and so cannot be filtered by author.
    */
+  /** Returns the comment's REST database id, which is what a thread references. */
   addReviewComment(
     prNumber: number,
     comment: { id: string; reviewId?: string; author: string; body: string; path: string; line?: number; isBot?: boolean },
-  ): void
+  ): number
+  /**
+   * A review thread and its resolution state, as GraphQL reports it.
+   *
+   * `commentRestIds` are the **REST** ids of the thread's comments — the id space
+   * `PrReviewComment.restId` and `in_reply_to_id` use, and the only one in which a thread
+   * and a comment can be matched. `addReviewComment` returns the REST id to use here.
+   */
+  addReviewThread(prNumber: number, thread: { id: string; isResolved?: boolean; isOutdated?: boolean; commentRestIds?: Array<string | number> }): void
   setState(prNumber: number, state: MockPr['state']): void
   head(prNumber: number, sha: string): void
 }
@@ -113,6 +129,31 @@ export function mockGitHub(options: {
     if (joined.startsWith('gh pr list')) return ok(JSON.stringify(prs.map((pr) => ({ ...pr }))))
     // The inline review comments. A SECOND endpoint, because `gh pr view --json` has no
     // field for them -- which is why a person's line comment was invisible to the plugin.
+    // The review threads and their resolution state. A THIRD endpoint, GraphQL this time,
+    // because neither `gh pr view --json` nor the comments endpoint carries `isResolved`.
+    if (joined.startsWith('gh api graphql')) {
+      const number = Number(argv.find((arg) => arg.startsWith('number='))?.slice('number='.length) ?? '')
+      const pr = prs.find((candidate) => candidate.number === number)
+      if (!pr) return { exitCode: 1, stdout: '', stderr: `no pull request ${number}` }
+      return ok(
+        JSON.stringify({
+          data: {
+            repository: {
+              pullRequest: {
+                reviewThreads: {
+                  nodes: (pr.reviewThreads ?? []).map((thread) => ({
+                    id: thread.id,
+                    isResolved: thread.isResolved,
+                    isOutdated: thread.isOutdated,
+                    comments: { nodes: thread.commentRestIds.map((databaseId) => ({ databaseId })) },
+                  })),
+                },
+              },
+            },
+          },
+        }),
+      )
+    }
     if (joined.startsWith('gh api') && joined.includes('/comments')) {
       const number = Number(/pulls\/(\d+)\/comments/.exec(joined)?.[1] ?? '')
       const pr = prs.find((candidate) => candidate.number === number)
@@ -166,12 +207,16 @@ export function mockGitHub(options: {
     addReviewComment(prNumber, comment) {
       const pr = prs.find((candidate) => candidate.number === prNumber)
       if (!pr) throw new Error(`no pull request ${prNumber}`)
+      // The REST id is a **number** on GitHub, and `restId` is derived from it — so a thread
+      // referencing this comment references a number too. Derived rather than counted so the
+      // mock cannot hand out two ids that collide across pull requests.
+      const restId = 1000 + prNumber * 100 + (pr.reviewComments?.length ?? 0)
       pr.reviewComments = [
         ...(pr.reviewComments ?? []),
         {
           // REST shape, not GraphQL: this endpoint returns `node_id` and a numeric
           // `pull_request_review_id`, and `user.type` as the bot marker.
-          id: comment.id,
+          id: restId,
           node_id: comment.id,
           pull_request_review_id: comment.reviewId === undefined ? null : Number(comment.reviewId),
           user: { login: comment.author, type: comment.isBot === true ? 'Bot' : 'User' },
@@ -179,6 +224,20 @@ export function mockGitHub(options: {
           path: comment.path,
           line: comment.line ?? null,
           created_at: '2026-10-01T00:00:00Z',
+        },
+      ]
+      return restId
+    },
+    addReviewThread(prNumber, thread) {
+      const pr = prs.find((candidate) => candidate.number === prNumber)
+      if (!pr) throw new Error(`no pull request ${prNumber}`)
+      pr.reviewThreads = [
+        ...(pr.reviewThreads ?? []),
+        {
+          id: thread.id,
+          isResolved: thread.isResolved === true,
+          isOutdated: thread.isOutdated === true,
+          commentRestIds: [...(thread.commentRestIds ?? [])],
         },
       ]
     },

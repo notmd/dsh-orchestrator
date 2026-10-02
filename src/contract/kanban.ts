@@ -195,6 +195,14 @@ export interface KanbanPRFacts {
   externalReview: KanbanExternalReviewFacts
   /** PR number, for the card and the API. */
   number?: number
+  /**
+   * Why this pull request cannot be merged yet, in reading order (finding G3).
+   *
+   * DSHO carries the *reasons* alongside the mergeability the reference synthesizes, so a
+   * card can say what is left between an approval and the merge button instead of only
+   * showing the phrase. Empty on a record written before this existed.
+   */
+  mergeBlockers?: readonly string[]
 }
 
 /** What a caller may supply for a PR; every field is optional and defaulted. */
@@ -217,6 +225,10 @@ export function prFacts(pr: KanbanPRFactsInput = {}): KanbanPRFacts {
     reviewRun: reviewRunFacts(pr.reviewRun),
     externalReview: externalReviewFacts(pr.externalReview),
   }
+  // Absent rather than empty when there is nothing to say: the ported facts object keeps
+  // its shape for every caller that never asks about merge blockers, and a present-but-empty
+  // list would read as "computed, and there is nothing blocking it" to a future reader.
+  if ((pr.mergeBlockers ?? []).length > 0) facts.mergeBlockers = [...(pr.mergeBlockers ?? [])]
   if (pr.number !== undefined) facts.number = pr.number
   return facts
 }
@@ -455,6 +467,40 @@ export function kanbanPriority(column: KanbanColumn): number {
 }
 
 /**
+ * Picks the pull request whose facts decide the session's placement, and the column they
+ * decide.
+ *
+ * Extracted from {@link deriveKanbanPresentation} so a caller that needs to say something
+ * **about that pull request** — its merge blockers, its number — asks the same ranking
+ * rather than running one of its own, which is how a card's phrase and its reasons would
+ * come to describe two different PRs. Extracting it changes no behaviour: the loop below is
+ * the original, moved.
+ */
+export function chosenKanbanPR(
+  session: KanbanSessionFacts,
+  prs: readonly KanbanPRFacts[] | undefined | null,
+): { column: KanbanColumn; chosen: KanbanPRFacts } | undefined {
+  const all = prs ?? []
+  if (all.length === 0) return undefined
+  // A terminal PR must not hide a live one still moving through either loop;
+  // merged/closed placements count only once nothing is live.
+  const live = liveKanbanPRs(all)
+  const pool = live.length > 0 ? live : all
+
+  let column: KanbanColumn | undefined
+  let chosen: KanbanPRFacts | undefined
+  for (const pr of pool) {
+    const candidate = derivePRKanbanColumn(session, pr)
+    if (column === undefined || chosen === undefined || outranksKanban(candidate, pr, column, chosen)) {
+      column = candidate
+      chosen = pr
+    }
+  }
+  if (column === undefined || chosen === undefined) return undefined
+  return { column, chosen }
+}
+
+/**
  * Derives a session's board placement and the phrase shown on its card, in that
  * order. The column is chosen first from lifecycle facts; the display status is
  * then derived from the facts that column cares about, so a session never shows a
@@ -482,20 +528,9 @@ export function deriveKanbanPresentation(
       displayStatus: buildingDisplayStatus(session, now, noSignalGrace),
     }
   }
-  // A terminal PR must not hide a live one still moving through either loop;
-  // merged/closed placements count only once nothing is live.
-  const live = liveKanbanPRs(all)
-  const pool = live.length > 0 ? live : all
-
-  let column: KanbanColumn | undefined
-  let chosen: KanbanPRFacts | undefined
-  for (const pr of pool) {
-    const candidate = derivePRKanbanColumn(session, pr)
-    if (column === undefined || chosen === undefined || outranksKanban(candidate, pr, column, chosen)) {
-      column = candidate
-      chosen = pr
-    }
-  }
+  const selected = chosenKanbanPR(session, all)
+  const column = selected?.column
+  const chosen = selected?.chosen
   if (column === undefined || chosen === undefined) {
     // Unreachable: `pool` is non-empty whenever `all` is. Stated explicitly
     // rather than asserted so a future refactor cannot silently change the answer.

@@ -27,8 +27,15 @@
  * @module dsho/host/feedback-service
  */
 
+import { isResolvedComment } from '../domain/pr-snapshot.ts'
 import type { PrReview, PrReviewComment, PrSnapshot } from '../domain/pr-snapshot.ts'
-import { isBlockedWorker, normalizeWorker } from '../domain/workers.ts'
+import {
+  WorkerPhase,
+  isBlockedWorker,
+  isValidPhaseTransition,
+  normalizeWorker,
+  setPhase,
+} from '../domain/workers.ts'
 import type { Worker } from '../domain/workers.ts'
 import { ourReviewIds } from '../review/runs.ts'
 import type { ReviewRun } from '../review/runs.ts'
@@ -163,6 +170,13 @@ export function actionableFeedback(
     // comment as the failure that matters -- so the doubt routes.
     if (comment.inReplyToId !== undefined && ourThreadRoots.has(comment.inReplyToId)) continue
     if (comment.body.trim() === '') continue
+    // A **resolved** thread is not outstanding feedback (finding G4). Without the thread
+    // state, a discussion a person already resolved kept counting as unanswered until the
+    // next head, so the worker was re-nudged about something that was finished. The check
+    // fails OPEN: `reviewThreads` is absent on a snapshot fetched before this existed, and
+    // `isResolvedComment` then answers "no" for everything — routing a resolved comment is
+    // wasteful, dropping a person's comment is the failure that matters.
+    if (isResolvedComment(snapshot, comment.restId)) continue
     out.push({
       id: comment.id,
       kind: 'comment',
@@ -319,16 +333,28 @@ export async function routeHumanFeedback(
     content: [{ type: 'text', text: renderFeedback(worker, items, snapshot.url ?? '') }],
     source: { kind: 'user' },
   })
-  await store.workers.put(worker.id, {
+  // Routing feedback *is* the transition into `addressing_feedback` (§12.1's second
+  // named producer) — but it is written in the SAME put as the dedup state, because
+  // splitting them would let a crash between the two re-nudge the worker for feedback
+  // it has already been told about. That is the invariant the `feedback` field's own
+  // comment records, and a phase write on its own line would quietly violate it.
+  const at = (deps.now ?? Date.now)()
+  const routed: Worker = {
     ...worker,
     feedback: {
       routedIds: [...routedIds, ...items.map((item) => item.id)],
       nudgedAtHead: nudgedAtHead + 1,
       headSha,
     },
-    lastSignalAt: (deps.now ?? Date.now)(),
-    updatedAt: (deps.now ?? Date.now)(),
-  })
+    lastSignalAt: at,
+    updatedAt: at,
+  }
+  await store.workers.put(
+    worker.id,
+    isValidPhaseTransition(worker.phase, WorkerPhase.addressingFeedback)
+      ? setPhase(routed, WorkerPhase.addressingFeedback, 'human feedback routed', at)
+      : routed,
+  )
 
   return { workerId: worker.id, routed: items.length, reason: items[0]!.kind }
 }

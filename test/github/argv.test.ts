@@ -26,8 +26,11 @@ import {
   githubTokenChain,
 } from '../../src/github/auth.ts'
 import {
+  PR_LIST_MINIMAL_FIELDS,
   PR_VIEW_FIELDS,
   REPO_VIEW_FIELDS,
+  REVIEW_THREADS_QUERY,
+  prReviewThreadsArgv,
   authStatusArgv,
   currentBranchArgv,
   isWorkTreeArgv,
@@ -356,4 +359,45 @@ test('the inline-comment argv refuses a number that is not a pull request', () =
   // 404 rather than an error anyone could act on.
   assert.throws(() => prReviewCommentsArgv({ number: 0, repository: 'acme/widgets' }))
   assert.throws(() => prReviewCommentsArgv({ number: -1, repository: 'acme/widgets' }))
+})
+
+// ---------------------------------------------------------------------------
+// The two calls the state model gained (G2's recovery, G4's threads)
+// ---------------------------------------------------------------------------
+
+test('the thread query asks for resolution, and for nothing no rule reads', () => {
+  const argv = prReviewThreadsArgv({ repository: 'acme/widgets', number: 7 })
+  assert.deepEqual(argv.slice(0, 3), ['gh', 'api', 'graphql'])
+  // The query travels as ONE argument, with the owner/name/number as separate typed fields --
+  // the split is what keeps a repository named like an injection out of the query text.
+  assert.ok(argv.includes(`query=${REVIEW_THREADS_QUERY}`))
+  assert.ok(argv.includes('owner=acme'))
+  assert.ok(argv.includes('name=widgets'))
+  assert.ok(argv.includes('number=7'))
+  assert.ok(argv.includes('-F'), 'the number is typed, not a string field')
+  // The one field that decides anything.
+  assert.match(REVIEW_THREADS_QUERY, /reviewThreads\(first:100\)/)
+  assert.match(REVIEW_THREADS_QUERY, /isResolved/)
+  assert.match(REVIEW_THREADS_QUERY, /databaseId/)
+  // Deliberately absent: the reference tracks outdatedness and does not skip an outdated
+  // thread, so a field no rule reads would only drift.
+  assert.doesNotMatch(REVIEW_THREADS_QUERY, /isOutdated/)
+})
+
+test('the thread query refuses a repository that is not owner/name', () => {
+  assert.throws(() => prReviewThreadsArgv({ repository: 'widgets', number: 7 }), /owner\/name/)
+})
+
+test('recovery lists by head, asks for identity only, and is always bounded', () => {
+  const argv = prListArgv({ repository: 'acme/widgets', headBranch: 'dsho/issue-1-x', state: 'all', limit: 10, fields: PR_LIST_MINIMAL_FIELDS })
+  assert.ok(argv.includes('--head') && argv.includes('dsho/issue-1-x'))
+  assert.ok(argv.includes('all'), 'a merged or closed PR is still the worker\'s PR')
+  assert.ok(argv.includes('10'), 'an unbounded listing cannot happen by omission')
+  const fields = argv[argv.indexOf('--json') + 1]!.split(',')
+  assert.deepEqual([...fields], [...PR_LIST_MINIMAL_FIELDS])
+  // Identity, not the board's whole fact set: the observer fetches those anyway, and a fork's
+  // branch can collide with ours, which is why eligibility is decided on `isCrossRepository`.
+  assert.ok(fields.includes('isCrossRepository'))
+  assert.ok(!fields.includes('statusCheckRollup'))
+  assert.ok(!fields.includes('reviews'))
 })

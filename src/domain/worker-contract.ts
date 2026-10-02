@@ -88,6 +88,11 @@ export const REPORT_PROTOCOL = `Report through \`orchestrator_report\`. It is th
 Do not narrate routine commands. Report meaningful transitions, decisions, blockers, outputs, and
 completion.
 
+Declare your pipeline \`stage\` when you arrive in one — \`planning\`, \`implementing\`,
+\`verifying\`, \`self_reviewing\`, \`addressing_feedback\` — and mark the stage you are re-entering
+when you go back to fix something. The board reads that declaration directly; it never guesses
+your stage from what you did.
+
 Attach an artifact as soon as it exists, not at the end.`
 
 /**

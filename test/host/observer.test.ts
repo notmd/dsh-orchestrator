@@ -161,7 +161,46 @@ function isReviewCommentsCall(argv: readonly string[]): boolean {
   return argv.some((arg) => arg.endsWith('/comments'))
 }
 
-async function observer(results: Array<Partial<CommandResult>>, comments = '[]') {
+/** Whether an argv is the review-thread (GraphQL) request rather than the PR-facts one. */
+function isReviewThreadsCall(argv: readonly string[]): boolean {
+  return argv.includes('graphql')
+}
+
+/** Whether an argv is the recovery listing rather than a single-PR read. */
+function isPrListCall(argv: readonly string[]): boolean {
+  return argv[1] === 'pr' && argv[2] === 'list'
+}
+
+/**
+ * A review-thread payload with one thread, in the shape `gh api graphql` returns.
+ *
+ * The nesting is the whole point of the parser test: a missing level must yield an empty
+ * list rather than an exception, so the fixture states the real shape.
+ */
+function threadPayload(threads: Array<{ id: string; isResolved?: boolean; isOutdated?: boolean; databaseIds?: number[] }> = []): string {
+  return JSON.stringify({
+    data: {
+      repository: {
+        pullRequest: {
+          reviewThreads: {
+            nodes: threads.map((thread) => ({
+              id: thread.id,
+              isResolved: thread.isResolved === true,
+              isOutdated: thread.isOutdated === true,
+              comments: { nodes: (thread.databaseIds ?? []).map((databaseId) => ({ databaseId })) },
+            })),
+          },
+        },
+      },
+    },
+  })
+}
+
+async function observer(
+  results: Array<Partial<CommandResult>>,
+  comments = '[]',
+  threads = '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}',
+) {
   const store = createMemoryFactStore()
   await store.repos.put('repo-1', { id: 'repo-1', owner: 'acme', name: 'widgets', rootPath: '/r' })
   await store.issues.put('iss-1', {
@@ -193,18 +232,32 @@ async function observer(results: Array<Partial<CommandResult>>, comments = '[]')
   const calls: string[][] = []
   const run: RunCommand = async (argv) => {
     calls.push([...argv])
-    // Observation is now TWO requests: the `gh pr view` facts and the inline review
-    // comments. Routed by argv rather than by position, so a test that queues results for
-    // the facts does not silently answer the comments call with a PR payload.
+    // Observation is now THREE requests on a full refresh: the `gh pr view` facts, the
+    // inline review comments, and the review threads. All three are routed by argv rather
+    // than by position, so a test that queues results for the facts does not silently answer
+    // a different call with a PR payload — and so adding a call cannot silently shift which
+    // queued result lands where (which is exactly what happened when threads were added).
     if (isReviewCommentsCall(argv)) return { exitCode: 0, stdout: comments, stderr: '' }
+    if (isReviewThreadsCall(argv)) return { exitCode: 0, stdout: threads, stderr: '' }
+    if (isPrListCall(argv)) {
+      const answer = results[Math.min(call, results.length - 1)] ?? { exitCode: 0, stdout: '[]' }
+      call += 1
+      return { exitCode: 0, stdout: '', stderr: '', ...answer }
+    }
     const answer = results[Math.min(call, results.length - 1)] ?? { exitCode: 0, stdout: payload() }
     call += 1
     return { exitCode: 0, stdout: '', stderr: '', ...answer }
   }
+  // A moveable clock: the cadence gate (finding G1) is a real behaviour now, so a test that
+  // wants a second pass has to say that a tick has elapsed rather than assume it.
+  let clock = NOW
   return {
     raw: store,
     calls,
-    deps: { store: lazyFactStore(async () => store), run, now: () => NOW },
+    setNow(value: number) {
+      clock = value
+    },
+    deps: { store: lazyFactStore(async () => store), run, now: () => clock },
   }
 }
 
@@ -230,11 +283,14 @@ test('a changed head is recorded on the worker, so the review loop keys on the r
 })
 
 test('R13: a failed observation leaves the prior state intact', async () => {
-  const { deps, raw } = await observer([
+  const { deps, raw, setNow } = await observer([
     { exitCode: 0, stdout: payload({ state: 'OPEN' }) },
     { exitCode: 1, stdout: '', stderr: 'HTTP 403: API rate limit exceeded' },
   ])
   await observeAll(deps)
+  // A tick has elapsed: the cadence gate defers a second pass at the same instant, which is
+  // the whole point of having one.
+  setNow(NOW + 60_000)
   const outcome = await observeAll(deps)
 
   assert.equal(outcome.observations.length, 1)
@@ -258,15 +314,21 @@ test('R13: a truncated payload is a failed observation, not a CLOSED PR', async 
   assert.notEqual(((await raw.prSnapshots.get(snapshotKey('wrk-1'))) as PrSnapshot).state, 'CLOSED')
 })
 
-test('a worker with no pull request is skipped, not observed', async () => {
+test('a worker with no pull request is not OBSERVED — recovery is tried instead', async () => {
+  // Finding G2 changed this from "skipped silently" to "one bounded recovery attempt": a
+  // pull request the plugin was never told about used to be invisible forever.
   const { deps, raw, calls } = await observer([])
   const worker = (await raw.workers.get('wrk-1')) as Record<string, unknown>
   delete worker.pr
   await raw.workers.put('wrk-1', worker)
   const outcome = await observeAll(deps)
+
   assert.equal(outcome.observations.length, 0)
   assert.equal(outcome.skipped, 1)
-  assert.equal(calls.length, 0, 'no gh call was made')
+  assert.equal(calls.length, 1, 'exactly one call: the recovery listing')
+  assert.ok(isPrListCall(calls[0]!), 'and it is `gh pr list`, not a PR read')
+  assert.ok(calls[0]!.includes('--head'), 'scoped to the worker\'s own branch')
+  assert.ok(!calls.some((argv) => !isPrListCall(argv)), 'and nothing else was called')
 })
 
 test('an unknown repository is skipped rather than observed against nothing', async () => {

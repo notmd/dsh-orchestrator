@@ -68,6 +68,58 @@ export function prReviewCommentsArgv(options: { number: number; repository: stri
   ]
 }
 
+/** The fields recovery needs, and no more: the observer fetches the rest anyway. */
+export const PR_LIST_MINIMAL_FIELDS = ['number', 'url', 'headRefOid', 'state', 'isCrossRepository'] as const
+
+/**
+ * `gh api graphql` for the pull request's **review threads** and their resolution.
+ *
+ * The last piece of the review model we were missing (finding G4). REST gives comments
+ * but no thread *state*: a discussion a person has already resolved keeps counting as
+ * unanswered feedback, and the coarse `external.every(r => r.state === 'COMMENTED')`
+ * reading in the board cannot tell a review thread that is finished from one that is not.
+ * `reviewThreads.nodes[].isResolved` is the only place GitHub exposes it.
+ *
+ * `first: 100` on both levels, matching the reference's bounded GraphQL queries: an
+ * unbounded thread listing is a payload nobody bounded, and a thread list is monotonic.
+ * Comments are fetched by node id only — `databaseId` is what `in_reply_to_id` and
+ * `pull_request_review_id` compare against, and those are the ids the REST endpoint gives.
+ *
+ * `isOutdated` is deliberately **not** requested. The reference tracks it and then does not
+ * skip an outdated thread, because an outdated comment is still a person's unanswered
+ * question; a field no rule reads is a field that drifts.
+ */
+export function prReviewThreadsArgv(options: { repository: string; number: number }): string[] {
+  assertPullRequestNumber(options.number)
+  const [owner, name] = options.repository.split('/')
+  if (!owner || !name) {
+    throw new Error(`prReviewThreadsArgv: repository must be owner/name, got ${JSON.stringify(options.repository)}`)
+  }
+  return [
+    'gh',
+    'api',
+    'graphql',
+    '-f',
+    `query=${REVIEW_THREADS_QUERY}`,
+    '-f',
+    `owner=${owner}`,
+    '-f',
+    `name=${name}`,
+    '-F',
+    `number=${options.number}`,
+  ]
+}
+
+/**
+ * The thread query. Kept as one line because it travels as a single `-f query=` argument.
+ *
+ * One field decides anything: `isResolved`.
+ */
+export const REVIEW_THREADS_QUERY =
+  'query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){' +
+  'pullRequest(number:$number){reviewThreads(first:100){nodes{id isResolved ' +
+  'comments(first:100){nodes{databaseId}}}}}}}'
+
 /**
  * `gh pr view <n> --json <fields>`.
  *
@@ -105,6 +157,8 @@ export function prListArgv(options: {
   headBranch?: string
   limit?: number
   state?: 'open' | 'closed' | 'merged' | 'all'
+  /** Overrides the field list. Recovery needs identity, not the whole board's facts. */
+  fields?: readonly string[]
 }): string[] {
   const argv = [
     'gh',
@@ -117,7 +171,7 @@ export function prListArgv(options: {
     '--limit',
     String(options.limit ?? 30),
     '--json',
-    PR_VIEW_FIELDS.join(','),
+    (options.fields ?? PR_VIEW_FIELDS).join(','),
   ]
   if (options.headBranch) argv.push('--head', options.headBranch)
   return argv

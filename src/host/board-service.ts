@@ -30,12 +30,19 @@ import { deriveStatus, prStatusFacts, sessionFacts } from '../contract/status.ts
 import { archiveSheet, groupIntoLanes, orderCards, presentCard } from '../board/presentation.ts'
 import type { BoardCard, BoardCardView } from '../board/presentation.ts'
 import { normalizeIssue } from '../domain/issues.ts'
-import { WorkerPhase, isTerminalPhase, normalizeWorker, workerSessionTitle } from '../domain/workers.ts'
+import { isSticky } from '../contract/activity.ts'
+import {
+  declaredActivity,
+  isPausedWorker,
+  isTerminalPhase,
+  normalizeWorker,
+  workerSessionTitle,
+} from '../domain/workers.ts'
 import type { Worker } from '../domain/workers.ts'
 import { snapshotKey } from './observer-service.ts'
 import { changesRequestedCycles, ourReviewIds, summarizeReviewRuns } from '../review/runs.ts'
 import type { ReviewRun } from '../review/runs.ts'
-import { isBotAuthor } from '../domain/pr-snapshot.ts'
+import { isBotAuthor, isResolvedComment } from '../domain/pr-snapshot.ts'
 import type { PrSnapshot } from '../domain/pr-snapshot.ts'
 import type { PluginConfig } from '../config/validate.ts'
 import { normalizeRepo } from './repo.ts'
@@ -127,9 +134,67 @@ export function cardActivity(
   worker: Worker,
   activityOf?: BoardDeps['activityOf'],
 ): 'active' | 'idle' | 'blocked' | 'waiting_input' | 'exited' | 'unknown' {
-  if (worker.pendingQuestion !== undefined) return 'waiting_input'
-  if (worker.phase === WorkerPhase.awaitingHuman) return 'blocked'
+  // The declared blockage first, through the ported predicates rather than by hand.
+  const declared = isPausedWorker(worker) ? declaredActivity(worker) : undefined
+  // `isSticky` is the SECOND question, and it is the one this branch exists for: "may a clock
+  // demote this?" (§12.4, R20). Asking it here — rather than ANDing it into the predicate
+  // above, where it could only ever agree — is what makes the ported guarantee structural:
+  // a declared pause is returned as the worker's activity, so the live `AgentStatus` is never
+  // consulted, and a quiet session cannot be inferred `idle` and then aged into `No signal`
+  // while the question is still unanswered.
+  if (declared !== undefined && isSticky(declared)) return declared
   return activityOf?.(worker.id) ?? 'unknown'
+}
+
+/**
+ * The external (not ours) review facts the column reducer reads.
+ *
+ * Two rules changed here, both from finding G4:
+ *
+ *   1. `comments` used to be `external.length > 0 && external.every(state === 'COMMENTED')`,
+ *      which is a reading of *reviews*, not of *discussions*. A reviewer who submitted
+ *      `CHANGES_REQUESTED` **and** left line comments made it false, so unanswered line
+ *      comments sat on a card that could not report them. The two facts are independent and
+ *      are now computed independently — "there are outstanding comments" and "someone
+ *      requested changes" can both be true — and the reducer's own precedence decides which
+ *      phrase wins.
+ *   2. A **resolved** thread is no longer outstanding, which is what makes "is the review
+ *      still waiting on the worker?" a decidable fact rather than a heuristic.
+ *
+ * Our own reviews and comments are excluded by id through the one shared definition
+ * ({@link ourReviewIds}): the aggregate `reviewDecision` mixes ours with a person's and
+ * cannot tell whose turn it is.
+ */
+export function externalReviewSummary(
+  snapshot: PrSnapshot,
+  ourIds: ReadonlySet<string>,
+): { approved: boolean; changesRequested: boolean; comments: boolean } {
+  const external = (snapshot.reviews ?? []).filter((review) => !ourIds.has(review.id))
+  const approved = external.some((review) => review.state === 'APPROVED')
+  const changesRequested = external.some((review) => review.state === 'CHANGES_REQUESTED')
+
+  // Any external COMMENTED review counts, body or not — and the empty body is the reason.
+  // A review is submitted *from clicked lines* with an empty body and its text on the
+  // inline comments; those live in a list this snapshot may not have fetched (the field is
+  // absent on a record written before threads existed, and a failed comment fetch leaves the
+  // prior list behind). Requiring a body would therefore drop a person's line comments
+  // entirely on a snapshot we cannot prove had none, which is the direction that matters.
+  //
+  // A review body has no resolution state — GitHub models resolution per thread — so this
+  // half stays outstanding until the review itself is superseded.
+  const commentedReviews = external.some((review) => review.state === 'COMMENTED')
+
+  const inlineOutstanding = (snapshot.reviewComments ?? []).some((comment) => {
+    if (comment.body.trim() === '') return false
+    if (comment.isBot === true) return false
+    // Ours, by parent review or by its own id: our reviewer posts one inline comment per
+    // finding, and counting those as a person's would make every pass look like human
+    // feedback.
+    if (ourIds.has(comment.reviewId) || ourIds.has(comment.id)) return false
+    return !isResolvedComment(snapshot, comment.restId)
+  })
+
+  return { approved, changesRequested, comments: commentedReviews || inlineOutstanding }
 }
 
 /** Maps a stored PR snapshot onto the reducer's facts. */
@@ -146,7 +211,6 @@ export function toPrFacts(
   // its set from `githubReviewId` -- the REST id -- while the snapshot reports node ids, so
   // every comparison was false and the exclusion never removed anything.
   const ourIds = ourReviewIds(runs)
-  const external = (snapshot.reviews ?? []).filter((review) => !ourIds.has(review.id))
 
   // Normalized on the way out, so a caller gets Go's zero values on every field
   // rather than an object with holes. The reducer tolerates holes; a caller reading
@@ -162,12 +226,12 @@ export function toPrFacts(
       review: (snapshot.reviewDecision ?? '').toLowerCase(),
       mergeability: (snapshot.mergeable ?? '').toLowerCase(),
       updatedAt: Date.parse(snapshot.updatedAt ?? '') || snapshot.observedAt || 0,
+      // The reference synthesizes its own mergeability and feeds the card the reasons;
+      // we keep ours from the domain and carry them through, so the phrase and the reasons
+      // describe the same pull request (finding G3).
+      mergeBlockers: [...(snapshot.mergeBlockers ?? [])],
       reviewRun: summarizeReviewRuns({ runs, headSha, bounds }),
-      externalReview: {
-        approved: external.some((review) => review.state === 'APPROVED'),
-        changesRequested: external.some((review) => review.state === 'CHANGES_REQUESTED'),
-        comments: external.length > 0 && external.every((review) => review.state === 'COMMENTED'),
-      },
+      externalReview: externalReviewSummary(snapshot, ourIds),
     }),
   ]
 }
@@ -191,12 +255,14 @@ export function buildCard(options: {
   now: number
 }): BoardCard {
   const { worker, config } = options
-  // DERIVED, once, because hardcoding `false` made two documented behaviours
-  // unreachable. `session.isTerminated` short-circuits BOTH derivations -- kanban.ts:475
-  // sends the card to the `archive` column, status.ts:190 returns the `Terminated` or
-  // `Merged` status -- so with it always false the archive sheet was always empty and
-  // those two statuses could never be displayed. The board was fetching
-  // `lenses.archive` every poll and rendering a count that was always 0.
+  // DERIVED, once, from the phase — the authority -- because hardcoding `false` made two
+  // documented behaviours unreachable. `session.isTerminated` short-circuits BOTH derivations
+  // -- kanban.ts:475 sends the card to the `archive` column, status.ts:190 returns the
+  // `Terminated` or `Merged` status -- so with it always false the archive sheet was always
+  // empty and those two statuses could never be displayed. The board was fetching
+  // `lenses.archive` every poll and rendering a count that was always 0. `isTerminalPhase`
+  // documents the precedence (§12.3) that keeps this flag, the phase and the `endedAt`
+  // watermark from drifting apart.
   const terminated = isTerminalPhase(worker.phase)
 
   const session = sessionFacts({
@@ -436,7 +502,12 @@ export function renderBoard(snapshot: BoardSnapshot): string {
       for (const card of cards) {
         const mark = card.needsAttention ? '!' : ' '
         const reason = card.escalationReason ? ` [${card.escalationReason}]` : ''
-        lines.push(`${mark} ${card.id}  ${card.displayStatus}${reason}  ${card.title}`)
+        // What is left before the merge, when there is one. A settled card (Merged,
+        // Closed) has nothing left to say, and printing reasons on it would report stale
+        // facts about a branch nobody is going to merge.
+        const waiting =
+          card.mergeBlockers && card.mergeBlockers.length > 0 ? ` — waiting on: ${card.mergeBlockers.join(', ')}` : ''
+        lines.push(`${mark} ${card.id}  ${card.displayStatus}${reason}${waiting}  ${card.title}`)
       }
     }
     lines.push('')

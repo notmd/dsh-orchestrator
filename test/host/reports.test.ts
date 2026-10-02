@@ -11,11 +11,11 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 import { OUTBOX_DEFAULTS, planDelivery, renderDelivery, renderReport } from '../../src/host/report-outbox.ts'
-import { MAX_REPORT_CHARACTERS, ReportState, truncateNote } from '../../src/domain/reports.ts'
+import { MAX_REPORT_CHARACTERS, REPORT_STAGES, ReportState, truncateNote } from '../../src/domain/reports.ts'
 import type { Report } from '../../src/domain/reports.ts'
 import { findWorkerBySession, reportForTool } from '../../src/host/reports-service.ts'
 import { createMemoryFactStore, lazyFactStore } from '../../src/host/store.ts'
-import { WorkerPhase } from '../../src/domain/workers.ts'
+import { WorkerPhase, isBlockedWorker, normalizeWorker } from '../../src/domain/workers.ts'
 
 const NOW = 10_000_000
 
@@ -265,10 +265,129 @@ test('pr_created binds the pull request, which the observer and review loop key 
   assert.match(worker.pr?.url ?? '', /pull\/42/)
 })
 
-test('a report with neither a state nor an output is refused', async () => {
+test('a report with neither a state, a stage, nor an output is refused', async () => {
   const deps = await reportingWorker()
-  assert.match(await reportForTool(deps, { note: 'nothing' }, 'dsho-wrk-1'), /needs a `state`, an `outputs` entry/)
+  assert.match(
+    await reportForTool(deps, { note: 'nothing' }, 'dsho-wrk-1'),
+    /needs a `state`, a `stage`, an `outputs` entry/,
+  )
   assert.equal((await deps.raw.reports.list()).length, 0)
+})
+
+// ---------------------------------------------------------------------------
+// §12.1 — the declared stage, which is what makes the pipeline phases reachable
+// ---------------------------------------------------------------------------
+
+test('a declared stage moves the phase, for every stage the worker may declare', async () => {
+  for (const stage of REPORT_STAGES) {
+    const deps = await reportingWorker()
+    // From the spawn phase, which is the only phase a worker is created in, every
+    // declarable stage must be enterable -- that is the gap §12.1 names.
+    const stored = (await deps.raw.workers.get('wrk-1')) as Record<string, unknown>
+    await deps.raw.workers.put('wrk-1', { ...stored, phase: WorkerPhase.queued, phaseHistory: [] })
+    await reportForTool(deps, { stage, note: 'checkpoint' }, 'dsho-wrk-1')
+    const worker = (await deps.raw.workers.get('wrk-1')) as { phase: string; phaseHistory: Array<{ phase: string }> }
+    assert.equal(worker.phase, stage, `stage ${stage} should land in the same phase`)
+    assert.equal(worker.phaseHistory.at(-1)?.phase, stage, 'and it is audited')
+  }
+})
+
+test('a declared stage cannot walk the pipeline backwards', async () => {
+  // `implementing -> planning` is exactly the class of write §12.2 is about: it is
+  // representable, it is nonsense, and nothing used to stop it.
+  const deps = await reportingWorker()
+  const reply = await reportForTool(deps, { stage: 'planning', note: 'actually, first…' }, 'dsho-wrk-1')
+  assert.match(reply, /not a legal transition/)
+  assert.equal(((await deps.raw.workers.get('wrk-1')) as { phase: string }).phase, WorkerPhase.implementing)
+})
+
+test('the stage is recorded on the report, so the trail explains the phase', async () => {
+  const deps = await reportingWorker()
+  await reportForTool(deps, { stage: 'verifying', note: 'ran the suite' }, 'dsho-wrk-1')
+  const stored = (await deps.raw.reports.list())[0] as Report
+  assert.equal(stored.stage, 'verifying')
+})
+
+test('a person blocking outranks the stage the worker also names', async () => {
+  // The card must show `Needs you`; the guardrails key on the blockage, not on where
+  // in the pipeline the worker happened to be standing.
+  const deps = await reportingWorker()
+  await reportForTool(deps, { stage: 'implementing', state: 'needs_input', note: 'which branch?' }, 'dsho-wrk-1')
+  assert.equal(((await deps.raw.workers.get('wrk-1')) as { phase: string }).phase, WorkerPhase.awaitingHuman)
+})
+
+test('§12.4 / R9 — a paused report RECORDS the question, and resuming clears it', async () => {
+  // The field had no producer at all: nothing in production wrote `pendingQuestion`, so the
+  // fact R9 says the protocol carries could not be reached by any real worker.
+  const deps = await reportingWorker()
+  await reportForTool(deps, { state: 'needs_input', note: 'which branch should I target?' }, 'dsho-wrk-1')
+  const paused = (await deps.raw.workers.get('wrk-1')) as {
+    pendingQuestion?: { text: string; at: number }
+  }
+  assert.equal(paused.pendingQuestion?.text, 'which branch should I target?')
+  assert.ok(isBlockedWorker(normalizeWorker(paused)), 'and the R14 gate sees it')
+
+  // Any later report means the worker resumed — including one that only attaches an output,
+  // which is what makes this a live fact rather than a latch nobody clears.
+  await reportForTool(deps, { outputs: [{ kind: 'artifact' as never, ref: 'notes.md' }] }, 'dsho-wrk-1')
+  const resumed = (await deps.raw.workers.get('wrk-1')) as { pendingQuestion?: unknown }
+  assert.equal(resumed.pendingQuestion, undefined)
+})
+
+test('a stuck report is a pause too, and carries its note as the question', async () => {
+  const deps = await reportingWorker()
+  await reportForTool(deps, { state: 'stuck', note: 'I cannot choose the migration order' }, 'dsho-wrk-1')
+  const worker = (await deps.raw.workers.get('wrk-1')) as {
+    phase: string
+    pendingQuestion?: { text: string }
+  }
+  assert.equal(worker.phase, WorkerPhase.awaitingHuman)
+  assert.equal(worker.pendingQuestion?.text, 'I cannot choose the migration order')
+})
+
+test('a pause with no note still records a question, so the card can render one', async () => {
+  const deps = await reportingWorker()
+  await reportForTool(deps, { state: 'needs_input' }, 'dsho-wrk-1')
+  assert.equal(
+    ((await deps.raw.workers.get('wrk-1')) as { pendingQuestion?: { text: string } }).pendingQuestion?.text,
+    'waiting on a person',
+  )
+})
+
+test('a plain checkpoint does not record a pause', async () => {
+  const deps = await reportingWorker()
+  await reportForTool(deps, { state: 'checkpoint', note: 'halfway' }, 'dsho-wrk-1')
+  assert.equal(((await deps.raw.workers.get('wrk-1')) as { pendingQuestion?: unknown }).pendingQuestion, undefined)
+})
+
+test('a bad stage is refused before anything is stored', async () => {
+  const deps = await reportingWorker()
+  assert.match(await reportForTool(deps, { stage: 'vibing' as never }, 'dsho-wrk-1'), /must be one of/)
+  assert.equal((await deps.raw.reports.list()).length, 0)
+})
+
+test('re-declaring the stage a worker is already in is routine, not a refusal', async () => {
+  const deps = await reportingWorker()
+  await reportForTool(deps, { stage: 'implementing' }, 'dsho-wrk-1')
+  const reply = await reportForTool(deps, { stage: 'implementing', note: 'still going' }, 'dsho-wrk-1')
+  assert.doesNotMatch(reply, /not a legal transition/)
+  assert.equal(((await deps.raw.workers.get('wrk-1')) as { phase: string }).phase, WorkerPhase.implementing)
+})
+
+test('a report from a finished worker is recorded but does not resurrect the card', async () => {
+  // The session outlives the record, so this is a real case rather than a defensive
+  // one. The report is kept; the phase stays terminal; and the worker is told why.
+  const deps = await reportingWorker()
+  const stored = (await deps.raw.workers.get('wrk-1')) as Record<string, unknown>
+  await deps.raw.workers.put('wrk-1', {
+    ...stored,
+    phase: WorkerPhase.merged,
+    phaseHistory: [{ phase: WorkerPhase.merged, at: 1, summary: 'merged' }],
+  })
+  const reply = await reportForTool(deps, { stage: 'implementing', note: 'one more thing' }, 'dsho-wrk-1')
+  assert.match(reply, /not a legal transition/)
+  assert.equal((await deps.raw.workers.get('wrk-1') as { phase: string }).phase, WorkerPhase.merged)
+  assert.equal((await deps.raw.reports.list()).length, 1, 'the report is still recorded')
 })
 
 test('a bad state or output is refused before anything is stored', async () => {

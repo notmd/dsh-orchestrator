@@ -12,7 +12,9 @@ import assert from 'node:assert/strict'
 import {
   EXEC_DEFAULTS,
   FailureKind,
+  RATE_LIMIT_DEFAULTS,
   classifyCommandFailure,
+  createRateLimitCooldown,
   createRunCommand,
   describeFailure,
   retryAfterMs,
@@ -21,6 +23,8 @@ import type { CollectedRead, SubprocessHandleLike, SubprocessLike } from '../../
 import type { CommandResult } from '../../src/host/worktree.ts'
 
 const CWD = '/repo'
+
+const NOW = 1_700_000_000_000
 
 interface FakeSpawn {
   argv: readonly string[]
@@ -281,4 +285,119 @@ test('the not-installed and unauthorised messages name the exact prerequisite', 
   // and a support thread.
   assert.match(describeFailure(FailureKind.notInstalled, ['gh']), /not installed or not on PATH/)
   assert.match(describeFailure(FailureKind.unauthorized, ['gh']), /gh auth login/)
+})
+
+// ---------------------------------------------------------------------------
+// G6 — the credential reaches the child, and a rejection drops the memo
+// ---------------------------------------------------------------------------
+
+test('the resolved credential is injected as GH_TOKEN for `gh`, and only for `gh`', async () => {
+  // dsh-subprocess strips credential-shaped names from a child's environment, so the ported
+  // chain could not reach `gh` at all: a project-scoped `AO_GITHUB_TOKEN` had no effect and
+  // the module's documented precedence was a statement about a variable nothing read.
+  const subprocess = fakeSubprocess({ exitCode: 0, stdout: 'ok' })
+  let resolved = 0
+  const run = createRunCommand({
+    subprocess,
+    cwd: CWD,
+    token: {
+      async token() {
+        resolved += 1
+        return 'ghs_secret'
+      },
+      invalidate() {},
+    },
+  })
+
+  await run(['gh', 'pr', 'view', '3'])
+  assert.deepEqual(subprocess.spawns[0]?.env, { GH_TOKEN: 'ghs_secret' })
+
+  // `git` authenticates through the remote's configured helper; a second credential path is
+  // not something to add by accident.
+  await run(['git', 'push', 'origin', 'b'])
+  assert.equal(subprocess.spawns[1]?.env, undefined)
+  assert.equal(resolved, 1, 'and the chain is only consulted for gh')
+})
+
+test('a credential that cannot be resolved runs the command anyway', async () => {
+  // The chain's own contract: a missing token is "try the next source", never a broken
+  // command. An install with no token configured behaves exactly as it did before.
+  const subprocess = fakeSubprocess({ exitCode: 0, stdout: 'ok' })
+  const run = createRunCommand({
+    subprocess,
+    cwd: CWD,
+    token: {
+      async token(): Promise<string> {
+        throw new Error('no token configured')
+      },
+      invalidate() {},
+    },
+  })
+  const result = await run(['gh', 'pr', 'view', '3'])
+  assert.equal(result.exitCode, 0)
+  assert.equal(subprocess.spawns[0]?.env, undefined, 'gh falls back to its own configuration')
+})
+
+test('an auth-class rejection drops the credential memo, so a rotated token is picked up', async () => {
+  // Ported behaviour that could never run while the chain was unwired.
+  const subprocess = fakeSubprocess({ exitCode: 1, stdout: '', stderr: 'HTTP 401: Bad credentials' })
+  let invalidated = 0
+  const run = createRunCommand({
+    subprocess,
+    cwd: CWD,
+    token: { async token() { return 'stale' }, invalidate() { invalidated += 1 } },
+  })
+
+  await run(['gh', 'pr', 'view', '3'])
+  assert.equal(invalidated, 1)
+
+  // A non-auth failure must NOT drop it: that would throw away a good credential and re-run
+  // `gh auth token` on every transient error.
+  const notFound = createRunCommand({
+    subprocess: fakeSubprocess({ exitCode: 1, stdout: '', stderr: 'HTTP 404: Not Found' }),
+    cwd: CWD,
+    token: { async token() { return 'good' }, invalidate() { invalidated += 1 } },
+  })
+  await notFound(['gh', 'pr', 'view', '3'])
+  assert.equal(invalidated, 1)
+})
+
+// ---------------------------------------------------------------------------
+// G7 — the back-off the failure message promises
+// ---------------------------------------------------------------------------
+
+test('the cooldown honours the provider hint, defaults without one, and expires', () => {
+  const cooldown = createRateLimitCooldown()
+  assert.equal(cooldown.clearsAt(NOW), undefined, 'nothing is cooling down initially')
+
+  cooldown.record({ exitCode: 1, stdout: '', stderr: 'API rate limit exceeded' }, NOW)
+  assert.equal(cooldown.clearsAt(NOW), NOW + RATE_LIMIT_DEFAULTS.defaultCooldownMs)
+  assert.equal(cooldown.clearsAt(NOW + RATE_LIMIT_DEFAULTS.defaultCooldownMs), undefined)
+
+  cooldown.record({ exitCode: 1, stdout: '', stderr: 'API rate limit exceeded. Retry-After: 2' }, NOW)
+  assert.equal(cooldown.clearsAt(NOW), NOW + 2_000, 'the provider\'s own hint wins')
+
+  // A parsed reset is honoured, but not for a whole day: an absurd hint must not park the
+  // observer for the rest of the session.
+  cooldown.record({ exitCode: 1, stdout: '', stderr: 'API rate limit exceeded. X-RateLimit-Reset: ' + (NOW / 1000 + 86_400) }, NOW)
+  assert.equal(cooldown.clearsAt(NOW), NOW + RATE_LIMIT_DEFAULTS.maxCooldownMs)
+})
+
+test('a success clears the cooldown, because it proves the budget is usable again', () => {
+  const cooldown = createRateLimitCooldown()
+  cooldown.record({ exitCode: 1, stdout: '', stderr: 'secondary rate limit' }, NOW)
+  assert.notEqual(cooldown.clearsAt(NOW), undefined)
+  cooldown.record({ exitCode: 0, stdout: '', stderr: '' }, NOW)
+  assert.equal(cooldown.clearsAt(NOW), undefined)
+})
+
+test('an ordinary failure neither starts nor clears a cooldown', () => {
+  // The classification is what decides: only a rate limit may park the observer.
+  const cooldown = createRateLimitCooldown()
+  cooldown.record({ exitCode: 1, stdout: '', stderr: 'HTTP 500: server error' }, NOW)
+  assert.equal(cooldown.clearsAt(NOW), undefined)
+
+  cooldown.record({ exitCode: 1, stdout: '', stderr: 'API rate limit exceeded' }, NOW)
+  cooldown.record({ exitCode: 1, stdout: '', stderr: 'HTTP 500: server error' }, NOW + 1_000)
+  assert.notEqual(cooldown.clearsAt(NOW + 1_000), undefined, 'an unrelated failure does not lift it')
 })

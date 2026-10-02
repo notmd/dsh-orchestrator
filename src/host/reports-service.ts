@@ -32,11 +32,17 @@ import {
   ReportError,
   ReportState,
   assertOutputs,
+  assertReportStage,
   assertReportState,
   truncateNote,
 } from '../domain/reports.ts'
-import type { Report } from '../domain/reports.ts'
-import { WorkerPhase, normalizeWorker, setPhase } from '../domain/workers.ts'
+import type { Report, ReportStage } from '../domain/reports.ts'
+import {
+  WorkerPhase,
+  isValidPhaseTransition,
+  normalizeWorker,
+  setPhase,
+} from '../domain/workers.ts'
 import type { Worker } from '../domain/workers.ts'
 import type { LazyFactStore } from './store.ts'
 import { dirtyPaths, newlyDirty } from './root-cleanliness.ts'
@@ -89,8 +95,23 @@ async function escapedEdits(
   return newlyDirty(await dirtyPaths(deps.run, rootPath), worker.rootDirtyAtStart ?? [])
 }
 
-/** The phase a report state implies, if any. */
-function phaseFor(state: ReportState | undefined): WorkerPhase | undefined {
+/**
+ * The phase a report implies, if any.
+ *
+ * Three inputs, in this order, and the order is the interesting part:
+ *
+ *   1. **A person blocking outranks a stage declaration.** `needs_input`/`stuck` land
+ *      in `awaiting_human` whatever stage the worker also names, because the card must
+ *      show `Needs you` and the guardrails key on that fact. The stage in such a report is
+ *      **not** lost — it is recorded on the report and in `pendingQuestion` — but the phase
+ *      says what the board has to act on: the worker is paused, not working. When it resumes
+ *      it declares the stage again, and the table's `awaiting_human` row is the edge that
+ *      lets it.
+ *   2. **A declared stage is the phase.** PRD §8.1's checkpoints: the worker says where
+ *      it is, and nothing infers it.
+ *   3. `done` means the work shipped, which is PRD §8's `shipping`.
+ */
+function phaseFor(state: ReportState | undefined, stage: ReportStage | undefined): WorkerPhase | undefined {
   switch (state) {
     case ReportState.needsInput:
     case ReportState.stuck:
@@ -98,11 +119,11 @@ function phaseFor(state: ReportState | undefined): WorkerPhase | undefined {
       // enters `Needs you`. They stay distinct states because they demand opposite
       // automation, but the phase they land in is the same.
       return WorkerPhase.awaitingHuman
-    case ReportState.done:
-      return WorkerPhase.shipping
     default:
-      return undefined
+      break
   }
+  if (stage !== undefined) return stage as WorkerPhase
+  return state === ReportState.done ? WorkerPhase.shipping : undefined
 }
 
 /** Resolves the worker whose session is calling. */
@@ -121,7 +142,12 @@ export async function findWorkerBySession(
  */
 export async function reportForTool(
   deps: ReportToolDeps,
-  args: { state?: ReportState; note?: string; outputs?: ReadonlyArray<{ kind: never; ref: string }> },
+  args: {
+    state?: ReportState
+    stage?: ReportStage
+    note?: string
+    outputs?: ReadonlyArray<{ kind: never; ref: string }>
+  },
   callerSessionId: string | undefined,
 ): Promise<string> {
   let store: Awaited<ReturnType<LazyFactStore['get']>>
@@ -145,10 +171,12 @@ export async function reportForTool(
     )
   }
 
-  let state
-  let outputs
+  let state: ReportState | undefined
+  let stage: ReportStage | undefined
+  let outputs: ReturnType<typeof assertOutputs>
   try {
     state = assertReportState(args.state)
+    stage = assertReportStage(args.stage)
     outputs = assertOutputs(args.outputs as never)
   } catch (error) {
     return error instanceof ReportError ? `Could not record the report — ${error.message}` : String(error)
@@ -173,8 +201,8 @@ export async function reportForTool(
     }
   }
 
-  if (state === undefined && outputs.length === 0) {
-    return 'A report needs a `state`, an `outputs` entry, or both — otherwise there is nothing to record.'
+  if (state === undefined && stage === undefined && outputs.length === 0) {
+    return 'A report needs a `state`, a `stage`, an `outputs` entry, or a combination — otherwise there is nothing to record.'
   }
 
   const now = deps.now ?? Date.now
@@ -188,6 +216,7 @@ export async function reportForTool(
     outputs,
     createdAt: at,
     ...(state ? { state } : {}),
+    ...(stage ? { stage } : {}),
     ...(truncated ? { truncated } : {}),
   }
   await store.reports.put(report.id, report)
@@ -210,9 +239,34 @@ export async function reportForTool(
     }
   }
 
-  const phase = phaseFor(state)
-  if (phase) bound = setPhase(bound, phase, report.note || (state ?? ''), at)
-  else bound = { ...bound, lastSignalAt: at, updatedAt: at }
+  // R9's declared blockage, which until now had **no producer at all**: nothing in
+  // production wrote `pendingQuestion`, so the fact the protocol promises (and the branch
+  // that reads it) could not be reached. Both paused states set it -- "waiting on an answer"
+  // and "waiting on a decision" are one question to a person, and both render as `Needs you`
+  // -- and **every other report clears it**, which is what makes this a live fact rather than
+  // a latch: the next thing a resumed worker says is any report at all.
+  const paused = state === ReportState.needsInput || state === ReportState.stuck
+  const next: Worker = { ...bound, lastSignalAt: at, updatedAt: at }
+  const question = report.note.trim() === '' ? 'waiting on a person' : report.note
+  if (paused) next.pendingQuestion = { text: question, at }
+  else delete next.pendingQuestion
+
+  // The phase write, guarded rather than attempted. A worker that has already finished can
+  // still report -- its session outlives the record -- and the honest answer is "recorded,
+  // but it no longer moves your card", not a crashed tool or a resurrected worker. The
+  // transition table is the single arbiter (see `PHASE_TRANSITIONS`).
+  const phase = phaseFor(state, stage)
+  let refusal = ''
+  bound = next
+  if (phase !== undefined && isValidPhaseTransition(next.phase, phase)) {
+    bound = setPhase(next, phase, report.note || stage || (state ?? ''), at)
+  } else if (phase !== undefined && phase !== next.phase) {
+    // Re-declaring the stage a worker is already in is routine and silent; anything else that
+    // the table refuses is worth saying, because the worker can act on it.
+    refusal =
+      `The phase stays ${next.phase}: ${next.phase} -> ${phase} is not a legal transition` +
+      ' (the worker has finished, or is past that stage).'
+  }
   await store.workers.put(bound.id, bound)
 
   const queued = (await store.reports.list()).filter(
@@ -220,9 +274,10 @@ export async function reportForTool(
   ).length
 
   return [
-    `Recorded ${state ?? 'update'} for ${worker.id}.`,
+    `Recorded ${state ?? stage ?? 'update'} for ${worker.id}.`,
     ...(pr ? [`Bound pull request ${pr.ref} to this worker.`] : []),
-    ...(phase ? [`Phase is now ${phase}.`] : []),
+    ...(phase && refusal === '' ? [`Phase is now ${phase}.`] : []),
+    ...(refusal === '' ? [] : [refusal]),
     `The orchestrator is notified on its own schedule (${queued} report(s) pending delivery).`,
   ].join('\n')
 }
