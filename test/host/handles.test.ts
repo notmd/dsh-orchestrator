@@ -16,7 +16,7 @@ import { fillSlots, messageWorkerForTool, startWorkerForTool, stopWorkerForTool 
 import type { RunCommand } from '../../src/host/worktree.ts'
 import { normalizePluginConfig } from '../../src/config/validate.ts'
 import { createMemoryFactStore, lazyFactStore } from '../../src/host/store.ts'
-import { WorkerPhase } from '../../src/domain/workers.ts'
+import { WorkerPhase, isTerminalPhase, normalizeWorker } from '../../src/domain/workers.ts'
 import type { AgentLike, AgentHandle, Disposable } from '../../src/host/spawn.ts'
 
 function fakeHandle(): { handle: AgentHandle; readonly followups: unknown[]; readonly cancels: unknown[] } {
@@ -204,6 +204,32 @@ test('stopping releases the issue, so the work is not stranded', async () => {
   assert.equal(issue.state, 'open', 'free for another worker')
   assert.equal(issue.workerId, undefined, 'and no longer bound to the stopped one')
   assert.equal(live.byWorker('wrk-1'), undefined, 'the handle is forgotten')
+})
+
+test('stopping finishes the WORKER RECORD, which is what frees its slot', async () => {
+  // The complement of the test below, and the reason it needed one. The worktree is kept
+  // (stopping is not abandoning the WORK), but the record is finished: the issue is requeued
+  // for a different worker, so this one can never act again — and while its phase stayed live
+  // it held a concurrency slot it could not use.
+  //
+  // That is not hypothetical. The web profile's cordis.patch.yml carries a note from when the
+  // queue wedged: "capacity counts workers 'not in merged|closed|abandoned|failed', and
+  // NOTHING but a merged or closed PR moves a worker to a terminal phase -- orchestrator_worker_stop
+  // only cancels the turn and requeues the issue ... and no code ever writes 'abandoned'. So a
+  // worker whose turn ends without a PR holds a slot forever, and at the default cap of 2
+  // exactly two of them wedge the queue with no operator release valve." Raising the cap was
+  // the workaround; this is the fix.
+  const live = createLiveWorkers()
+  live.register({ workerId: 'wrk-1', sessionId: 'dsho-wrk-1', handle: fakeHandle().handle })
+  const deps = await workerDeps(live)
+
+  await stopWorkerForTool(deps as never, { workerId: 'wrk-1', reason: 'superseded' })
+
+  const worker = normalizeWorker(await deps.raw.workers.get('wrk-1'))
+  assert.equal(worker.phase, WorkerPhase.abandoned)
+  assert.ok(isTerminalPhase(worker.phase), 'terminal, so it no longer counts against the cap')
+  assert.equal(worker.phaseHistory.at(-1)?.summary, 'superseded', 'and the operator\'s reason is the audit line')
+  assert.equal(worker.endedAt !== undefined, true, 'the watermark is stamped with the phase')
 })
 
 test('stopping keeps the worktree, because stopping is not abandoning', async () => {
