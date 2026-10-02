@@ -39,6 +39,12 @@ flowchart LR
 
 **The review order is the point:** the plugin's own read-only reviewer passes over every PR head first and the worker iterates on its findings until that pass approves — *then* the card moves to `In review` and waits for you. A PR never reaches a human unreviewed, and never reaches `Ready` without a human approval.
 
+## Testing
+
+The suite runs with `npm test` (`node --test`) and covers the pure logic — reducers, the worker protocol, and the provider and host adapters — so it needs no network, no git remote, and no DSH session.
+
+`npm run verify` is the full gate: typecheck, then tests, then build. Run it before pushing a branch.
+
 ## Status
 
 Draft for review. No implementation has been written. The next step is the M0 spike list in [PRD.md §16](PRD.md#16-milestones) — four short spikes that de-risk the panel seat, the session spawn, the host↔client route, and PR observation.
