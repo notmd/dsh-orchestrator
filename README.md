@@ -41,13 +41,15 @@ flowchart LR
 
 ## Testing
 
-The suite runs with `npm test` (`node --test`) and covers the pure logic — reducers, the worker protocol, and the provider and host adapters — so it needs no network, no git remote, and no DSH session.
+`npm test` runs the whole suite with `node --test`, loading the TypeScript sources and tests through Node 24's built-in type stripping — no build step and no DSH session.
 
-`npm run verify` is the full gate: typecheck, then tests, then build. Run it before pushing a branch.
+Most of the suite is offline unit tests, but the integration tests (`test/integration/*.test.ts` and `test/host/worktree.integration.test.ts`) create real temporary repositories and run real `git init`/`commit`/`branch`/`worktree`, so `git` has to be installed. Only `gh` and the model provider are mocked, which is why nothing reaches the network.
+
+`npm run verify` is the full gate: typecheck, then tests, then build. `npm run verify:all` extends it to the `test/` and spike typechecks.
 
 ## Status
 
-Draft for review. No implementation has been written. The next step is the M0 spike list in [PRD.md §16](PRD.md#16-milestones) — four short spikes that de-risk the panel seat, the session spawn, the host↔client route, and PR observation.
+Implemented and audited. [STATUS.md](STATUS.md) is the handoff document — what is finished, what is next, and which decisions are deliberate — and the source of truth for the current numbers: at the time of writing, 879 tests, with `npm run verify` and `npm run verify:all` both exiting 0. Open: M6 (the PRD marks it optional), A4 (deliberately left mocked), and two housekeeping items.
 
 The design is grounded in a **local clone of AO's `main`** (`53ba1e8`), not just its documentation. Where prose and code disagreed, the code won — see [Appendix B §B15](docs/agent-orchestrator-reference.md) for the code-level findings and the list of verified constants.
 
