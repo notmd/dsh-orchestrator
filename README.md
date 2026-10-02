@@ -39,6 +39,14 @@ flowchart LR
 
 **The review order is the point:** the plugin's own read-only reviewer passes over every PR head first and the worker iterates on its findings until that pass approves — *then* the card moves to `In review` and waits for you. A PR never reaches a human unreviewed, and never reaches `Ready` without a human approval.
 
+## Settings
+
+The plugin's own defaults — the values every project inherits — live on the sidebar's **Plugins** page: open the **`@local/dsh-orchestrator`** bundle and its configuration page renders underneath the description. It carries the worker and reviewer agent presets and permission boundaries, the auto-review switches and review-loop bounds, the pull-request options, and the worker-report windows.
+
+Only the fields the running plugin re-reads are editable there, and an edit reaches the running plugin at once, with no reload. **Save** persists the change as an override in the profile's `cordis.patch.yml` (`~/.dsh/profiles/<profile>/cordis.patch.yml`) — the profile, not the bundle, carries your values — and the page marks those rows as overridden. **Reset to default** removes that override and restores inheritance from the plugin's defaults. The settings the plugin reads once when it loads — the default repository, the poll and review-sweep intervals, and the not-yet-wired plan gate and webhook block — are deliberately absent from the page and are edited in the profile configuration instead.
+
+The mechanism behind it — the keyed `plugins.bundle.config` slot, and the volatile marker that decides both what the page may edit and how a write lands in place — is [Appendix A §A2.6](docs/dsh-plugin-contract.md#a26-a-plugins-own-configuration-page-on-the-plugins-page).
+
 ## Status
 
 Draft for review. No implementation has been written. The next step is the M0 spike list in [PRD.md §16](PRD.md#16-milestones) — four short spikes that de-risk the panel seat, the session spawn, the host↔client route, and PR observation.
