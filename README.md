@@ -41,7 +41,17 @@ flowchart LR
 
 ## Status
 
-Draft for review. No implementation has been written. The next step is the M0 spike list in [PRD.md §16](PRD.md#16-milestones) — four short spikes that de-risk the panel seat, the session spawn, the host↔client route, and PR observation.
+**Implemented, installed, and running.** What the PRD describes now exists as code: the host half carries the issue and worker store, the worktree manager, the worker spawner, the `gh` PR observer, the review sweep with its read-only reviewer session, feedback routing back into the same worker, and the Kanban reducer the board is derived from — exposed to agents as fourteen `orchestrator_*` tools and to the client over `/dsho/api/{board,settings,connect,workspaces,tasks}`. The client half registers one `sidebar.panellist` row and one keyed `main` panel per connected project, renders the four lanes with loading, empty and error states, and carries the New task and Project settings surfaces. The plugin installs into a profile, activates, and the requested flow has been run live end to end there — a real worker, a real worktree, a real `gh pr create`, a real reviewer pass at the pinned head, and the card stopping at the human gate — with the board itself verified rendering in a live GUI. The evidence, tagged by what was actually measured, is in [STATUS.md](STATUS.md) §2 (chunks 35, 41, 42, 43).
+
+Verify it:
+
+| Command | What it proves |
+|---|---|
+| `npm run verify` | Typechecks `src/`, runs the suite (`node --test`, all green), then builds both halves. Exits 0. |
+| `npm run verify:all` | The same, plus a typecheck of `test/` and `src/spike/` — which `verify` deliberately does not cover. |
+| `npm run build && dsh plugin --profile web add "$PWD"` then `dsh --profile web --port 0 --no-open --host 127.0.0.1` | The plugin loads in a real profile: the row appears under **Settings → Plugins**, and connecting a project adds its board row to the sidebar. **Build first** — `exports` points at `dist/`, so installing an unbuilt package links an entry that does not exist. See [docs/verification-harness.md](docs/verification-harness.md) §4 for the removal command and the client-generation footgun. |
+
+**Still open**, and the only place that tracks it is **[STATUS.md](STATUS.md)** §4: M6 hardening (the PRD marks it optional), two housekeeping items, and one platform assumption — whether DSH honours a `restrict` scope for §12.2, which three instruments have failed to measure. Carried-forward risks are in §8. Nothing there is required by the PRD except M6.
 
 The design is grounded in a **local clone of AO's `main`** (`53ba1e8`), not just its documentation. Where prose and code disagreed, the code won — see [Appendix B §B15](docs/agent-orchestrator-reference.md) for the code-level findings and the list of verified constants.
 
