@@ -36,6 +36,7 @@ test('a record that predates the settings reads as the defaults', () => {
     workerAgentPreset: '',
     workerPermissionPreset: '',
     reviewerAgentPreset: '',
+    reviewerPermissionPreset: '',
     autoReview: undefined,
   })
   assert.equal(PROJECT_SETTINGS_DEFAULTS.intakeEnabled, true, 'and intake defaults ON, which is the behaviour it replaces')

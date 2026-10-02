@@ -96,6 +96,8 @@ interface SettingsPayload {
     workerPermissionPreset: string
     /** The preset this project's reviewer runs as. Empty = the plugin default. */
     reviewerAgentPreset: string
+    /** The boundary a review pass runs under. Empty = the plugin default. */
+    reviewerPermissionPreset: string
     /** `null` means "inherit the plugin default"; it is not `false`. */
     autoReview: boolean | null
   } | null
@@ -105,6 +107,8 @@ interface SettingsPayload {
     workerAgentPreset: string
     workerPermissionPreset: string
     reviewerAgentPreset: string
+    /** The boundary a review pass runs under. Empty = the plugin default. */
+    reviewerPermissionPreset: string
   }
 }
 
@@ -256,6 +260,8 @@ const FALLBACK: Record<string, string> = {
   'orchestrator.settings.workerPermissions': 'Worker permissions',
   'orchestrator.settings.workerPermissionsHint': 'Sandbox and approval boundary this project\u2019s workers run under. A worker commits and pushes, and a linked worktree\u2019s git data lives in the parent repository, so a worktree-scoped sandbox cannot complete a stage.',
   'orchestrator.settings.workerPermissionsDefault': 'default',
+  'orchestrator.settings.reviewerPermissions': 'Reviewer permissions',
+  'orchestrator.settings.reviewerPermissionsHint': 'Sandbox boundary a review pass runs under. It has to post its review, but it must mutate nothing — a read-only preset is necessary and not sufficient.',
   'orchestrator.settings.autoReview': 'Auto review PRs',
   'orchestrator.settings.reviewers': 'Reviewers',
   'orchestrator.settings.defaultReviewer': 'Default reviewer',
@@ -2098,6 +2104,25 @@ loader.load({
                     : settings.reviewerAgentPreset,
                 placeholder: payload.defaults.reviewerAgentPreset,
                 onCommit: (next: string) => save({ reviewerAgentPreset: next }),
+              }),
+            ),
+            h(
+              SettingsRow,
+              {
+                label: translate('orchestrator.settings.reviewerPermissions'),
+                hint: translate('orchestrator.settings.reviewerPermissionsHint'),
+                error: fieldError('reviewerPermissionPreset'),
+              },
+              h(InlineEdit, {
+                id: 'dsho-reviewer-permissions',
+                label: translate('orchestrator.settings.reviewerPermissions'),
+                value: settings.reviewerPermissionPreset,
+                display:
+                  settings.reviewerPermissionPreset === ''
+                    ? `${translate('orchestrator.settings.workerPermissionsDefault')} (${payload.defaults.reviewerPermissionPreset})`
+                    : settings.reviewerPermissionPreset,
+                placeholder: payload.defaults.reviewerPermissionPreset,
+                onCommit: (next: string) => save({ reviewerPermissionPreset: next }),
               }),
             ),
           ],

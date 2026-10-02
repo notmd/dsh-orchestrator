@@ -118,7 +118,7 @@ test('the dialog is a labelled modal and every input has an accessible name', ()
   assert.match(client, /'aria-labelledby': 'dsho-settings-title'/)
   // The three inline editors each pass the row's own label as the input's aria-label.
   const inlineEdits = [...client.matchAll(/h\(InlineEdit, \{[\s\S]*?\}\)/g)]
-  assert.equal(inlineEdits.length, 5, 'branch, prefix, assignee, worker permissions and reviewer')
+  assert.equal(inlineEdits.length, 6, 'branch, prefix, assignee, worker permissions, reviewer and reviewer permissions')
   for (const [block] of inlineEdits) assert.match(block, /label: translate\('orchestrator\.settings\./)
 })
 
@@ -212,6 +212,7 @@ test('a failed save is reported on the row that caused it', () => {
     'defaultBranch',
     'intakeEnabled',
     'reviewerAgentPreset',
+    'reviewerPermissionPreset',
     'sessionPrefix',
     'workerAgentPreset',
     'workerPermissionPreset',

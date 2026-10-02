@@ -83,5 +83,7 @@
   "orchestrator.task.failed": "Could not create the task: {message}",
   "orchestrator.settings.workerPermissions": "Worker permissions",
   "orchestrator.settings.workerPermissionsHint": "Sandbox and approval boundary this project’s workers run under. A worker commits and pushes, and a linked worktree’s git data lives in the parent repository, so a worktree-scoped sandbox cannot complete a stage.",
-  "orchestrator.settings.workerPermissionsDefault": "default"
+  "orchestrator.settings.workerPermissionsDefault": "default",
+  "orchestrator.settings.reviewerPermissions": "Reviewer permissions",
+  "orchestrator.settings.reviewerPermissionsHint": "Sandbox boundary a review pass runs under. It has to post its review, but it must mutate nothing — a read-only preset is necessary and not sufficient."
 }

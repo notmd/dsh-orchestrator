@@ -320,3 +320,57 @@ test('connectRepo is exported for the harness and keeps the identity', async () 
   assert.ok(again.ok)
   assert.equal(again.repo.id, repo.id)
 })
+
+test('the REVIEWER permission preset reaches the reviewer spawn, per project, and clearing it returns to the default', async () => {
+  // Measured live: the reviewer runs under `read-only` + `approval: ask`, and a read-only
+  // sandbox has no writable TEMP directory -- so a reviewer that staged a file before
+  // posting (`<<'JSON'`, `--input -`) died with "cannot create temp file for here
+  // document", escalated, and then waited forever on an approval nobody could answer. The
+  // auto-review loop is dead until this boundary is right.
+  const { store, deps, repo, spawn } = await harness()
+
+  const started = await startWorkerForTool(deps as never, { title: 'Review me' })
+  const workerId = /\b(wrk-[0-9A-HJKMNP-TV-Z]{26})\b/.exec(started)?.[1]
+  assert.ok(workerId, started)
+  const worker = normalizeWorker(await store.workers.get(workerId!))
+  await store.workers.put(workerId!, {
+    ...worker,
+    pr: { number: 8, url: 'https://example.invalid/acme/widgets/pull/8', headSha: 'b'.repeat(40) },
+    lastSignalAt: NOW - 10 * 60 * 1000,
+  })
+  await store.prSnapshots.put(workerId!, { workerId, url: 'https://example.invalid/acme/widgets/pull/8', headSha: 'b'.repeat(40), fetched: true })
+  deps.live.register({
+    workerId: workerId!,
+    sessionId: worker.sessionId,
+    handle: { agent: { session: { id: worker.sessionId }, status: 'idle', followup() {} }, async dispose() {} },
+  })
+
+  await updateProjectSettings(deps as never, { repoId: repo.id, patch: { reviewerPermissionPreset: 'workspace-write' } })
+  spawn.appliedPermissions.length = 0
+  let sweep = await sweepReviewPasses(deps as never)
+  assert.equal(sweep.scheduled.length, 1, `a pass is scheduled: ${JSON.stringify(sweep)}`)
+  assert.ok(
+    spawn.appliedPermissions.includes('workspace-write'),
+    `the project boundary reaches the reviewer (applied: ${JSON.stringify(spawn.appliedPermissions)})`,
+  )
+
+  // Clearing it returns to the plugin default, which stays `read-only`: a reviewer must
+  // mutate nothing, and widening it is a per-project decision rather than the new normal.
+  await updateProjectSettings(deps as never, { repoId: repo.id, patch: { reviewerPermissionPreset: '' } })
+  // A NEW head, because a judged head is never re-judged (A20) -- the sweep would have
+  // nothing to do and the assertion below would pass for the wrong reason.
+  const atNewHead = normalizeWorker(await store.workers.get(workerId!))
+  await store.workers.put(workerId!, {
+    ...atNewHead,
+    pr: { number: 8, url: 'https://example.invalid/acme/widgets/pull/8', headSha: 'c'.repeat(40) },
+    lastSignalAt: NOW - 10 * 60 * 1000,
+  })
+  await store.prSnapshots.put(workerId!, { workerId, url: 'https://example.invalid/acme/widgets/pull/8', headSha: 'c'.repeat(40), fetched: true })
+  spawn.appliedPermissions.length = 0
+  sweep = await sweepReviewPasses(deps as never)
+  assert.ok(
+    spawn.appliedPermissions.includes(deps.config.reviewerPermissionPreset),
+    `empty falls back to the plugin default (applied: ${JSON.stringify(spawn.appliedPermissions)})`,
+  )
+  assert.equal(deps.config.reviewerPermissionPreset, 'read-only', 'and the default boundary is unchanged')
+})

@@ -10,6 +10,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 import { workerTaskMessage } from '../../src/domain/worker-contract.ts'
+import { REVIEWER_OUTPUT } from '../../src/domain/reviewer-contract.ts'
 
 const BASE = {
   issueId: 'iss-1',
@@ -44,4 +45,14 @@ test('the settings did not disturb the contract ordering', () => {
   assert.ok(text.indexOf('untrusted') < text.indexOf('the description'))
   assert.ok(text.indexOf('npm test') < text.indexOf('DRAFT'), 'verification precedes shipping')
   assert.match(text, /orchestrator_report/, 'and reporting is still the last step')
+})
+
+test('the reviewer is told HOW to post without a writable temp directory', () => {
+  // Measured live, and it cost an entire auto-review pass: the reviewer reached for a
+  // heredoc, the read-only sandbox refused the temp file, and it stalled on an approval
+  // nobody answers. Telling it the command form is the least-privilege fix -- the boundary
+  // stays `read-only` instead of being widened to make a shell idiom work.
+  assert.match(REVIEWER_OUTPUT, /-f event=COMMENT/, 'the working form is given concretely')
+  assert.match(REVIEWER_OUTPUT, /never a heredoc, never `--input`/)
+  assert.match(REVIEWER_OUTPUT, /cannot create temp file for here document/, 'and the failure it prevents is named')
 })

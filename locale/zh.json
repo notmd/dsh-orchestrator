@@ -83,5 +83,7 @@
   "orchestrator.task.failed": "无法创建任务：{message}",
   "orchestrator.settings.workerPermissions": "工作者权限",
   "orchestrator.settings.workerPermissionsHint": "本项目工作者运行所用的沙箱与审批边界。工作者需要提交并推送，而链接工作树的 git 数据位于父仓库中，因此仅限工作树的沙箱无法完成阶段。",
-  "orchestrator.settings.workerPermissionsDefault": "默认"
+  "orchestrator.settings.workerPermissionsDefault": "默认",
+  "orchestrator.settings.reviewerPermissions": "审查者权限",
+  "orchestrator.settings.reviewerPermissionsHint": "审查过程运行所用的沙箱边界。它需要发布审查结果，但不得修改任何内容——仅读预设是必要条件，但不充分。"
 }

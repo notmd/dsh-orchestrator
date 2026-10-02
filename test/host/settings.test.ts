@@ -87,6 +87,7 @@ test('the payload names the project and serializes its settings', async () => {
     workerAgentPreset: '',
     workerPermissionPreset: '',
     reviewerAgentPreset: '',
+    reviewerPermissionPreset: '',
     autoReview: null,
   })
 })

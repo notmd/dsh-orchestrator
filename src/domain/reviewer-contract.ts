@@ -70,7 +70,20 @@ you have it. The plugin must later recognise this review as its own, and the sna
 reads is built from \`gh pr view --json reviews\`, which reports node ids only — a numeric id
 alone cannot be matched, and this review would then be mistaken for a person's. Posting from
 the pull request author's own account is required, so there is no bot identity to fall back
-on.`
+on.
+
+**Post it with one \`-f\` per field — never a heredoc, never \`--input\`.** Your sandbox is
+read-only, so you have no writable temporary directory: \`<<'JSON'\`, \`--input -\` and anything
+that stages a file first all fail with \`cannot create temp file for here document\`, and you
+then sit waiting on an approval nobody is there to answer. \`-f\` needs no filesystem at all:
+
+    gh api repos/<owner>/<repo>/pulls/<number>/reviews \\
+      -f event=COMMENT -f commit_id=<pinned sha> -f body='<your summary>' \\
+      -f 'comments[][path]=<path>' -f 'comments[][line]=<line>' -f 'comments[][side]=RIGHT' \\
+      -f 'comments[][body]=<one finding>'
+
+Repeat the three \`comments[][…]\` fields once per finding. \`event\` is always \`COMMENT\`:
+GitHub rejects APPROVE and REQUEST_CHANGES on your own pull request.`
 
 /** Every clause, in injection order. */
 export const REVIEWER_CONTRACT_CLAUSES: readonly string[] = [

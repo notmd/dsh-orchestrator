@@ -223,7 +223,11 @@ export async function startReviewPass(
         branch: worker.branch,
         attempt: round,
       })}`,
-      permissionPreset: deps.config.reviewerPermissionPreset,
+      // The project's boundary wins over the plugin default, exactly as the agent preset
+      // does below. Read live off the record, so changing it on the settings page applies
+      // to the next pass rather than to the next reload.
+      permissionPreset:
+        repo.reviewerPermissionPreset !== '' ? repo.reviewerPermissionPreset : deps.config.reviewerPermissionPreset,
       agentPreset: reviewerPreset,
     })
   } catch (error) {

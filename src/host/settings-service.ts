@@ -65,6 +65,7 @@ export interface SettingsView {
     workerAgentPreset: string
     workerPermissionPreset: string
     reviewerAgentPreset: string
+    reviewerPermissionPreset: string
   }
 }
 
@@ -166,6 +167,7 @@ export function settingsDefaults(config: PluginConfig): SettingsView['defaults']
     workerAgentPreset: config.workerAgentPreset,
     workerPermissionPreset: config.workerPermissionPreset,
     reviewerAgentPreset: config.reviewerAgentPreset,
+    reviewerPermissionPreset: config.reviewerPermissionPreset,
   }
 }
 

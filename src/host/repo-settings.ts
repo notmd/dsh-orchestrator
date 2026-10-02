@@ -14,6 +14,7 @@
  * | `intakeEnabled` | `fillSlots`, which auto-spawns workers for queued issues |
  * | `workerAgentPreset` | the spawn recipe, as the worker session's agent preset |
  * | `workerPermissionPreset` | `workers-service`, as the sandbox/approval boundary a worker is created under |
+ * | `reviewerPermissionPreset` | `reviewer-service`, as the same boundary for a review pass |
  * | `autoReview` | `startReviewPass`, as the per-repo override of the plugin default |
  *
  * The remaining `RepoConfig` fields (`verifyCommands` excepted, which lives on the
@@ -103,6 +104,22 @@ export interface ProjectSettings {
    * only reviewer preset an install could have was the plugin's.
    */
   reviewerAgentPreset: string
+  /**
+   * The PERMISSION preset this project's reviewers run under. Empty = the plugin default.
+   *
+   * Separate from the worker's, and defaulting to `read-only`, because a reviewer and a
+   * worker need opposite things: a worker must commit and push, and a reviewer must mutate
+   * nothing. Its contract forbids it, but the PRD's position is that the prompt is not
+   * enough on its own — "a `read-only` permission preset is necessary but not sufficient".
+   *
+   * It exists because a read-only sandbox has no writable TEMP directory, so a reviewer
+   * that stages a file before posting (`<<'JSON'`, `--input -`) fails with "cannot create
+   * temp file for here document" and stalls on an approval nobody answers. The contract now
+   * tells it to post with `-f` fields instead; this is the knob for a repository where that
+   * still is not enough and the boundary should be widened deliberately rather than by
+   * accident.
+   */
+  reviewerPermissionPreset: string
   /** Per-project override of the plugin's `autoReview`. `undefined` = inherit. */
   autoReview: boolean | undefined
 }
@@ -115,6 +132,7 @@ export const PROJECT_SETTINGS_KEYS = Object.freeze([
   'workerAgentPreset',
   'workerPermissionPreset',
   'reviewerAgentPreset',
+  'reviewerPermissionPreset',
   'autoReview',
 ] as const)
 
@@ -136,6 +154,7 @@ export const PROJECT_SETTINGS_DEFAULTS: Readonly<ProjectSettings> = Object.freez
   workerAgentPreset: '',
   workerPermissionPreset: '',
   reviewerAgentPreset: '',
+  reviewerPermissionPreset: '',
   autoReview: undefined,
 })
 
@@ -161,6 +180,10 @@ export function normalizeProjectSettings(raw: unknown): ProjectSettings {
       PROJECT_SETTINGS_DEFAULTS.workerPermissionPreset,
     ),
     reviewerAgentPreset: asString(record.reviewerAgentPreset, PROJECT_SETTINGS_DEFAULTS.reviewerAgentPreset),
+    reviewerPermissionPreset: asString(
+      record.reviewerPermissionPreset,
+      PROJECT_SETTINGS_DEFAULTS.reviewerPermissionPreset,
+    ),
     autoReview: typeof record.autoReview === 'boolean' ? record.autoReview : undefined,
   }
 }
@@ -214,6 +237,9 @@ export function applyProjectSettingsPatch(current: ProjectSettings, patch: unkno
     next.workerPermissionPreset = validatePreset('workerPermissionPreset', record.workerPermissionPreset)
   }
   if ('reviewerAgentPreset' in record) next.reviewerAgentPreset = validatePreset('reviewerAgentPreset', record.reviewerAgentPreset)
+  if ('reviewerPermissionPreset' in record) {
+    next.reviewerPermissionPreset = validatePreset('reviewerPermissionPreset', record.reviewerPermissionPreset)
+  }
   if ('autoReview' in record) next.autoReview = validateOverride('autoReview', record.autoReview)
 
   return next
@@ -325,6 +351,7 @@ export function serializeProjectSettings(settings: ProjectSettings): Record<stri
     workerAgentPreset: normalized.workerAgentPreset,
     workerPermissionPreset: normalized.workerPermissionPreset,
     reviewerAgentPreset: normalized.reviewerAgentPreset,
+    reviewerPermissionPreset: normalized.reviewerPermissionPreset,
     autoReview: normalized.autoReview ?? null,
   }
 }
