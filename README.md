@@ -41,7 +41,9 @@ flowchart LR
 
 ## Status
 
-Draft for review. No implementation has been written. The next step is the M0 spike list in [PRD.md §16](PRD.md#16-milestones) — four short spikes that de-risk the panel seat, the session spawn, the host↔client route, and PR observation.
+Built and in use. The plugin ships the derived board read model, the worker spawner and its staged pipeline (plan → implement → verify → self-review), the `gh` pull-request observer, the auto-review loop that keeps a pull request out of `In review` until the plugin's own read-only reviewer approves its head, and the feedback loop that queues review comments back into the same worker session. `npm run verify` — typecheck, the full test suite, and the build — is green, and the board/worker/reviewer loop runs against this repository itself.
+
+What is not built: there is no merge button (merging stays a human action in GitHub), no pull-request discovery beyond the observer's recovery pass for one it has lost track of, and no M6 hardening — webhook ingress, the plan gate, the notification badge, the `token+fetch` fallback, dedicated agent presets, and the reviewer panel — which [PRD.md §16](PRD.md#16-milestones) marks optional.
 
 The design is grounded in a **local clone of AO's `main`** (`53ba1e8`), not just its documentation. Where prose and code disagreed, the code won — see [Appendix B §B15](docs/agent-orchestrator-reference.md) for the code-level findings and the list of verified constants.
 
