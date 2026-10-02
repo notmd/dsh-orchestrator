@@ -12,8 +12,8 @@ bloated status file costs the next agent more than it saves.
 | **Goal** | Implement [PRD.md](PRD.md) |
 | **Plan source** | [PRD.md §16 Milestones](PRD.md#16-milestones), verified against [docs/dsh-plugin-contract.md](docs/dsh-plugin-contract.md) |
 | **Last updated** | 2026-10-02, handoff cleanup (no code change) — stale counts corrected, a table that had grown a fourth column repaired, one finding that was recorded twice merged |
-| **Verify** | `npm run verify` (src typecheck + suite + host/client build) and `npm run verify:all` (adds `test/**` and `src/spike/**` to the typecheck) · **both exit 0** |
-| **Current state** | **1011 tests (`npm test`), 0 type errors; `npm run verify` and `npm run verify:all` both exit 0.** `verify:all` exists because `verify` typechecks only `tsconfig.src.json`, which excludes `test/**` and `src/spike/**`, so the suite's types and the spikes' types were never checked by it. The client bundle carries **0 module statements**, so it stays the classic script the loader needs. **The PRD's scope is implemented, audited and demonstrated** — the whole requested flow runs in `test/integration/flow.test.ts` against a mock provider with real git, the settings page's four writes are proven to reach the work in `test/integration/settings-flow.test.ts`, all 26 config keys are read by acting code, and the board and the settings dialog were measured in a live GUI rather than eyeballed. **Open:** M6 (which the PRD marks optional), §12.2's platform half (an assumption, not a task), A4's follow-through, and housekeeping — see §4. |
+| **Verify** | `npm run verify` (src typecheck + suite + host/client build) exits **0**. `npm run verify:all` (adds `test/**` and `src/spike/**` to the typecheck) does **not** — its `typecheck:all` half reports **18 pre-existing errors in six test files** (`test/client/plugin-config.test.ts`, `test/domain/pr-snapshot.test.ts`, `test/host/exec.test.ts`, `test/host/feedback.test.ts`, `test/host/observer-scheduling.test.ts`, `test/host/review-threads.test.ts`). That is fixture drift at the type level, not broken behaviour: `npm test` passes because Node strips types. |
+| **Current state** | **1011 tests (`npm test`), `src/` typechecked clean; `npm run verify` exits 0** (the `verify:all` failure above is pre-existing test-file type drift, not a regression). `verify:all` exists because `verify` typechecks only `tsconfig.src.json`, which excludes `test/**` and `src/spike/**`, so the suite's types and the spikes' types were never checked by it. The client bundle carries **0 module statements**, so it stays the classic script the loader needs. **The PRD's scope is implemented, audited and demonstrated** — the whole requested flow runs in `test/integration/flow.test.ts` against a mock provider with real git, the settings page's four writes are proven to reach the work in `test/integration/settings-flow.test.ts`, all 26 config keys are read by acting code, and the board and the settings dialog were measured in a live GUI rather than eyeballed. **Open:** M6 (which the PRD marks optional), §12.2's platform half (an assumption, not a task), A4's follow-through, and housekeeping — see §4. |
 
 ---
 
@@ -22,7 +22,7 @@ bloated status file costs the next agent more than it saves.
 
 The PRD's scope is built. Every layer the design named now exists, is ported
 from the reference where the reference has it, and is covered by tests — **1011 of
-them, with `tsc` clean across `src/` and `test/`**. The plugin installs into a
+them, with `src/` typechecked clean**. The plugin installs into a
 profile and activates. The worker-spawn recipe, the worktree manager and the fact
 store are each verified against reality — spike 2 against the real host services,
 worktrees against real git, the store against the real backend. The board read
@@ -54,7 +54,7 @@ honouring); everything else open is housekeeping. §4 is the honest list.
 | 1–3 | The board's read model: the Kanban reducer, activity model, session status, head-scoped review-run facts, the review-loop scheduler, card presentation (attention, ordering, lanes) | **78 + 37 tests are AO's own truth tables** translated from `kanban_test.go` / `status_test.go`, so a porting bug cannot hide behind a rewrite |
 | 4 | Config: every PRD §13 default, explicit key-by-key validation, and the loud `agentRulesFile` path rules (A31) | 45 tests |
 | 5 | **TypeScript migration** (hard requirement) — all source and tests, `tsc` clean, zero-dependency tests via Node 24 type stripping | 0 type errors |
-| 5e | Made the **tests** type-clean too (was 105 errors, all deliberate invalid input and unannotated fixtures) | 0 errors across `src/` **and** `test/` |
+| 5e | Made the **tests** type-clean too (was 105 errors, all deliberate invalid input and unannotated fixtures) | 0 errors across `src/` **and** `test/` at the time; the test files have drifted since — see the header |
 | 6a | **The plugin installs and activates.** Entry, structural host-context typing, a local `defineTool` equivalent, one real tool | Live GUI: `Settings → Plugins → Installed 1 → @local/dsh-orchestrator` |
 | 6b | **The worker spawner** — `dsh-webhook`'s audited recipe, step for step, with its rollback discipline | 12 tests incl. three rollback scenarios |
 | 6d | **The worktree manager** — branch naming, `.dsho/worktrees`, add/remove/list, porcelain parsing, `check-ignore` preflight | 28 unit + **12 real-git subtests** |
