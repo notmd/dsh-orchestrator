@@ -117,7 +117,7 @@
   "orchestrator.plugin.autoInjectCI": "把失败的检查转给 worker",
   "orchestrator.plugin.autoInjectCIHint": "失败的检查会作为反馈直接送达 worker，而不必等人处理。",
   "orchestrator.plugin.requireHumanApprovalBeforeReady": "进入「可合并」前需要人工批准",
-  "orchestrator.plugin.requireHumanApprovalBeforeReadyHint": "只有人工批准了拉取请求，卡片才会进入「可合并」。",
+  "orchestrator.plugin.requireHumanApprovalBeforeReadyHint": "默认关闭，与 Agent Orchestrator 的行为一致：只要我们的审查通过且拉取请求可合并，卡片就会进入「可合并」。打开后，只有人工批准了拉取请求，卡片才会进入「可合并」。",
   "orchestrator.plugin.maxReviewRounds": "自动审查轮数",
   "orchestrator.plugin.maxReviewRoundsHint": "在自动流程停止之前，最多把工作退回修改几次。",
   "orchestrator.plugin.reviewMaxNudge": "每个提交的反馈轮数",

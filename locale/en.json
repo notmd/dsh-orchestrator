@@ -117,7 +117,7 @@
   "orchestrator.plugin.autoInjectCI": "Route failing checks to the worker",
   "orchestrator.plugin.autoInjectCIHint": "A failing check reaches the worker as feedback instead of waiting for a person.",
   "orchestrator.plugin.requireHumanApprovalBeforeReady": "Require a human approval before Ready",
-  "orchestrator.plugin.requireHumanApprovalBeforeReadyHint": "A card reaches Ready only after a person approves its pull request.",
+  "orchestrator.plugin.requireHumanApprovalBeforeReadyHint": "Off by default, which is Agent Orchestrator's behaviour: our own pass approving a mergeable pull request is enough to reach Ready. Turn it on and a card reaches Ready only after a person approves the pull request.",
   "orchestrator.plugin.maxReviewRounds": "Automatic review rounds",
   "orchestrator.plugin.maxReviewRoundsHint": "How many times the worker may be sent back for changes before automation stops.",
   "orchestrator.plugin.reviewMaxNudge": "Feedback rounds per commit",

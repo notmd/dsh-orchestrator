@@ -110,7 +110,7 @@ sequenceDiagram
 Three ordering rules the diagram encodes, and which the rest of this document depends on:
 
 1. **The human is not asked to review before the automated pass has run.** The card sits in `Validating` until `ReviewRun.state === 'approved'` for the current head.
-2. **The human is asked even after the automated pass approves.** With `requireHumanApprovalBeforeReady: true`, approval moves the card to `In review` / `Needs human review`, not to `Ready`. This is our deliberate divergence from AO's reducer — see [§7.6](#76-fact--board-derivation).
+2. **The human is asked only if the deployment asks for it.** With `requireHumanApprovalBeforeReady: true`, approval moves the card to `In review` / `Needs human review`, not to `Ready`. **The flag ships `false`** — the user's decision recorded in §13 — so an unconfigured install behaves exactly like AO: an auto-approved mergeable PR reaches `Ready`. The capability is our deliberate divergence from AO's reducer — see [§7.6](#76-fact--board-derivation).
 3. **Every pass is bound to one `headSha`.** A worker push during a review invalidates that pass rather than racing it.
 
 ### 4.2 Secondary flows
@@ -435,7 +435,7 @@ The states are AO's (`contract.AOReviewState`), not invented: **`needs_review` �
 4. **Verdict.** The machine-readable verdict travels separately: `approve` → `up_to_date`; `request-changes` → `changes_requested` plus structured findings and the GitHub review id.
 5. **Fix round.** If `autoInjectReview` is on, findings are routed to the **worker** via `Agent.followup()` (§10.3), naming the GitHub review id so the worker knows exactly which review to address and reply to.
 6. **Re-review.** The push creates a **new `headSha`**, which has no pass → step 1 fires again.
-7. **Hand off to the human.** Once the pass approves, auto review's ownership ends. With `requireHumanApprovalBeforeReady` on, the PR lands in `needs_review` showing **`Needs human review`**.
+7. **Hand off to the human.** Once the pass approves, auto review's ownership ends. With `requireHumanApprovalBeforeReady` on, the PR lands in `needs_review` showing **`Needs human review`**; with the flag off — the shipped default — it goes straight to `ready` on mergeability, which is AO's behaviour.
 
 > **The verdict cannot be a GitHub review state.** AO posts every automated review as `event: "COMMENT"` and never as `APPROVE`/`REQUEST_CHANGES`, because the reviewer acts from the PR author's own account and **GitHub rejects both `APPROVE` and `REQUEST_CHANGES` on your own pull request**. The machine verdict therefore travels out-of-band (`ao review submit` in AO; `orchestrator_review_verdict` here) while the human-readable summary and inline comments land on the PR. Any design that tries to drive the lane from GitHub's `reviewDecision` alone cannot work for a bot-authored PR — this is a hard provider constraint, not a preference.
 
@@ -516,7 +516,7 @@ flowchart TD
 | 7 | `mergeable == MERGEABLE` | `ready` | `Mergeable` |
 | 8 | fallthrough — a person owns the next turn | `needs_review` | `Changes requested` / `Commented` / `CI failing` / `Needs human review` |
 
-> **The extension, and why.** AO's reducer has no row 6: with auto review approved and the PR mergeable, AO's row 6 (`mergeable → ready`) fires and the card lands in **Ready** even though no human has reviewed it. The requested flow is explicit that *"human review will be after that"*, so we insert a guaranteed human gate. With `requireHumanApprovalBeforeReady: true` (default), an auto-review-approved PR can only reach `ready` via a real human signal — a surviving human approval (row 3), a merge, or a human close (row 1). Set it to `false` to get AO's exact behaviour, where `mergeable` alone is enough to reach Ready.
+> **The extension, and why.** AO's reducer has no row 6: with auto review approved and the PR mergeable, AO's row 6 (`mergeable → ready`) fires and the card lands in **Ready** even though no human has reviewed it. The requested flow is explicit that *"human review will be after that"*, so the gate was built and originally shipped on. **The user overruled the default: `requireHumanApprovalBeforeReady` now ships `false`** (§13), so an unconfigured install gets AO's behaviour and row 6 is dormant until a deployment turns it on. With it `true`, an auto-review-approved PR can only reach `ready` via a real human signal — a surviving human approval (row 3), a merge, or a human close (row 1); with it `false`, `mergeable` alone is enough, which is the default now.
 >
 > **This is not a faithful port — it is a documented divergence.** Label it as such in code comments so a future reader comparing against `kanban.go` does not treat row 6 as a porting bug.
 
@@ -1381,7 +1381,7 @@ Plugin `Config` (validated by the row's `config` via the Loader's schemastery), 
     reviewSweepIntervalMs: 60000                 # AO DefaultSweepInterval: 1 min
     reviewIdleThresholdMs: 60000                 # AO DefaultIdleThreshold: 1 min worker idle before review
     noSignalGraceMs: 90000                       # AO noSignalGrace: 90 s
-    requireHumanApprovalBeforeReady: true        # a human must approve before the card reaches Ready
+    requireHumanApprovalBeforeReady: false       # the gate is OFF by default (user decision); true asks a human before Ready
     # --- worker report outbox (values verified against AO source) ---
     reportBatchFallbackMs: 3600000               # AO ReportBatchFallback: 1 h
     reportSettlementWindowMs: 300000             # AO ReportSettlementWindow: 5 min
@@ -1403,9 +1403,9 @@ Plugin `Config` (validated by the row's `config` via the Loader's schemastery), 
 |---|---|---|---|
 | `autoReview` | **`true`** | Our reviewer runs on every PR head; the PR stays in `Validating` until its own pass approves | No automatic review; the PR goes straight to the human. AO's `AutoReview` |
 | `autoInjectReview` | **`true`** | `changes_requested` findings are automatically routed to the worker, closing the loop without you | The reviewer still runs, but findings sit on the card for *you* to act on. AO's `AutoInjectReview` |
-| `requireHumanApprovalBeforeReady` | **`true`** | An auto-review-approved PR lands in `In review` showing `Needs human review` — a human gate before Ready | AO's native behaviour: `mergeable` alone can reach Ready. **Our documented divergence** (§7.6 row 6) |
+| `requireHumanApprovalBeforeReady` | **`false`** | The gate is off, so an auto-review-approved PR reaches `Ready` on mergeability alone — AO's behaviour. Set it `true` and the same PR lands in `In review` showing `Needs human review` | AO's native behaviour is the unflagged default. Turning it on is **our documented divergence** (§7.6 row 6); it originally shipped on, and the user overruled that default |
 
-The combination `autoReview: true` + `autoInjectReview: true` + `requireHumanApprovalBeforeReady: true` is exactly *"auto review after opening the PR, human review after that."*
+The combination `autoReview: true` + `autoInjectReview: true` + `requireHumanApprovalBeforeReady: true` is exactly *"auto review after opening the PR, human review after that."* The first two ship on, the third ships off: **the gate is available rather than automatic**, which is the one place the shipped defaults depart from the requested flow.
 
 ### 13.1 Per-repo configuration
 
@@ -1543,7 +1543,7 @@ The PRD is satisfied when, in a single DSH profile:
 14. **A14** — The reviewer session is a distinct DSH session whose `cwd` is the worker's worktree and whose permission preset is `read-only`; it **cannot** edit files in that worktree (verified by attempting an edit and observing an enforced denial, not a prompt refusal).
 15. **A15** — A `request-changes` verdict produces a worker follow-up turn carrying the structured findings; the worker pushes; the new `headSha` triggers a **fresh** pass; the card cycles `Addressing comments → Review scheduled → Reviewing` visibly.
 16. **A16** — A verdict against a superseded head never changes a lane (push mid-review, confirm the old pass is ignored).
-17. **A17** — After the reviewer approves and **no human has approved**, the card lands in `In review` showing `Needs human review` — it does **not** reach `Ready` on mergeability alone. With `requireHumanApprovalBeforeReady: false`, the same PR reaches `Ready`.
+17. **A17** — With `requireHumanApprovalBeforeReady: true`, after the reviewer approves and **no human has approved**, the card lands in `In review` showing `Needs human review` — it does **not** reach `Ready` on mergeability alone. The flag ships `false`, and in that state the same PR reaches `Ready`: both states are covered by `test/contract/kanban-divergence.test.ts`, and the shipped default's own behaviour is pinned there too.
 18. **A18** — With the reviewer configured to always request changes, the loop stops at `maxReviewRounds`, the card is **released from `Validating`** into `In review` / `Needs human review` with the `Needs you` badge and reason `review-round-limit`, and **no further reviewer passes or worker turns are scheduled**.
 19. **A19** — A worker blocked on a pending approval receives no auto-injected findings while blocked, and receives them once the block clears.
 20. **A20** — A `changes_requested` verdict on head H does **not** trigger a second pass on H, however many sweep ticks elapse; the next pass starts only after the worker pushes a new commit. A *cancelled* pass on H likewise blocks any further pass on H.

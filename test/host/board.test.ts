@@ -302,6 +302,11 @@ test('renderBoard marks attention and names the escalation reason', async () => 
       { id: 'r3', workerId: 'wrk-1', headSha: 'sha-2', round: 3, status: 'complete', verdict: 'changes_requested' },
     ],
   })
+  // The gate is ON for this case on purpose: the round-limit release it asserts is itself
+  // gated on `requireHumanApprovalBeforeReady`, so with the shipped default (off — the user's
+  // decision) a halted loop lands in Ready, not here. Asking for the gate keeps the test
+  // about the release row instead of about the default.
+  deps.config = { ...deps.config, requireHumanApprovalBeforeReady: true }
   deps.activityOf = () => 'blocked'
   const text = renderBoard(await buildBoard(deps))
   assert.match(text, /Board — 1 worker/)

@@ -92,7 +92,7 @@ You asked for AO's auto review after the PR opens, with human review after that.
 |---|---|---|
 | `autoReview` | `true` | The plugin's own reviewer runs on every PR head; the PR stays in `Validating` until its pass approves |
 | `autoInjectReview` | `true` | `changes_requested` findings are routed back to the worker automatically, so the loop closes without you |
-| `requireHumanApprovalBeforeReady` | `true` | An auto-review-approved PR lands in `In review` showing `Needs human review`, **not** `Ready` |
+| `requireHumanApprovalBeforeReady` | **`false`** | With it `true`, an auto-review-approved PR lands in `In review` showing `Needs human review`, **not** `Ready`. It ships `false`, so the default reaches `Ready` on mergeability (chunk 43) |
 
 > **This is a divergence from AO, and it is deliberate.** AO's reducer lets an auto-review-approved, mergeable PR reach `Ready` without any human approval. You asked for human review *after* the automated pass, so I inserted a guaranteed gate ([PRD §7.6](../PRD.md) row 6). Set `requireHumanApprovalBeforeReady: false` for AO's exact behaviour. If AO-fidelity matters more than the gate, say so and I will flip it.
 
@@ -185,7 +185,7 @@ Tool and route names are a compatibility surface once installed — better to se
 | **Auto review runs on every PR head, before a human sees it** | Requested explicitly; mirrors AO's `AutoReview` loop | 7.5, 10.4 |
 | **The reviewer is its own read-only session, not a subagent** | Independent context; an enforced `read-only` preset is a real boundary; a subagent would review inside the worker's own context | 7.5 |
 | **Findings are routed back to the worker automatically** | Requested "worker should continue to iterate"; mirrors AO's `AutoInjectReview` | 10.3, 10.4 |
-| **A human approval gates `Ready`** | Requested "human review will be after that". **A deliberate divergence from AO's reducer** — reversible via `requireHumanApprovalBeforeReady: false` | 7.6 |
+| **A human approval gates `Ready`** | Requested "human review will be after that", so the gate was built. **A deliberate divergence from AO's reducer, and it ships off** (chunk 43: the user overruled the default) — turn it back on with `requireHumanApprovalBeforeReady: true` | 7.6 |
 | **The reviewer executes nothing** | AO forbids it in the reviewer prompt: a test run writes caches and snapshots into the shared worktree, polluting the diff under review | 12.5 |
 | **The reviewer posts a real PR review as a comment** | GitHub rejects APPROVE/REQUEST_CHANGES on your own PR, so the verdict travels out-of-band via a protocol tool | 7.5 |
 | **One `orchestrator_report` tool, not five** | Mirrors `ao report`: orthogonal `state` + `outputs`, with batching owned by the outbox rather than duplicated per tool | 10.5, 12.2 |

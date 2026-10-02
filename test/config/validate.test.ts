@@ -161,11 +161,19 @@ test('loadAgentRules does not read at all when no file is configured', () => {
 // Plugin config
 // ---------------------------------------------------------------------------
 
-test('the plugin defaults are the requested behaviour out of the box', () => {
+test('the plugin defaults are the requested behaviour out of the box, minus the human gate', () => {
+  // The PRD's requested flow is "auto review after opening the PR, human review after
+  // that", and it shipped that way: all three flags on. The USER overruled the third one,
+  // so an unconfigured install now behaves exactly like Agent Orchestrator -- our own pass
+  // approving a mergeable PR is enough to reach Ready, and a deployment that wants a person
+  // in the loop turns the gate on. Pinned here rather than only in the reducer tests,
+  // because the surprise this guards is a DEFAULT: the card that reaches Ready with no
+  // human approval used to mean the gate had been defeated.
   const config = normalizePluginConfig()
   assert.equal(config.autoReview, true, 'our reviewer runs on every PR head')
   assert.equal(config.autoInjectReview, true, 'findings close the loop without you')
-  assert.equal(config.requireHumanApprovalBeforeReady, true, 'a human gates Ready')
+  assert.equal(config.requireHumanApprovalBeforeReady, false, 'no human gate unless a deployment asks for one')
+  assert.equal(normalizePluginConfig({ requireHumanApprovalBeforeReady: true }).requireHumanApprovalBeforeReady, true, 'and the gate is still there to turn on')
 })
 
 test('the verified constants match the PRD §13 values', () => {

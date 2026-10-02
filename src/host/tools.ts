@@ -67,11 +67,18 @@ import type { RunCommand } from './worktree.ts'
  */
 export const REQUESTED_FLOW_FLAGS = ['autoReview', 'autoInjectReview', 'requireHumanApprovalBeforeReady'] as const
 
-/** One line describing the divergence from AO's behaviour, for the tool output. */
+/**
+ * One paragraph describing the divergence from AO's behaviour, for the tool output.
+ *
+ * It states the DEFAULT, not just the flag. The default is off (the user's decision), so a
+ * card reaching Ready on mergeability alone is the expected behaviour rather than a defeated
+ * gate — and an agent reading this output must not have to infer which of the two it is.
+ */
 const DIVERGENCE_NOTE =
-  'requireHumanApprovalBeforeReady is our documented divergence from Agent Orchestrator: ' +
-  'with it on, an auto-review-approved PR waits in In review / "Needs human review" ' +
-  'instead of reaching Ready on mergeability alone.'
+  'requireHumanApprovalBeforeReady is our documented divergence from Agent Orchestrator, ' +
+  'and it is OFF by default: our own pass approving a mergeable PR is enough to reach Ready, ' +
+  'with nobody having looked at it. Turn it on and an auto-review-approved PR waits in ' +
+  'In review / "Needs human review" instead.'
 
 /**
  * Builds the orchestrator tools for one activation.

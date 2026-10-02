@@ -200,9 +200,13 @@ test('apply works without a logger', () => {
 test('describeConfig names the three requested-flow flags and their defaults', () => {
   const config = apply(fakeContext(), {})
   const text = describeConfig(config)
-  for (const flag of REQUESTED_FLOW_FLAGS) {
-    assert.match(text, new RegExp(`${flag}: true \\(default\\)`), flag)
-  }
+  // Two flags on, and the human gate OFF -- the user's decision, and the one default an
+  // agent reading this output has to be told about: "no human approval needed" is exactly
+  // what it must not assume has been deliberate.
+  assert.deepEqual([...REQUESTED_FLOW_FLAGS], ['autoReview', 'autoInjectReview', 'requireHumanApprovalBeforeReady'])
+  assert.match(text, /autoReview: true \(default\)/)
+  assert.match(text, /autoInjectReview: true \(default\)/)
+  assert.match(text, /requireHumanApprovalBeforeReady: false \(default\)/)
   assert.match(text, /maxReviewRounds: 3/)
   assert.match(text, /reviewerPermissionPreset: read-only/)
 })

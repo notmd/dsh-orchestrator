@@ -96,9 +96,12 @@ export interface PluginConfig {
  *
  * Every value here is either the PRD's stated default (§13) or, where the PRD
  * says the value was verified against the reference source, that verified
- * constant. The three flags that define the requested flow — `autoReview`,
- * `autoInjectReview`, `requireHumanApprovalBeforeReady` — all default to the
- * requested behaviour, so an unconfigured install does the right thing.
+ * constant. `autoReview` and `autoInjectReview` — the two flags that make the
+ * requested flow happen — default on, so an unconfigured install reviews every
+ * PR head and routes the findings back to the worker.
+ *
+ * `requireHumanApprovalBeforeReady` is the exception, and the user overruled the
+ * PRD on it: see the field's own note below.
  */
 export const PLUGIN_DEFAULTS: Readonly<PluginConfig> = Object.freeze({
   defaultRepo: '',
@@ -129,7 +132,28 @@ export const PLUGIN_DEFAULTS: Readonly<PluginConfig> = Object.freeze({
   reviewSweepIntervalMs: 60_000,
   reviewIdleThresholdMs: 60_000,
   noSignalGraceMs: 90_000,
-  requireHumanApprovalBeforeReady: true,
+  /**
+   * No human gate by default — Agent Orchestrator's own behaviour.
+   *
+   * This is the PRD's invited divergence (§7.6 row 6, A17, D3) and it shipped ON,
+   * because the requested flow says "human review will be after that" and an
+   * auto-approved, mergeable PR would otherwise reach `Ready` with nobody having
+   * looked at it. **The user asked for the default to be OFF**, so an unconfigured
+   * install now behaves exactly like AO: our own pass approving a mergeable PR is
+   * enough to reach `Ready`.
+   *
+   * Nothing about the capability changed — the row is still in the reducer, and a
+   * profile (or the plugin settings page) that sets this to `true` gets the gate
+   * back for its own deployment. What changed is which behaviour is the surprise:
+   * a deployment that wants a person in the loop now has to ask for one.
+   *
+   * Recorded, because the difference is invisible from the board: a card reaching
+   * `Ready` on mergeability alone used to mean the gate had been defeated, and now
+   * it is simply the default. §7.6's row order makes that visible in the code, and
+   * `orchestrator_config` prints the flag with a `(default)`/`(overridden)` marker
+   * so the tool output says which one is in force.
+   */
+  requireHumanApprovalBeforeReady: false,
   reportBatchFallbackMs: 3_600_000,
   reportSettlementWindowMs: 300_000,
   reportInterruptWindowMs: 180_000,

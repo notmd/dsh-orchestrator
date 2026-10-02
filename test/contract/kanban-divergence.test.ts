@@ -2,9 +2,12 @@
  * Tests for the two **deliberate divergences** from Agent Orchestrator.
  *
  * Everything here is opt-in: both divergences are gated on
- * `requireHumanApprovalBeforeReady`, whose default in the shipped config is
- * `true`. Every case is asserted in **both** flag states, because the PRD's test
- * plan requires exactly that:
+ * `requireHumanApprovalBeforeReady`, whose default in the shipped config is now
+ * `false` — the user overruled the PRD on that default, so an unconfigured install
+ * behaves exactly like AO and a deployment that wants the gate asks for it. Every
+ * case is still asserted in **both** flag states, because the PRD's test plan
+ * requires exactly that, and the default's own behaviour is pinned separately
+ * below (see "the shipped default") so flipping it again cannot pass unnoticed.
  *
  *   "row 6 (`requireHumanApprovalBeforeReady`) fires only after our pass
  *    approves, and never before; and the row-6 behaviour is asserted in both flag
@@ -26,6 +29,7 @@ import {
   prFacts,
 } from '../../src/contract/kanban.ts'
 import { sessionFacts } from '../../src/contract/status.ts'
+import { normalizePluginConfig } from '../../src/config/validate.ts'
 import type {
   KanbanDerivation,
   KanbanPRFactsInput,
@@ -46,6 +50,33 @@ const APPROVED_BY_US_AND_MERGEABLE = {
   mergeability: 'mergeable',
   reviewRun: { present: true, outcome: true },
 }
+
+// ---------------------------------------------------------------------------
+// The SHIPPED default — which is now AO's behaviour.
+// ---------------------------------------------------------------------------
+
+/**
+ * The default is a decision in its own right, and the one a person meets first.
+ *
+ * The reducer tests above pass the flag explicitly, so without this the two states are
+ * covered while the DEFAULT is not: flipping it back to `true` would leave every test green.
+ * The config comes from `normalizePluginConfig()` — the same call the plugin makes at
+ * activation — so this reads the shipped default rather than restating it.
+ */
+test('the shipped default lets an auto-approved mergeable PR reach Ready with no human', () => {
+  const config = normalizePluginConfig()
+  assert.equal(config.requireHumanApprovalBeforeReady, false, 'the gate is off unless asked for')
+  const got = derive(
+    {
+      autoReview: config.autoReview,
+      requireHumanApprovalBeforeReady: config.requireHumanApprovalBeforeReady,
+    },
+    APPROVED_BY_US_AND_MERGEABLE,
+  )
+  // AO's exact behaviour: row 6 does not exist for an unconfigured install.
+  assert.equal(got.column, KanbanColumn.ready)
+  assert.equal(got.displayStatus, DisplayStatus.mergeable)
+})
 
 // ---------------------------------------------------------------------------
 // Row 6 — the guaranteed human gate before Ready.
