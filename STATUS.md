@@ -539,10 +539,11 @@ reader believes the stale one and re-does finished work. **Prune it whenever §2
 |---|---|---|
 | **M6 hardening** | Optional, not started | Explicitly optional in the PRD: webhook ingress, plan gate, notification badge, `token+fetch` fallback, dedicated agent presets, a reviewer panel. |
 | **§12.2's platform half** | Assumption, not a task | The wiring is verified (fake `agent/created`, four tests). What remains is whether DSH honours `restrict` for a scope — three instruments failed to measure it and the documented contract says it does. Do not add a fourth instrument without proving it can measure the property. |
-| **Housekeeping** | Needs the registry or the user | Two leftovers in the web profile: `~/.dsh/storages/dsho.json` still holds the plugin's own records and earlier spike rows, and `workspace.json` still holds workspace entries the spikes registered. Neither is hand-edited — it is a running service's own state, with the user's real workspaces in the same table. |
 | **A4's follow-through** | The flow ran; the pull request was then closed unmerged | The whole cycle happened live in chunk 41 (a real `gh pr create`, a reviewer pass at a pinned head, the card stopped at the human gate). PR [#5](https://github.com/notmd/dsh-orchestrator/pull/5) was **closed unmerged** afterwards (`state: CLOSED`, `mergedAt: null`), so nothing downstream of the human gate has run live: `merge_ready` and the merge/feedback half remain unexercised. Local `main` measured **2** commits ahead of `origin/main` when this was written; that number drifts, so read it as a measurement rather than a fact. |
 | **G5: merge with a `sha` precondition** | Deliberately not implemented | The teardown's own verdict: AO's `PUT /pulls/{n}/merge` with `sha` set to the reviewed head is "the one write action whose design is worth copying **even if we never take the capability**". There is no merge button and there should not be one until the user asks; if there ever is, it is that call, because "merge the commit that was reviewed" then becomes a provider-enforced precondition rather than our own check. |
 | **G1's conditional-request path** | Open, and blocked upstream | The teardown measures AO at ~1 mostly-**unbilled** REST call per 30 s because 304s are free, against our 2 billed calls always. `gh` exposes no ETag/If-None-Match, so the gate G1 names first — "skip a tick when `snapshot.updatedAt` is unchanged" — cannot be built on this transport at all. Chunk 40 took the two mitigations that do not need it (a slower cadence for settled cards, and a discussion refresh on its own interval). Closing the rest means leaving `gh` for `fetch` + ETags, which is a transport decision, not a state-model one. |
+
+**The spike-residue housekeeping is closed**, and it left this table because the residue is gone. Measured 2026-10-02: neither `~/.dsh/storages/workspace.json` nor `~/.dsh/storages/dsho.json` holds a `/tmp/dsho-*` path or a spike row — the removal was real work (`b4ab859`, `0f19095`), not drift. What both files do hold is the plugin's own live data (one repository, 8 issues, 7 workers, 7 PR snapshots, 9 review runs) and its own issue worktrees beside the user's real projects, which is the plugin working rather than residue. Both files sit in `~/.dsh/storages/` and are shared by every DSH process rather than scoped to the web profile (§3).
 
 **The settings surface has had five chunks of its own** (35 the page and the four settings that reach
 acting code, 36 rebuilt on the host's own pattern, 37 the reviewer preset plus row-level failures,
@@ -554,7 +555,7 @@ is polish chosen by the user, not by the PRD.
 restart before a GUI check — a 404 on a new route is the symptom to expect, not a bug in the route.
 
 **Nothing here is required by the PRD except M6, which the PRD itself marks optional.** The next
-chunk should therefore be chosen by the user rather than assumed: M6, the housekeeping, or work
+chunk should therefore be chosen by the user rather than assumed: M6, or work
 outside this repository.
 
 ## 5. Decisions taken while implementing (deltas from the PRD)
