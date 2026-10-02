@@ -30,7 +30,12 @@ interface Harness {
   readonly prompted: unknown[]
 }
 
-function harness(): Harness {
+/**
+ * `agentDefaultModel: null` means "this host has no such service" — the one case that must
+ * warn. Every other harness has a route, because a real profile does, and because the
+ * warning channel is used by other tests to count rollback failures.
+ */
+function harness(options: { agentDefaultModel?: SpawnDeps['agentDefaultModel'] | null } = {}): Harness {
   const calls: string[] = []
   const warnings: string[] = []
   const prompted: unknown[] = []
@@ -43,7 +48,15 @@ function harness(): Harness {
 
   const message: WorkerMessage = { content: [{ type: 'text', text: 'prompt' }], source: { kind: 'user' } }
 
+  const agentDefaultModel =
+    options.agentDefaultModel === null
+      ? undefined
+      : (options.agentDefaultModel ?? {
+          currentSelection: () => ({ provider: 'cliproxyapi', model: 'deepseek-ai/DeepSeek-V4.1-Flash' }),
+        })
+
   const deps: SpawnDeps = {
+    ...(agentDefaultModel === undefined ? {} : { agentDefaultModel }),
     permissionPresets: {
       resolve(name) {
         calls.push('permissionPresets.resolve')
@@ -303,17 +316,109 @@ test('the agent preset name is resolved to its id before it is mounted', async (
   assert.deepEqual(mounted, ['preset:standard'], 'the id is mounted, not the name')
 })
 
-test('agentOptions are passed only when the caller supplied them', async () => {
-  const h = harness()
+/**
+ * The model route a worker is created with.
+ *
+ * This is the difference between a worker that runs and a worker that is live, queued and
+ * completely inert. The deployment persona is `You are a coding agent powered by the
+ * {{model}} model.`, so an agent created with no provider/model route cannot assemble a
+ * prompt at all: its first turn ends with `prompt variable "{{model}}" has no value for this
+ * assembly (section "deployment:persona-prefix")`. Every other signal says the spawn worked.
+ */
+test("the deployment's default selection supplies the route when the caller named none", async () => {
+  const h = harness({
+    agentDefaultModel: { currentSelection: () => ({ provider: 'cliproxyapi', model: 'deepseek-ai/DeepSeek-V4.1-Flash' }) },
+  })
   const seen: unknown[] = []
   const original = h.deps.agents.create.bind(h.deps.agents)
   h.deps.agents.create = async (options) => {
     seen.push(options.agentOptions)
     return original(options)
   }
+
   await spawnWorker(h.deps, REQUEST)
-  await spawnWorker(h.deps, { ...REQUEST, agentOptions: { provider: 'deepseek' } })
-  assert.deepEqual(seen, [undefined, { provider: 'deepseek' }])
+
+  assert.deepEqual(seen, [{ provider: 'cliproxyapi', model: 'deepseek-ai/DeepSeek-V4.1-Flash' }])
+  assert.deepEqual(h.warnings, [], 'a resolved route is not worth a warning')
+})
+
+test("a caller's agentOptions win over the deployment default", async () => {
+  const h = harness({
+    agentDefaultModel: { currentSelection: () => ({ provider: 'cliproxyapi', model: 'default-model' }) },
+  })
+  const seen: unknown[] = []
+  const original = h.deps.agents.create.bind(h.deps.agents)
+  h.deps.agents.create = async (options) => {
+    seen.push(options.agentOptions)
+    return original(options)
+  }
+
+  await spawnWorker(h.deps, { ...REQUEST, agentOptions: { provider: 'other', model: 'explicit' } })
+
+  assert.deepEqual(seen, [{ provider: 'other', model: 'explicit' }], 'an explicit choice is never overridden')
+})
+
+test('the reasoning effort travels with the route, and an empty one is omitted', async () => {
+  // `''` is the adapter's own sentinel for "provider default", which is not the same
+  // statement as "no preference", so it must not be passed through.
+  const seen: unknown[] = []
+  const capture = (h: Harness) => {
+    const original = h.deps.agents.create.bind(h.deps.agents)
+    h.deps.agents.create = async (options) => {
+      seen.push(options.agentOptions)
+      return original(options)
+    }
+  }
+
+  const full = harness({
+    agentDefaultModel: { currentSelection: () => ({ provider: 'p', model: 'm', reasoningEffort: 'max' }) },
+  })
+  capture(full)
+  await spawnWorker(full.deps, REQUEST)
+
+  const empty = harness({
+    agentDefaultModel: { currentSelection: () => ({ provider: 'p', model: 'm', reasoningEffort: '' }) },
+  })
+  capture(empty)
+  await spawnWorker(empty.deps, REQUEST)
+
+  assert.deepEqual(seen, [
+    { provider: 'p', model: 'm', reasoningEffort: 'max' },
+    { provider: 'p', model: 'm' },
+  ])
+})
+
+test('no default selection warns loudly, naming the fix, instead of failing silently', async () => {
+  // The old behaviour, made audible. A worker created without a route does not throw at
+  // spawn time -- it is created, woken, and dies on its first step -- so without this
+  // warning the only evidence is a card that never moves.
+  const h = harness({ agentDefaultModel: null })
+
+  await spawnWorker(h.deps, REQUEST)
+
+  assert.equal(h.warnings.length, 1, 'exactly one warning')
+  assert.match(h.warnings[0]!, /agent-default-model/, 'the warning names the configuration to add')
+  assert.match(h.warnings[0]!, /\{\{model\}\}/, 'and the error it prevents')
+  assert.ok(h.calls.includes('agents.create'), 'the worker is still spawned rather than throwing')
+})
+
+test('a selection missing either half is treated as no selection at all', async () => {
+  // A provider with no model is not a route: the assembly needs the MODEL to render
+  // `{{model}}`, so half a route fails exactly like none.
+  for (const selection of [{ provider: 'cliproxyapi', model: '' }, { provider: '', model: 'm' }]) {
+    const h = harness({ agentDefaultModel: { currentSelection: () => selection } })
+    const seen: unknown[] = []
+    const original = h.deps.agents.create.bind(h.deps.agents)
+    h.deps.agents.create = async (options) => {
+      seen.push(options.agentOptions)
+      return original(options)
+    }
+
+    await spawnWorker(h.deps, REQUEST)
+
+    assert.deepEqual(seen, [undefined], `${JSON.stringify(selection)} is not a usable route`)
+    assert.equal(h.warnings.length, 1, 'and it is reported')
+  }
 })
 
 

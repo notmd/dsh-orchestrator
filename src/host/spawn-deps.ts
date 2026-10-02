@@ -39,6 +39,23 @@ export interface SpawnServices {
     acquireScope(id: string): Promise<Disposable>
     mount(agentCtx: unknown, id: string): Promise<void>
   }
+  /**
+   * The deployment's default model route, for a worker whose caller named none.
+   *
+   * The SIXTH service, and not one `dsh-webhook` uses — which is precisely why it was
+   * missed. An agent created without a provider/model route cannot assemble its prompt:
+   * the deployment persona carries `{{model}}`, so the worker's first turn dies with
+   * "prompt variable \"{{model}}\" has no value for this assembly (section
+   * \"deployment:persona-prefix\")" and the agent sits there live and inert.
+   *
+   * Optional on the type, and guarded at the read, so a host without the service degrades
+   * to the old behaviour rather than refusing to activate.
+   */
+  agentDefaultModel?: {
+    currentSelection(): { provider: string; model: string; reasoningEffort?: string } | undefined
+  }
+  /** The host log, when it has one. Used for the one failure that is otherwise silent. */
+  logger?: { warn(message: string, error?: unknown): void }
   permissionPresets: {
     resolve(name: string): unknown
     set(session: unknown, name: string): void
@@ -77,6 +94,27 @@ export function createSpawnDeps(services: SpawnServices): SpawnDeps {
       acquireScope: (id) => services.agentPresets.acquireScope(id),
       mount: (agentCtx, id) => services.agentPresets.mount(agentCtx, id),
     },
+    // Forwarded only when the host exposes it, the same shape as `workspaceRegistry.delete`:
+    // a host without the service leaves the entry absent, and `./spawn.ts` then warns and
+    // creates the worker the old way instead of throwing on a missing peer.
+    ...(typeof services.agentDefaultModel?.currentSelection === 'function'
+      ? {
+          agentDefaultModel: {
+            currentSelection: () => {
+              const selection = services.agentDefaultModel!.currentSelection()
+              return selection === undefined || selection === null
+                ? undefined
+                : {
+                    provider: typeof selection.provider === 'string' ? selection.provider : '',
+                    model: typeof selection.model === 'string' ? selection.model : '',
+                    ...(typeof selection.reasoningEffort === 'string'
+                      ? { reasoningEffort: selection.reasoningEffort }
+                      : {}),
+                  }
+            },
+          },
+        }
+      : {}),
     permissionPresets: {
       resolve: (name) => services.permissionPresets.resolve(name),
       set: (session, name) => services.permissionPresets.set(session, name),
@@ -99,5 +137,15 @@ export function createSpawnDeps(services: SpawnServices): SpawnDeps {
       content: [{ type: 'text', text }],
       source: { kind: 'user' },
     }),
+    // The spawn recipe warns when it cannot resolve a model route. Forwarded so the warning
+    // lands in the host's log rather than being dropped: that warning is the only signal
+    // that a worker was created inert, and a silent one is how this stayed invisible.
+    ...(typeof services.logger?.warn === 'function'
+      ? {
+          logger: {
+            warn: (message: string, error?: unknown) => services.logger!.warn(message, error),
+          },
+        }
+      : {}),
   }
 }

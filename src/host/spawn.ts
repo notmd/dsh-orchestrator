@@ -112,7 +112,38 @@ export interface SpawnDeps {
   }
   /** Builds the user message. Injected so the message shape stays in one place. */
   userMessage(text: string): WorkerMessage
+  /**
+   * The deployment's default model route, for a worker whose caller named none.
+   *
+   * NOT optional in spirit. A created agent with no provider/model route cannot assemble a
+   * prompt at all: the deployment persona is `You are a coding agent powered by the
+   * {{model}} model.`, so `{{model}}` has no value and the worker's FIRST turn ends with
+   * "prompt variable \"{{model}}\" has no value for this assembly (section
+   * \"deployment:persona-prefix\")". The worker is then live, queued and completely inert —
+   * the worst shape of failure, because every other signal says it started.
+   *
+   * Optional on the TYPE so a fake without it still compiles, and so a host that predates
+   * the service degrades instead of refusing to activate. {@link resolveAgentOptions} warns
+   * when the selection is missing, because that failure is otherwise silent at spawn time
+   * and only shows up as a dead worker.
+   */
+  readonly agentDefaultModel?: {
+    /** A detached `{ provider, model, reasoningEffort? }` for a newly created agent. */
+    currentSelection(): AgentModelSelection | undefined
+  }
   readonly logger?: { warn(message: string, error?: unknown): void }
+}
+
+/**
+ * The provider/model route a created agent runs on.
+ *
+ * Both fields are required together: a route with a provider and no model is not a route,
+ * and the prompt assembly needs the model to render `{{model}}`.
+ */
+export interface AgentModelSelection {
+  provider: string
+  model: string
+  reasoningEffort?: string
 }
 
 /** What to spawn. */
@@ -155,6 +186,43 @@ export interface SpawnedWorker {
 }
 
 /**
+ * The `agentOptions` a worker is created with.
+ *
+ * Precedence: what the caller named, else the deployment's default selection. The second is
+ * what makes an ordinary worker work at all — see {@link SpawnDeps.agentDefaultModel} for
+ * what its absence costs.
+ *
+ * An empty `reasoningEffort` is OMITTED rather than passed through: the field is optional and
+ * adapter-owned, and `''` is the ACP adapter's own sentinel for "provider default", which is
+ * not the same statement as "no preference".
+ */
+export function resolveAgentOptions(
+  deps: SpawnDeps,
+  request: SpawnRequest,
+): unknown {
+  if (request.agentOptions !== undefined) return request.agentOptions
+
+  const selection = deps.agentDefaultModel?.currentSelection()
+  if (selection === undefined || selection.provider === '' || selection.model === '') {
+    deps.logger?.warn(
+      'orchestrator: no default model selection is available, so this worker was created ' +
+        'without a provider/model route — its first turn will fail with a prompt-assembly ' +
+        'error about {{model}}. Configure an `agent-default-model` row (provider and model) ' +
+        'in the profile.',
+    )
+    return undefined
+  }
+
+  return {
+    provider: selection.provider,
+    model: selection.model,
+    ...(selection.reasoningEffort === undefined || selection.reasoningEffort === ''
+      ? {}
+      : { reasoningEffort: selection.reasoningEffort }),
+  }
+}
+
+/**
  * Creates a worker session, or throws with nothing left behind.
  *
  * @throws The original error from any failed step, after rolling back.
@@ -180,11 +248,14 @@ export async function spawnWorker(deps: SpawnDeps, request: SpawnRequest): Promi
     request.signal?.throwIfAborted()
     workspace = await deps.workspaceRegistry.create(request.worktreePath, request.title)
     request.signal?.throwIfAborted()
+    // Resolved before the create, so the warning names the problem at the moment the worker
+    // is made rather than leaving a silent, inert agent behind.
+    const agentOptions = resolveAgentOptions(deps, request)
     handle = await deps.agents.create({
       sessionId: request.sessionId,
       ...(request.signal ? { signal: request.signal } : {}),
       meta: { cwd: workspace.path, agentPreset: preset.id },
-      ...(request.agentOptions !== undefined ? { agentOptions: request.agentOptions } : {}),
+      ...(agentOptions !== undefined ? { agentOptions } : {}),
       setup: async (agentCtx) => {
         await deps.agentPresets.mount(agentCtx, preset.id)
       },

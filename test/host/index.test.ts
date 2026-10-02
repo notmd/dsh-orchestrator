@@ -151,6 +151,14 @@ test('the plugin declares the services it cannot function without', () => {
     'workspaceRegistry',
     'sessionTitle',
     'webServer',
+    // The SIXTH service, and not one dsh-webhook uses — which is exactly why it was
+    // missed. A worker is an AGENT, and an agent with no provider/model route cannot
+    // assemble a prompt at all: the deployment persona carries `{{model}}`, so the worker's
+    // first turn dies with `prompt variable "{{model}}" has no value for this assembly
+    // (section "deployment:persona-prefix")` — live, queued, and completely inert.
+    // `currentSelection()` is the deployment's own default route, so the spawner must be
+    // able to ask for it.
+    'agentDefaultModel',
   ])
 })
 

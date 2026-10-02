@@ -77,6 +77,14 @@ export const inject = [
   'workspaceRegistry',
   'sessionTitle',
   'webServer',
+  // A worker is an AGENT, and an agent with no provider/model route cannot assemble a
+  // prompt: the deployment persona carries `{{model}}`, so its very first turn dies with
+  // "prompt variable \"{{model}}\" has no value for this assembly (section
+  // \"deployment:persona-prefix\")" and the worker sits there live and inert.
+  // `currentSelection()` is the deployment's own answer to "what should a fresh agent run
+  // on", so it is what the spawner uses. Declared like the rest: a profile without it
+  // cannot run a worker at all.
+  'agentDefaultModel',
 ]
 
 /**
